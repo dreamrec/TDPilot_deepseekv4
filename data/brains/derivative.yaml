@@ -2,7 +2,7 @@
 # Source: docs.derivative.ca (scraped offline)
 # Trust: official — this is the ground truth for TouchDesigner facts
 
-name: derivative
+brain_id: derivative
 display_name: "Derivative Official Docs"
 trust_tier: official
 version: "1.0"

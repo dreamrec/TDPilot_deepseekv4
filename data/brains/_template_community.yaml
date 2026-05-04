@@ -2,7 +2,7 @@
 # Copy this file and customize for your source
 # Rename to: <source_name>.yaml (e.g., my_tutorials.yaml)
 
-name: my_source                          # lowercase, no spaces
+brain_id: my_source                      # lowercase, no spaces — used as brain.db filename + dir
 display_name: "My Tutorial Source"       # human-readable name
 trust_tier: community                    # official | community | personal | experimental
 version: "1.0"

@@ -2,7 +2,7 @@
 # Source: popsextension.com (scraped offline) + TDPilot-popx-refs catalog
 # Trust: licensed — POPx is a paid plugin, content is copyrighted
 
-name: popx
+brain_id: popx
 display_name: "POPx Operator Reference"
 trust_tier: licensed
 version: "1.0"

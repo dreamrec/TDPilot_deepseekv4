@@ -909,6 +909,25 @@ def main() -> None:
         sys.exit(1)
 
     config = yaml.safe_load(args.config.read_text("utf-8"))
+    if not isinstance(config, dict):
+        logger.error("Config must be a YAML mapping: %s", args.config)
+        sys.exit(1)
+    # Migration: older templates used ``name:`` as the brain identifier.
+    # The builder requires ``brain_id``. Surface a clear error rather
+    # than the unhelpful KeyError this code used to raise.
+    if "brain_id" not in config and "name" in config:
+        logger.error(
+            "Config %s uses the legacy field 'name:' for the brain "
+            "identifier. Rename it to 'brain_id:' "
+            "(example: 'brain_id: %s'). See data/brains/_template_community.yaml "
+            "for the canonical schema.",
+            args.config,
+            config["name"],
+        )
+        sys.exit(1)
+    if "brain_id" not in config:
+        logger.error("Config %s missing required key 'brain_id'", args.config)
+        sys.exit(1)
     brain_id = config["brain_id"]
 
     if not args.source.is_dir():
