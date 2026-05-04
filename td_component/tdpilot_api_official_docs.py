@@ -65,14 +65,26 @@ def _kb_get(name: str) -> dict:
 def _corpus_installed(corpus_name: str) -> bool:
     """True iff the named corpus is discoverable via auto-discovery.
 
-    Checks the actual auto-discovery output rather than just looking for
-    a directory on disk — that way we agree with what knowledge_search
-    will actually search over. Cached at the tdpilot_api_knowledge layer
-    so this is cheap to call repeatedly.
+    Checks BOTH discovery paths:
+      - jsonl-backed corpora (legacy ``pages.jsonl``).
+      - SQLite-backed corpora (Phase 1.1 ``*brain.db``).
+
+    Phase 1.1 regression fix — pre-fix this only checked the JSONL
+    path, but the prefer-DB rule means a corpus with only a
+    ``*brain.db`` (no JSONL) appears in ``_sqlite_corpus_descriptors``
+    NOT in ``_external_corpora_entries``. The pre-fix behaviour
+    short-circuited ``td_search_official_docs`` with a false "corpus
+    not installed" hint even when 25K+ chunks were indexed and
+    queryable on disk.
     """
     try:
-        from tdpilot_api_knowledge import _external_corpora_entries  # type: ignore[import-not-found]
+        from tdpilot_api_knowledge import (  # type: ignore[import-not-found]
+            _external_corpora_entries,
+            _sqlite_corpus_descriptors,
+        )
 
+        if any(d.get("corpus") == corpus_name for d in _sqlite_corpus_descriptors()):
+            return True
         return any(e.get("corpus") == corpus_name for e in _external_corpora_entries())
     except Exception:
         return False

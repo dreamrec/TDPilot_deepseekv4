@@ -20,7 +20,24 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 import tdpilot_api_official_docs as od
+
+
+@pytest.fixture(autouse=True)
+def _isolate_sqlite_descriptors():
+    """Phase 1.1 — ``_corpus_installed`` checks both discovery paths
+    (JSONL + SQLite). Default the SQLite path to "no corpora" for
+    every test; tests that want SQLite hits must override this in
+    their own ``with patch(...)`` block.
+
+    Without this fixture, tests run on a developer's machine that
+    has real ``*brain.db`` files installed under ``~/.tdpilot/``
+    leak the live filesystem into the unit-test layer and corrupt
+    the "corpus missing" assertions.
+    """
+    with patch("tdpilot_api_knowledge._sqlite_corpus_descriptors", lambda: []):
+        yield
 
 
 def _fake_search(matches=None, count=None):
@@ -50,6 +67,32 @@ def _fake_corpora(corpus_names):
         return [{"corpus": name} for name in corpus_names]
 
     return _impl
+
+
+def _fake_sqlite_descriptors(corpus_names=()):
+    """Return a callable that mocks _sqlite_corpus_descriptors.
+
+    Phase 1.1 added a SQLite-backed corpus discovery path; the
+    ``_corpus_installed`` guard now consults BOTH discovery paths.
+    Tests that previously only mocked the JSONL path also need to
+    pin the SQLite path to a known empty (or named) value, otherwise
+    the live filesystem leaks in.
+    """
+
+    def _impl():
+        return [{"corpus": name} for name in corpus_names]
+
+    return _impl
+
+
+def _patch_corpora_empty_sqlite(corpus_names):
+    """Compose patches for both discovery paths — JSONL with the given
+    names, SQLite empty. Used by tests that want the corpus_installed
+    guard to honour ONLY the JSONL path."""
+    return (
+        patch("tdpilot_api_knowledge._external_corpora_entries", _fake_corpora(corpus_names)),
+        patch("tdpilot_api_knowledge._sqlite_corpus_descriptors", _fake_sqlite_descriptors(())),
+    )
 
 
 # ----------------------------------------------------------------------
@@ -103,6 +146,44 @@ def test_search_official_docs_no_matches_does_not_claim_corpus_missing():
     assert out["count"] == 0
     # The no-corpus hint must NOT be in the response
     assert "hint" not in out or "isn't installed" not in out.get("hint", "")
+
+
+def test_search_official_docs_recognises_sqlite_only_corpus_as_installed():
+    """Phase 1.1 regression: a derivative brain.db that has NO
+    pages.jsonl sibling (the prefer-DB rule scenario) MUST be
+    treated as installed. Pre-fix _corpus_installed only checked
+    the JSONL path and falsely returned the no-corpus hint even
+    when 25K chunks were queryable on disk.
+    """
+    # JSONL discovery returns nothing — there's no pages.jsonl on disk.
+    # SQLite discovery returns the derivative descriptor — that's the
+    # post-1.1 brains-add layout.
+    with patch("tdpilot_api_knowledge._external_corpora_entries", _fake_corpora([])):
+        with patch(
+            "tdpilot_api_knowledge._sqlite_corpus_descriptors",
+            _fake_sqlite_descriptors(["derivative"]),
+        ):
+            with patch(
+                "tdpilot_api_knowledge.handle_knowledge_search",
+                _fake_search(
+                    [
+                        {
+                            "name": "noiseTOP",
+                            "category": "operator",
+                            "score": 0.9,
+                            "trust_tier": "official",
+                            "corpus": "derivative",
+                        }
+                    ]
+                ),
+            ):
+                out = od.handle_search_official_docs({"query": "noiseTOP"})
+
+    # The headline assertion: corpus is reported as available.
+    assert out["available"] is True
+    assert out["count"] == 1
+    # The no-corpus hint must NOT fire.
+    assert "isn't installed" not in out.get("hint", "")
 
 
 def test_search_official_docs_soft_rerank_pushes_doc_type_to_top():
