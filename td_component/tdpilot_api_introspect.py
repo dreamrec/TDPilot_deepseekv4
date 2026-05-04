@@ -166,6 +166,25 @@ def handle_get_capabilities(body: dict) -> dict:
             feature_status[name] = True
         except ImportError:
             feature_status[name] = False
+
+    # Phase 1.1 — SQLite/FTS5 corpus support. Reports True when the
+    # stdlib's sqlite3 module ships FTS5 (it does on every officially
+    # supported Python build, but the runtime checks at import time so
+    # a stripped-down embed without FTS5 cleanly degrades).
+    try:
+        import sqlite3 as _sqlite
+
+        _conn = _sqlite.connect(":memory:")
+        try:
+            _conn.execute("CREATE VIRTUAL TABLE _fts_probe USING fts5(x)")
+            feature_status["sqlite_fts"] = True
+        except _sqlite.OperationalError:
+            feature_status["sqlite_fts"] = False
+        finally:
+            _conn.close()
+    except Exception:
+        feature_status["sqlite_fts"] = False
+
     caps["features"] = feature_status
 
     # Runtime-level state.
