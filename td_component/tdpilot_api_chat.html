@@ -168,6 +168,16 @@
     color: var(--error-fg);
   }
   .msg.error .role { color: var(--error-fg); }
+  /* Phase 1.3 — soft validation nudge. Distinct from "error": the
+     turn was successful, this is a non-blocking hint to consider
+     calling td_get_errors. Yellow-ish, dim, italic. */
+  .msg.hint {
+    border-left-color: #d9a900;
+    color: #d9a900;
+    font-style: italic;
+    opacity: 0.85;
+  }
+  .msg.hint .role { color: #d9a900; }
 
   /* Welcome screen: ASCII block logo + minimal instructions. */
   .welcome {
@@ -401,7 +411,8 @@
       role === 'assistant' ? 'assistant' :
       role === 'tool_call' ? 'tool_call' :
       role === 'tool_result' ? 'tool_result' :
-      role === 'error' ? 'error' : 'tool_call'
+      role === 'error' ? 'error' :
+      role === 'hint' ? 'hint' : 'tool_call'
     );
     const r = document.createElement('div');
     r.className = 'role';
