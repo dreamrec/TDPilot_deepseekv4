@@ -42,12 +42,38 @@ except ImportError:
 
 
 def load_config(config_path: Path) -> dict[str, Any]:
-    """Load and validate a brain YAML config."""
+    """Load and validate a brain YAML config.
+
+    The canonical identity field is ``brain_id``. Configs written
+    against older versions of the template used ``name:`` instead;
+    we detect that case and exit with a clear migration message
+    rather than the unhelpful ``KeyError: 'brain_id'`` that older
+    revisions of this script produced.
+    """
     if yaml is None:
         logger.error("pyyaml is required: pip install pyyaml")
         sys.exit(1)
 
     raw = yaml.safe_load(config_path.read_text("utf-8"))
+    if not isinstance(raw, dict):
+        logger.error("Config must be a YAML mapping: %s", config_path)
+        sys.exit(1)
+
+    # Migration: older templates used ``name:`` as the brain identity.
+    # The builder always meant ``brain_id``. Detect the mismatch and
+    # tell the user what to change.
+    if "brain_id" not in raw and "name" in raw:
+        logger.error(
+            "Config %s uses the legacy field 'name:' for the brain "
+            "identifier. Rename it to 'brain_id:' "
+            "(example: 'brain_id: %s'). The current template at "
+            "data/brains/_template_community.yaml shows the canonical "
+            "schema.",
+            config_path,
+            raw["name"],
+        )
+        sys.exit(1)
+
     required = ("brain_id", "display_name", "content_selector")
     for key in required:
         if key not in raw:
