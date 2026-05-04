@@ -435,6 +435,192 @@ def test_memory_saved_mid_session_propagates_to_next_turn(monkeypatch, tmp_path)
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 1.3 — severity-tracked validation hints.
+#
+# Contract: when a turn includes one or more high-severity mutations
+# (td_create_node, td_delete_node, td_exec_python, etc.) without a
+# follow-up validator call (td_get_errors / td_audit_project /
+# td_validate_recipe / patch_validate), emit ``EV_HINT`` so the chat
+# UI can render a soft nudge. Never blocks; never fires on low/medium
+# turns or on turns that DID validate.
+# ---------------------------------------------------------------------------
+
+
+def _drain_runtime_events(rt) -> list[tuple[str, dict]]:
+    """Pop every event from the runtime queue without round-tripping
+    through the cook thread. Used to assert hint emission.
+    """
+    events: list[tuple[str, dict]] = []
+    from queue import Empty
+
+    while True:
+        try:
+            events.append(rt._events.get_nowait())
+        except Empty:
+            break
+    return events
+
+
+def _build_runtime_for_hint_tests(monkeypatch):
+    import tdpilot_api_config as cfg_mod  # type: ignore[import-not-found]
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(cfg_mod, "fetch_api_key", lambda: "sk-fake")
+    return AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+
+
+def test_severity_lookup_classifies_known_tools_correctly():
+    from tdpilot_api_runtime import _tool_severity
+
+    assert _tool_severity("td_create_node") == "high"
+    assert _tool_severity("td_delete_node") == "high"
+    assert _tool_severity("td_exec_python") == "high"
+    assert _tool_severity("td_set_params") == "medium"
+    assert _tool_severity("td_get_info") == "low"  # unknown → low
+    assert _tool_severity("totally_made_up_tool") == "low"
+
+
+def test_validation_hint_fires_on_high_severity_without_validator(monkeypatch):
+    """A turn that includes td_create_node but NOT td_get_errors must
+    emit EV_HINT at turn end.
+    """
+    from tdpilot_api_runtime import EV_HINT
+
+    rt = _build_runtime_for_hint_tests(monkeypatch)
+
+    # Simulate the worker calling on_tool_result for a single create_node.
+    rt._record_tool_call("td_create_node", is_error=False)
+    rt._maybe_emit_validation_hint()
+
+    events = _drain_runtime_events(rt)
+    hint_events = [(k, p) for k, p in events if k == EV_HINT]
+    assert len(hint_events) == 1
+    payload = hint_events[0][1]
+    assert payload["kind"] == "missing_validation"
+    assert "td_create_node" in payload["tools"]
+    assert "td_get_errors" in payload["message"]
+
+
+def test_validation_hint_suppressed_when_validator_called(monkeypatch):
+    """A turn that paired td_create_node with td_get_errors must NOT
+    emit a hint.
+    """
+    from tdpilot_api_runtime import EV_HINT
+
+    rt = _build_runtime_for_hint_tests(monkeypatch)
+    rt._record_tool_call("td_create_node", is_error=False)
+    rt._record_tool_call("td_get_errors", is_error=False)
+    rt._maybe_emit_validation_hint()
+
+    events = _drain_runtime_events(rt)
+    assert not any(k == EV_HINT for k, _ in events)
+
+
+def test_validation_hint_suppressed_for_low_severity_only_turns(monkeypatch):
+    """Read-only turns (td_get_info, td_get_nodes, etc.) must never
+    fire the hint regardless of validator presence.
+    """
+    from tdpilot_api_runtime import EV_HINT
+
+    rt = _build_runtime_for_hint_tests(monkeypatch)
+    rt._record_tool_call("td_get_info", is_error=False)
+    rt._record_tool_call("td_get_nodes", is_error=False)
+    rt._maybe_emit_validation_hint()
+
+    events = _drain_runtime_events(rt)
+    assert not any(k == EV_HINT for k, _ in events)
+
+
+def test_validation_hint_suppressed_for_medium_severity_only(monkeypatch):
+    """td_set_params is medium severity — by itself, no hint."""
+    from tdpilot_api_runtime import EV_HINT
+
+    rt = _build_runtime_for_hint_tests(monkeypatch)
+    rt._record_tool_call("td_set_params", is_error=False)
+    rt._maybe_emit_validation_hint()
+
+    events = _drain_runtime_events(rt)
+    assert not any(k == EV_HINT for k, _ in events)
+
+
+def test_validation_hint_ignores_failed_tool_calls(monkeypatch):
+    """A failed td_create_node (is_error=True) didn't actually mutate
+    state — it shouldn't count toward the high-severity tally.
+    """
+    from tdpilot_api_runtime import EV_HINT
+
+    rt = _build_runtime_for_hint_tests(monkeypatch)
+    # Failed call — must not be tracked.
+    rt._record_tool_call("td_create_node", is_error=True)
+    rt._maybe_emit_validation_hint()
+
+    events = _drain_runtime_events(rt)
+    assert not any(k == EV_HINT for k, _ in events)
+
+
+def test_validation_hint_lists_all_high_severity_tools(monkeypatch):
+    """Multiple distinct high-severity calls in one turn → all listed."""
+    from tdpilot_api_runtime import EV_HINT
+
+    rt = _build_runtime_for_hint_tests(monkeypatch)
+    rt._record_tool_call("td_create_node", is_error=False)
+    rt._record_tool_call("td_create_node", is_error=False)  # dedup
+    rt._record_tool_call("td_exec_python", is_error=False)
+    rt._maybe_emit_validation_hint()
+
+    events = _drain_runtime_events(rt)
+    hint_events = [(k, p) for k, p in events if k == EV_HINT]
+    assert len(hint_events) == 1
+    tools = hint_events[0][1]["tools"]
+    assert tools == ["td_create_node", "td_exec_python"]  # sorted, deduped
+
+
+def test_validation_hint_cleared_between_turns(monkeypatch):
+    """Per-turn ledger reset on start_turn — hint from turn N doesn't
+    leak into turn N+1's check.
+    """
+    import threading
+
+    from tdpilot_api_runtime import EV_HINT
+
+    rt = _build_runtime_for_hint_tests(monkeypatch)
+
+    # Simulate turn 1 ending with a high-severity mutation.
+    rt._record_tool_call("td_create_node", is_error=False)
+    rt._maybe_emit_validation_hint()
+    _drain_runtime_events(rt)  # flush the hint event from turn 1
+
+    # Turn 2 starts. We need to trigger start_turn's ledger clear.
+    # Bypass the worker thread spawn by stubbing it.
+    import tdpilot_api_runtime as rt_module
+
+    monkeypatch.setattr(
+        rt_module.threading,
+        "Thread",
+        lambda *a, **k: type("T", (), {"start": lambda self: None, "is_alive": lambda self: False})(),
+    )
+
+    class _FakeAgent:
+        messages: list = []
+
+        def add_user_message(self, _):
+            pass
+
+    rt._agent = _FakeAgent()  # type: ignore[assignment]
+    rt.start_turn("turn 2")
+    assert rt._turn_tool_calls == [], "ledger should be cleared at turn start"
+
+    # Turn 2 only does a read — no hint.
+    rt._record_tool_call("td_get_info", is_error=False)
+    rt._maybe_emit_validation_hint()
+    events = _drain_runtime_events(rt)
+    assert not any(k == EV_HINT for k, _ in events)
+    # threading reference touched to satisfy the linter — actual import
+    # was needed inside this scope.
+    _ = threading.Lock
+
+
 def test_system_prompt_is_unchanged_by_mid_session_memory_save(monkeypatch, tmp_path):
     """Phase 1.2 + 0.1 jointly: saving a memory mid-session MUST NOT
     mutate the Agent's system_prompt. Otherwise the DeepSeek auto-cache

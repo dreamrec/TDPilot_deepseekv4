@@ -151,6 +151,11 @@ EV_DONE = "done"  # payload: str (final text)
 EV_ERROR = "error"  # payload: str (redacted message)
 EV_STATE = "state"  # payload: str ("idle"|"calling"|"thinking")
 EV_MODEL = "model"  # payload: {"tier": str, "model": str} — Sprint 4.3
+# Phase 1.3 — severity-tracked validation hint. Emitted at turn end
+# when high-severity mutations went out without a follow-up validator
+# call. Soft signal; chat UI renders as a subtle nudge below the
+# final assistant text.
+EV_HINT = "hint"  # payload: {"kind": str, "message": str, "tools": list[str]}
 # Sprint 4.1 — subagent events. Forwarded by SubagentManager into the
 # parent runtime's event queue so the chat UI can display sub-task
 # progress under collapsible [worker:<id>] sections.
@@ -159,6 +164,62 @@ EV_SUB_TOOL = "subagent_tool"  # payload: {"id": str, "name": str, "args": dict}
 EV_SUB_DONE = (
     "subagent_done"  # payload: {"id": str, "status": str, "result", "error", "tool_calls", "duration_ms"}
 )
+
+
+# Phase 1.3 — mutation-severity classifier. The runtime tracks tool
+# calls per turn; if a turn included one or more HIGH-severity
+# mutations without a follow-up validator call, EV_HINT fires at
+# turn end. Soft signal — never blocks the conversation.
+#
+# Severity rationale:
+#   - high: changes that can leave a network in a broken state if the
+#     model's mental model diverges from the TD reality. exec_python
+#     in particular can do anything; create_node + delete_node +
+#     wire/unwire mutate topology.
+#   - medium: parameter changes that may or may not have downstream
+#     effects depending on the operator. Currently we don't emit hints
+#     for medium — the noise/signal ratio is too low.
+#   - low: reads. Inspections.
+#
+# Validators that satisfy a high-severity mutation:
+#   td_get_errors  - canonical post-mutation check.
+#   td_audit_project - whole-project sanity sweep.
+#   td_validate_recipe - asserts recipe consistency.
+_TOOL_SEVERITY: dict[str, str] = {
+    "td_create_node": "high",
+    "td_delete_node": "high",
+    "td_disconnect": "high",
+    "td_connect_nodes": "high",
+    "td_exec_python": "high",
+    "td_set_content": "high",
+    "td_copy_node": "high",
+    "td_rename_node": "high",
+    "td_create_macro": "high",
+    "patch_begin": "high",
+    "patch_commit": "high",
+    "recipe_replay": "high",
+    "td_set_params": "medium",
+    "td_pulse_param": "medium",
+    "td_custom_parameters": "medium",
+}
+
+_VALIDATOR_TOOLS: frozenset[str] = frozenset(
+    (
+        "td_get_errors",
+        "td_audit_project",
+        "td_validate_recipe",
+        "patch_validate",
+    )
+)
+
+
+def _tool_severity(name: str) -> str:
+    """Return ``"high" | "medium" | "low"`` for a tool name. Unknown
+    tools default to ``"low"`` (read-only assumption — they don't
+    contribute to the validation-hint signal). Severity is data, not
+    policy: callers decide what to do with it.
+    """
+    return _TOOL_SEVERITY.get(name, "low")
 
 
 SYSTEM_PROMPT_BASE = (
@@ -439,6 +500,14 @@ class AgentRuntime:
         self._dynamic_context_snapshot: list[dict] = []
         self._refresh_dynamic_context()
 
+        # Phase 1.3 — per-turn validation tracking. Worker thread fills
+        # ``_turn_tool_calls`` via the on_tool_result callback; cook
+        # thread reads it at turn end (in the on_turn_done handler) to
+        # decide whether to emit EV_HINT. The list is cleared on every
+        # ``start_turn``. Race is benign: both reads and writes happen
+        # in producer/consumer order around the worker's lifecycle.
+        self._turn_tool_calls: list[str] = []
+
         self._agent: Agent | None = None
         self._build_agent()
 
@@ -478,10 +547,12 @@ class AgentRuntime:
             flash_model=cfg.get("flash_model", "deepseek-v4-flash"),
             on_text=lambda s: self._push(EV_TEXT, s),
             on_tool_call=lambda n, a: self._push(EV_TOOL_CALL, {"name": n, "args": a}),
-            on_tool_result=lambda n, r, e: self._push(
-                EV_TOOL_RESULT, {"name": n, "result": r, "is_error": e}
+            on_tool_result=lambda n, r, e: (
+                self._record_tool_call(n, e),
+                self._push(EV_TOOL_RESULT, {"name": n, "result": r, "is_error": e}),
             ),
             on_turn_done=lambda s: (
+                self._maybe_emit_validation_hint(),
                 self._push(EV_DONE, s),
                 self._push(EV_STATE, "idle"),
             ),
@@ -507,6 +578,46 @@ class AgentRuntime:
     # ------------------------------------------------------------------
     # Phase 0.1 — dynamic context refresh (cook-thread only)
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Phase 1.3 — severity-tracked validation hints
+    # ------------------------------------------------------------------
+
+    def _record_tool_call(self, name: str, is_error: bool) -> None:
+        """Hook called from the worker thread (on_tool_result) for every
+        tool the agent invokes. Failed calls don't count — the model
+        already saw the error and hasn't actually mutated state.
+        """
+        if not is_error:
+            self._turn_tool_calls.append(name)
+
+    def _maybe_emit_validation_hint(self) -> None:
+        """Inspect the just-finished turn's tool-call list. If any
+        high-severity mutation went out without a follow-up validator
+        call, emit ``EV_HINT`` so the chat UI can render a soft nudge.
+        Never blocks the conversation; never fires on low/medium-only
+        turns.
+        """
+        calls = list(self._turn_tool_calls)
+        high_severity = [name for name in calls if _tool_severity(name) == "high"]
+        if not high_severity:
+            return
+        if any(name in _VALIDATOR_TOOLS for name in calls):
+            return
+        unique = sorted({name for name in high_severity})
+        self._push(
+            EV_HINT,
+            {
+                "kind": "missing_validation",
+                "tools": unique,
+                "message": (
+                    "You modified the network ("
+                    + ", ".join(unique)
+                    + ") without validating. Consider calling td_get_errors "
+                    "or td_audit_project to confirm the result is healthy."
+                ),
+            },
+        )
 
     def _refresh_dynamic_context(self) -> None:
         """Snapshot the per-turn volatile context on the cook thread.
@@ -544,6 +655,9 @@ class AgentRuntime:
         # call would re-trigger TD's THREAD CONFLICT detector when the
         # bundled-knowledge enumerator hits parent().op('kb').
         self._refresh_dynamic_context()
+        # Phase 1.3 — clear the per-turn tool-call ledger so the
+        # validation-hint check at turn end only considers THIS turn.
+        self._turn_tool_calls = []
         self._agent.add_user_message(user_text)
         self._push(EV_STATE, "thinking")
         self._worker = threading.Thread(target=self._run_safe, name="tdpilot_api_agent", daemon=True)

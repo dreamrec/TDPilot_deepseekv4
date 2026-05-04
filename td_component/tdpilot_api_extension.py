@@ -368,6 +368,7 @@ class TDPilotAPIExt:
         from tdpilot_api_runtime import (  # type: ignore[import-not-found]
             EV_DONE,
             EV_ERROR,
+            EV_HINT,
             EV_MODEL,
             EV_STATE,
             EV_SUB_DONE,
@@ -403,6 +404,17 @@ class TDPilotAPIExt:
             self._set_status("error")
             self._html_status("error")
             self._play_done_sound("error")
+        elif kind == EV_HINT:
+            # Phase 1.3 — soft validation nudge. Rendered as a "hint"
+            # role; the chat HTML / textTable show it dimmer than the
+            # main reply so the user sees it but the agent's text
+            # remains primary. Never blocks.
+            if isinstance(payload, dict):
+                msg = payload.get("message", "")
+            else:
+                msg = str(payload)
+            self._append_transcript("hint", msg)
+            self._html_append("hint", msg)
         elif kind == EV_STATE:
             self._set_status(str(payload))
             self._html_status(str(payload))
