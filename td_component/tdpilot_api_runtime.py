@@ -263,55 +263,34 @@ SYSTEM_PROMPT_BASE = (
 
 
 def build_system_prompt() -> str:
-    """Construct the system prompt for one ``start_turn``.
+    """Return the byte-stable system prompt for the session.
 
-    Always begins with SYSTEM_PROMPT_BASE (byte-stable). Memory and
-    knowledge indexes follow in alphabetical order so the prefix stays
-    cache-friendly for DeepSeek's auto-cache (~50× discount on hits).
+    Phase 0.1 contract: this string MUST be byte-identical across every
+    turn within a session so DeepSeek's auto-cache (~50× discount on
+    cached input tokens) hits. Anything that varies turn-to-turn lives
+    in :func:`build_dynamic_context`, NOT here.
+
+    What's allowed in here:
+      - SYSTEM_PROMPT_BASE (immutable string literal).
+      - Skills index hint + auto-loaded skill bodies. Skills are loaded
+        from disk at COMP startup; mid-session skill additions are rare
+        enough that we treat the index as session-stable. (If a user
+        DOES add skills mid-session, they take effect on the next .tox
+        load — acceptable trade-off for cache stability.)
+
+    What's NOT allowed:
+      - Memory index — changes every time ``memory_save`` runs.
+      - Knowledge index — changes every time ``knowledge_add`` runs.
+      - Recipes index — changes every time ``recipe_save`` runs.
+      Those are emitted by :func:`build_dynamic_context` instead and
+      injected as synthetic messages right after the system prompt.
     """
     parts = [SYSTEM_PROMPT_BASE]
 
-    # Memory index
-    try:
-        from tdpilot_api_memory import get_memory_index_content  # type: ignore[import-not-found]
-
-        mem_index = get_memory_index_content()
-        if mem_index and mem_index.strip():
-            parts.append(
-                "\n\n## Memory Index — files you can recall via memory_get / memory_recall\n\n" + mem_index
-            )
-    except Exception as exc:
-        print(f"[tdpilot_API/runtime] memory index injection failed: {exc}")
-
-    # Knowledge index hint (just titles + descriptions, NOT full content —
-    # the model calls knowledge_get when it needs specifics)
-    try:
-        from tdpilot_api_knowledge import get_knowledge_index_hint  # type: ignore[import-not-found]
-
-        kb_hint = get_knowledge_index_hint()
-        if kb_hint and kb_hint.strip():
-            parts.append(
-                "\n\n## Knowledge Index — call knowledge_search(query) or knowledge_get(name)\n\n" + kb_hint
-            )
-    except Exception as exc:
-        print(f"[tdpilot_API/runtime] knowledge index injection failed: {exc}")
-
-    # Recipes index — saved replayable sequences. Hint-only (titles +
-    # descriptions); full content fetched via recipe_get / recipe_replay.
-    try:
-        from tdpilot_api_recipes import get_recipes_index_hint  # type: ignore[import-not-found]
-
-        recipes_hint = get_recipes_index_hint()
-        if recipes_hint and recipes_hint.strip():
-            parts.append(
-                "\n\n## Recipes — call recipe_recall(query) / recipe_replay(name)\n\n" + recipes_hint
-            )
-    except Exception as exc:
-        print(f"[tdpilot_API/runtime] recipes index injection failed: {exc}")
-
     # Skills: index hint (always) + auto-load skill bodies (when a skill
     # has auto_load=true in frontmatter). Auto-load skills are rare but
-    # let the user/maintainer pin always-on disciplines.
+    # let the user/maintainer pin always-on disciplines. Both are
+    # session-stable — they're read from disk once at COMP startup.
     try:
         from tdpilot_api_skills import (  # type: ignore[import-not-found]
             get_auto_load_skills_text,
@@ -330,9 +309,89 @@ def build_system_prompt() -> str:
     return "".join(parts)
 
 
+# Delimiter that flags a synthetic context message to the model. Phase
+# 0.1 — keeping it as a literal lets the LLM recognise these blocks as
+# ambient state rather than user instructions, and lets future tooling
+# grep for them. Intentionally non-secret; the model can echo it freely.
+DYNAMIC_CONTEXT_DELIMITER = "[[TDPILOT_CONTEXT]]"
+
+
+def build_dynamic_context() -> list[dict]:
+    """Return a list of synthetic messages carrying volatile session state.
+
+    Phase 0.1 — these messages are prepended to the conversation history
+    on EVERY API call. They are NOT persisted in ``Agent.messages``, so
+    the model sees a fresh snapshot each turn while the conversation
+    history itself stays cache-friendly.
+
+    Returns either an empty list (no volatile state worth injecting) or
+    a paired ``[user, assistant]`` so that the user→user/assistant
+    alternation invariant of the Anthropic message format is preserved
+    when the conversation continues.
+
+    Collected sections:
+      - Memory index (``memory_save`` writes invalidate it).
+      - Knowledge index (``knowledge_add`` writes invalidate it).
+      - Recipes index (``recipe_save`` writes invalidate it).
+    """
+    sections: list[str] = []
+
+    try:
+        from tdpilot_api_memory import get_memory_index_content  # type: ignore[import-not-found]
+
+        mem_index = get_memory_index_content()
+        if mem_index and mem_index.strip():
+            sections.append(
+                "## Memory Index — files you can recall via memory_get / memory_recall\n\n"
+                + mem_index.strip()
+            )
+    except Exception as exc:
+        print(f"[tdpilot_API/runtime] dynamic memory index failed: {exc}")
+
+    try:
+        from tdpilot_api_knowledge import get_knowledge_index_hint  # type: ignore[import-not-found]
+
+        kb_hint = get_knowledge_index_hint()
+        if kb_hint and kb_hint.strip():
+            sections.append(
+                "## Knowledge Index — call knowledge_search(query) or knowledge_get(name)\n\n"
+                + kb_hint.strip()
+            )
+    except Exception as exc:
+        print(f"[tdpilot_API/runtime] dynamic knowledge index failed: {exc}")
+
+    try:
+        from tdpilot_api_recipes import get_recipes_index_hint  # type: ignore[import-not-found]
+
+        recipes_hint = get_recipes_index_hint()
+        if recipes_hint and recipes_hint.strip():
+            sections.append(
+                "## Recipes — call recipe_recall(query) / recipe_replay(name)\n\n" + recipes_hint.strip()
+            )
+    except Exception as exc:
+        print(f"[tdpilot_API/runtime] dynamic recipes index failed: {exc}")
+
+    if not sections:
+        return []
+
+    body = DYNAMIC_CONTEXT_DELIMITER + "\n\n" + "\n\n".join(sections)
+    return [
+        {"role": "user", "content": [{"type": "text", "text": body}]},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Acknowledged — I'll use those indexes alongside the conversation.",
+                }
+            ],
+        },
+    ]
+
+
 # Backwards-compat alias — older code referenced SYSTEM_PROMPT directly.
-# New code should call build_system_prompt() so the memory index is
-# regenerated each turn (memories saved this session show up next).
+# New code should call build_system_prompt() (byte-stable) and rely on
+# build_dynamic_context() for per-turn state.
 SYSTEM_PROMPT = SYSTEM_PROMPT_BASE
 
 
@@ -387,6 +446,12 @@ class AgentRuntime:
             dispatcher=self._dispatcher,
             tools=self._tools,
             system_prompt=self._system_prompt,
+            # Phase 0.1 — volatile per-turn context (memory / knowledge /
+            # recipes indexes) is injected as synthetic messages at API
+            # call time so the system prompt itself stays byte-stable
+            # (DeepSeek auto-cache hits at ~50× discount on cached
+            # input tokens).
+            dynamic_context_provider=build_dynamic_context,
             model=cfg["model"],
             base_url=cfg["base_url"],
             max_tokens=cfg["max_tokens"],

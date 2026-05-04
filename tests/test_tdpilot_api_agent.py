@@ -487,3 +487,254 @@ def test_resolve_model_pinned_in_loop():
     assert a._active_model == "deepseek-v4-flash"
     # Even if user_text would push score >=2, the tier wins.
     assert a._resolve_model("build a complex thing with code ```") == "deepseek-v4-flash"
+
+
+# ---------------------------------------------------------------------------
+# Phase 0.1 — cache-stable dynamic-context slot.
+#
+# Contract: the system prompt prefix MUST be byte-identical across every
+# API call within a session so DeepSeek's auto-cache hits (~50× discount).
+# Volatile per-turn state (memory / knowledge / recipes indexes) is
+# delivered via dynamic_context_provider, which prepends synthetic
+# messages WITHOUT mutating Agent.messages.
+# ---------------------------------------------------------------------------
+
+
+def _capture_request_body(captured: list[dict]):
+    """urlopen side-effect that snapshots each Request body before
+    returning a canned text-only response.
+    """
+
+    counter = {"n": 0}
+
+    def side_effect(req, *a, **k):
+        counter["n"] += 1
+        body = json.loads(req.data.decode("utf-8"))
+        captured.append(body)
+        return _mk_response(_text_only(f"reply {counter['n']}"))
+
+    return side_effect
+
+
+def test_system_prompt_byte_stable_across_turns():
+    """Phase 0.1 acceptance test.
+
+    Run 5 consecutive turns, each with a dynamic context that produces
+    DIFFERENT bytes per turn. SHA-256 of the system prompt sent to the
+    API must be identical across all 5.
+    """
+    import hashlib
+
+    counter = {"n": 0}
+
+    def dyn_provider():
+        counter["n"] += 1
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"[[TDPILOT_CONTEXT]] turn={counter['n']} mem=foo{counter['n']}",
+                    }
+                ],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "Acknowledged."}]},
+        ]
+
+    captured: list[dict] = []
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        system_prompt="STABLE BASE PROMPT v1\n\nLine two for realism.",
+        dynamic_context_provider=dyn_provider,
+    )
+
+    for i in range(5):
+        agent.add_user_message(f"turn {i} question")
+        with patch("urllib.request.urlopen", side_effect=_capture_request_body(captured)):
+            agent.run_turn()
+
+    assert len(captured) == 5
+    sys_hashes = {hashlib.sha256(b["system"].encode("utf-8")).hexdigest() for b in captured}
+    assert len(sys_hashes) == 1, f"system prompt drifted across 5 turns: {sys_hashes}"
+
+
+def test_dynamic_context_prepended_to_each_api_call():
+    """Each API call's messages array starts with the provider's output."""
+    captured: list[dict] = []
+
+    counter = {"n": 0}
+
+    def dyn_provider():
+        counter["n"] += 1
+        return [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": f"[[TDPILOT_CONTEXT]] turn {counter['n']}"}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "Acknowledged."}]},
+        ]
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        system_prompt="STABLE",
+        dynamic_context_provider=dyn_provider,
+    )
+
+    agent.add_user_message("first")
+    with patch("urllib.request.urlopen", side_effect=_capture_request_body(captured)):
+        agent.run_turn()
+
+    agent.add_user_message("second")
+    with patch("urllib.request.urlopen", side_effect=_capture_request_body(captured)):
+        agent.run_turn()
+
+    # Each request had ctx user + ctx assistant prepended to the real
+    # conversation. After turn 1, agent.messages = [user, assistant];
+    # request 1 = [ctx_u, ctx_a, user1, ...] = at least 3 entries.
+    for body in captured:
+        msgs = body["messages"]
+        assert msgs[0]["role"] == "user"
+        first_text = msgs[0]["content"][0]["text"]
+        assert first_text.startswith("[[TDPILOT_CONTEXT]]")
+        assert msgs[1]["role"] == "assistant"
+
+    # Per-turn content varies even though system prompt does not.
+    first_ctx = captured[0]["messages"][0]["content"][0]["text"]
+    second_ctx = captured[1]["messages"][0]["content"][0]["text"]
+    assert first_ctx != second_ctx
+
+
+def test_dynamic_context_not_persisted_in_history():
+    """The provider's output must NOT mutate ``self.messages``.
+
+    Otherwise the conversation history grows with stale context every
+    turn and we lose the cache benefit of a clean history.
+    """
+
+    def dyn_provider():
+        return [
+            {"role": "user", "content": [{"type": "text", "text": "[[TDPILOT_CONTEXT]] foo"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Acknowledged."}]},
+        ]
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        system_prompt="STABLE",
+        dynamic_context_provider=dyn_provider,
+    )
+
+    agent.add_user_message("hi")
+    with patch("urllib.request.urlopen") as urlopen:
+        urlopen.side_effect = lambda *a, **k: _mk_response(_text_only("ok"))
+        agent.run_turn()
+
+    # Expected: just the real user/assistant pair, NO ctx blocks.
+    roles = [m["role"] for m in agent.messages]
+    assert roles == ["user", "assistant"]
+    user_text = agent.messages[0]["content"][0]["text"]
+    assert user_text == "hi"
+    assistant_text = agent.messages[1]["content"][0]["text"]
+    assert "TDPILOT_CONTEXT" not in assistant_text
+
+
+def test_dynamic_context_provider_none_is_noop():
+    """Backwards-compat: agent without a provider sends only its own
+    messages — pre-Phase-0.1 behaviour preserved."""
+    captured: list[dict] = []
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        system_prompt="STABLE",
+    )
+    assert agent.dynamic_context_provider is None
+
+    agent.add_user_message("hi")
+    with patch("urllib.request.urlopen", side_effect=_capture_request_body(captured)):
+        agent.run_turn()
+
+    msgs = captured[0]["messages"]
+    assert len(msgs) == 1
+    assert msgs[0]["role"] == "user"
+    assert msgs[0]["content"][0]["text"] == "hi"
+
+
+def test_dynamic_context_provider_exception_degrades_gracefully():
+    """A buggy provider must not crash the agent — it logs and yields []."""
+    captured: list[dict] = []
+
+    def bad_provider():
+        raise RuntimeError("provider exploded")
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        system_prompt="STABLE",
+        dynamic_context_provider=bad_provider,
+    )
+
+    agent.add_user_message("hi")
+    with patch("urllib.request.urlopen", side_effect=_capture_request_body(captured)):
+        agent.run_turn()
+
+    msgs = captured[0]["messages"]
+    assert len(msgs) == 1  # only the user msg, ctx fell through
+    assert msgs[0]["role"] == "user"
+
+
+def test_dynamic_context_provider_returns_junk_filtered():
+    """Non-list / malformed provider output is filtered, not propagated."""
+    captured: list[dict] = []
+
+    def junk_provider():
+        # Returns a list, but with malformed entries mixed in. Only the
+        # well-formed user/assistant entries should survive.
+        return [
+            "not-a-dict",
+            {"role": "system", "content": []},  # wrong role
+            {"role": "user"},  # missing content
+            {"role": "user", "content": [{"type": "text", "text": "valid ctx"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "ack"}]},
+        ]
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        system_prompt="STABLE",
+        dynamic_context_provider=junk_provider,
+    )
+
+    agent.add_user_message("hi")
+    with patch("urllib.request.urlopen", side_effect=_capture_request_body(captured)):
+        agent.run_turn()
+
+    msgs = captured[0]["messages"]
+    # user-ctx, assistant-ack, real-user
+    assert len(msgs) == 3
+    assert msgs[0]["content"][0]["text"] == "valid ctx"
+    assert msgs[1]["content"][0]["text"] == "ack"
+    assert msgs[2]["content"][0]["text"] == "hi"
+
+
+def test_dynamic_context_empty_list_means_no_prefix():
+    """Empty provider output skips prepending entirely."""
+    captured: list[dict] = []
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        system_prompt="STABLE",
+        dynamic_context_provider=lambda: [],
+    )
+
+    agent.add_user_message("hi")
+    with patch("urllib.request.urlopen", side_effect=_capture_request_body(captured)):
+        agent.run_turn()
+
+    msgs = captured[0]["messages"]
+    assert len(msgs) == 1
+    assert msgs[0]["content"][0]["text"] == "hi"
