@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -66,10 +67,25 @@ _EXTERNAL_CORPORA_ROOTS = (
     Path.home() / ".tdpilot-api" / "data" / "normalized",
 )
 
+# Phase 1.1 — SQLite/FTS corpora. The dpsk4 / Claude Code variants'
+# ``brains add <corpus>`` flow installs ``<corpus>brain.db`` (an FTS5
+# SQLite DB) under one of the roots above. Filename is conventionally
+# ``docsbrain.db`` for derivative-style HTML corpora and
+# ``popxbrain.db`` / ``<id>brain.db`` for everything else; we discover
+# any file matching ``*brain.db`` so future builders that pick a new
+# convention still work without runtime changes.
+_DB_GLOB_PATTERNS: tuple[str, ...] = ("*brain.db",)
+
 # In-memory cache. Keyed by absolute pages.jsonl path. Re-parsed when the
 # file mtime changes (cheap stat() check on each search).
 _corpus_cache: dict[str, list[dict]] = {}
 _corpus_mtime: dict[str, float] = {}
+
+# Per-DB meta-table cache (Phase 1.6). Same mtime-keyed invalidation as
+# the JSONL cache. Avoids re-opening + re-querying the meta table on
+# every search call.
+_brain_meta_cache: dict[str, dict[str, str]] = {}
+_brain_meta_mtime: dict[str, float] = {}
 
 
 def _ensure_user_dir() -> None:
@@ -180,6 +196,234 @@ def _all_entries() -> list[dict]:
     return merged
 
 
+# ---------------------------------------------------------------------------
+# Phase 1.1 — SQLite/FTS corpus support
+# ---------------------------------------------------------------------------
+
+
+def _fts_quote(query: str) -> str:
+    """Make ``query`` safe to drop into an FTS5 MATCH expression.
+
+    Bare user input can break FTS5 — un-paired quotes raise
+    ``OperationalError: malformed MATCH expression``, embedded
+    parentheses are treated as grouping, ``*`` as a prefix wildcard,
+    and so on. Mirrors the CLI's quoting strategy
+    (src/td_mcp/knowledge/docsbrain): strip every special char, quote
+    each remaining term, OR them.
+    """
+    cleaned = re.sub(r'["\(\)\*\^\{\}:]', " ", query or "")
+    terms = [t for t in cleaned.split() if t]
+    if not terms:
+        return ""
+    return " OR ".join(f'"{t}"' for t in terms)
+
+
+def _read_brain_meta_with_cache(db_path: Path) -> dict[str, str]:
+    """Read the ``meta`` table from a brain.db, cached by mtime.
+
+    Returns ``{}`` for missing files / pre-Phase-1.6 brains without a
+    meta table — never raises.
+    """
+    if not db_path.is_file():
+        return {}
+    cache_key = str(db_path)
+    try:
+        mtime = db_path.stat().st_mtime
+    except OSError:
+        return {}
+    cached = _brain_meta_cache.get(cache_key)
+    if cached is not None and _brain_meta_mtime.get(cache_key) == mtime:
+        return cached
+
+    meta: dict[str, str] = {}
+    try:
+        conn = sqlite3.connect(str(db_path))
+    except sqlite3.DatabaseError:
+        return {}
+    try:
+        try:
+            rows = conn.execute("SELECT key, value FROM meta").fetchall()
+            meta = {str(k): str(v) for k, v in rows if k}
+        except sqlite3.DatabaseError:
+            # Legacy DB without a meta table — empty dict is the documented
+            # graceful-degradation signal.
+            meta = {}
+    finally:
+        conn.close()
+
+    _brain_meta_cache[cache_key] = meta
+    _brain_meta_mtime[cache_key] = mtime
+    return meta
+
+
+def _sqlite_corpus_descriptors() -> list[dict]:
+    """Discover ``*brain.db`` files under the external corpora roots.
+
+    Returns one descriptor per discovered DB:
+
+        {
+          "corpus": <dir_name>,           # canonical id (== meta.brain_id when present)
+          "db_path": <Path>,
+          "meta": dict[str, str],         # parsed meta table (may be empty)
+          "trust_tier": str,              # from meta or fallback
+          "display_name": str,            # from meta or corpus dir name
+          "source_url": str,              # from meta when present
+          "chunk_count": int,             # from meta when present, 0 otherwise
+        }
+
+    A directory containing BOTH ``pages.jsonl`` and a ``*brain.db``
+    yields ONLY a SQLite descriptor here — the JSONL path is preferred
+    away in :func:`_external_corpora_entries` so the runtime never
+    surfaces the same corpus twice.
+    """
+    seen_dirs: set[str] = set()
+    descriptors: list[dict] = []
+    for root in _EXTERNAL_CORPORA_ROOTS:
+        if not root.is_dir():
+            continue
+        try:
+            corpus_dirs = sorted(root.iterdir())
+        except OSError:
+            continue
+        for corpus_dir in corpus_dirs:
+            if not corpus_dir.is_dir():
+                continue
+            if corpus_dir.name in seen_dirs:
+                continue
+            db_path: Path | None = None
+            for pat in _DB_GLOB_PATTERNS:
+                matches = sorted(corpus_dir.glob(pat))
+                if matches:
+                    db_path = matches[0]
+                    break
+            if db_path is None:
+                continue
+            seen_dirs.add(corpus_dir.name)
+            meta = _read_brain_meta_with_cache(db_path)
+            try:
+                chunk_count = int(meta.get("chunk_count", "0") or "0")
+            except (TypeError, ValueError):
+                chunk_count = 0
+            descriptors.append(
+                {
+                    "corpus": meta.get("brain_id") or corpus_dir.name,
+                    "db_path": db_path,
+                    "meta": meta,
+                    "trust_tier": meta.get("trust_tier") or "bundled",
+                    "display_name": meta.get("display_name") or corpus_dir.name,
+                    "source_url": meta.get("source_url") or "",
+                    "chunk_count": chunk_count,
+                }
+            )
+    return descriptors
+
+
+def _query_sqlite_fts(
+    db_path: Path,
+    query: str,
+    limit: int,
+    *,
+    meta: dict[str, str] | None = None,
+) -> list[dict]:
+    """Run an FTS5 MATCH query against a brain.db.
+
+    Returns match dicts in the same shape as :func:`_bm25_search`'s
+    output (with extra ``url`` / ``trust_tier`` / ``corpus`` fields so
+    callers can tier-rank results). Empty list on any failure —
+    schema mismatch, malformed DB, FTS syntax errors, or empty query
+    after sanitisation. Never raises.
+
+    The JOIN uses ``c.rowid = fts.rowid`` because pre-v1 brains use
+    contentless FTS5 (``content=''``) where FTS-side stored columns
+    are NULL on SELECT. v1 brains store their own copy and the JOIN
+    still works. Either way the chunks-table SELECT returns the real
+    column values.
+    """
+    safe = _fts_quote(query)
+    if not safe:
+        return []
+    try:
+        conn = sqlite3.connect(str(db_path))
+    except sqlite3.DatabaseError:
+        return []
+    try:
+        # v1 SELECT first — pulls title/url/trust_tier directly. If
+        # those columns don't exist (legacy DB), fall back to the
+        # narrower v0 SELECT.
+        try:
+            rows = conn.execute(
+                """SELECT c.chunk_id, c.title, c.section_title, c.url,
+                          c.doc_type, c.trust_tier, c.operator_name,
+                          c.content,
+                          bm25(chunks_fts) AS rank
+                   FROM chunks_fts
+                   JOIN chunks c ON c.rowid = chunks_fts.rowid
+                   WHERE chunks_fts MATCH ?
+                   ORDER BY rank
+                   LIMIT ?""",
+                (safe, limit),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            try:
+                rows = conn.execute(
+                    """SELECT c.chunk_id, NULL, c.section_title, NULL,
+                              c.doc_type, NULL, c.operator_name,
+                              c.content,
+                              bm25(chunks_fts) AS rank
+                       FROM chunks_fts
+                       JOIN chunks c ON c.rowid = chunks_fts.rowid
+                       WHERE chunks_fts MATCH ?
+                       ORDER BY rank
+                       LIMIT ?""",
+                    (safe, limit),
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                print(f"[tdpilot_API/knowledge] FTS query failed for {db_path}: {exc}")
+                return []
+        except sqlite3.DatabaseError as exc:
+            print(f"[tdpilot_API/knowledge] FTS DB error for {db_path}: {exc}")
+            return []
+    finally:
+        conn.close()
+
+    # FTS5 bm25() returns NEGATIVE ranks; lower (more negative) = better
+    # match. Convert to a positive [0, 1]-ish "score" the runtime
+    # surfaces.
+    meta_dict = meta or {}
+    fallback_tier = meta_dict.get("trust_tier") or "bundled"
+    corpus_id = meta_dict.get("brain_id") or db_path.parent.name
+    display_name = meta_dict.get("display_name") or corpus_id
+
+    matches: list[dict] = []
+    for row in rows:
+        chunk_id, title, section_title, url, doc_type, row_trust, op_name, content, rank = row
+        try:
+            score = 1.0 / (1.0 + abs(float(rank or 0)))
+        except (TypeError, ValueError):
+            score = 0.0
+        body = content or ""
+        snippet = body.strip().replace("\n", " ")[:280]
+        name = title or section_title or chunk_id or ""
+        description = section_title if title and section_title and title != section_title else ""
+        matches.append(
+            {
+                "name": name,
+                "category": doc_type or "reference",
+                "description": description,
+                "source": f"corpus:{corpus_id}",
+                "score": round(score, 3),
+                "snippet": snippet,
+                "corpus": corpus_id,
+                "url": url or "",
+                "trust_tier": (row_trust or fallback_tier or "bundled"),
+                "operator_name": op_name or "",
+                "chunk_id": chunk_id,
+                "display_name": display_name,
+            }
+        )
+    return matches
+
+
 def _external_corpora_entries() -> list[dict]:
     """Discover and load pages.jsonl files from known docsbrain roots.
 
@@ -187,7 +431,22 @@ def _external_corpora_entries() -> list[dict]:
     it unless the source file's mtime changed. Each corpus's path is
     cached independently so adding a new corpus doesn't blow away
     existing ones.
+
+    Phase 1.1 prefer-DB rule: when a corpus directory contains BOTH a
+    ``pages.jsonl`` and a ``*brain.db``, this function skips the JSONL
+    so the runtime doesn't surface the same corpus twice. The brain.db
+    path is queried lazily via :func:`_query_sqlite_fts` at search time
+    instead of being preloaded into memory.
     """
+    # Build the set of corpus dir names we already serve from a
+    # SQLite descriptor — those win over their pages.jsonl siblings.
+    sqlite_dirs: set[str] = set()
+    for desc in _sqlite_corpus_descriptors():
+        try:
+            sqlite_dirs.add(Path(desc["db_path"]).parent.name)
+        except Exception:
+            continue
+
     entries: list[dict] = []
     for root in _EXTERNAL_CORPORA_ROOTS:
         if not root.is_dir():
@@ -195,6 +454,9 @@ def _external_corpora_entries() -> list[dict]:
         try:
             for corpus_dir in sorted(root.iterdir()):
                 if not corpus_dir.is_dir():
+                    continue
+                if corpus_dir.name in sqlite_dirs:
+                    # SQLite descriptor handles this corpus.
                     continue
                 pages_path = corpus_dir / "pages.jsonl"
                 if not pages_path.is_file():
@@ -255,6 +517,11 @@ def _parse_pages_jsonl(path: Path, corpus_name: str) -> list[dict]:
                         "text": text,
                         "url": page.get("url") or "",
                         "corpus": corpus_name,
+                        # Phase 1.1 — JSONL corpora pre-date the meta
+                        # table so we don't know their trust tier.
+                        # Default to "bundled" — Phase 3.2 will branch
+                        # on this when ranking results.
+                        "trust_tier": "bundled",
                     }
                 )
     except OSError:
@@ -263,10 +530,42 @@ def _parse_pages_jsonl(path: Path, corpus_name: str) -> list[dict]:
 
 
 def _corpora_summary() -> list[dict]:
-    """Return [{corpus, pages, path}] for the get_knowledge_index_hint
-    footer. Cheap — counts come from the cache, no re-parse."""
+    """Return ``[{corpus, pages, path, kind, trust_tier, ...}]``.
+
+    Used by :func:`get_knowledge_index_hint` and
+    :func:`handle_get_capabilities` to surface what the agent has
+    available without enumerating thousands of pages. Phase 1.1 makes
+    the summary kind-aware: jsonl-backed corpora carry ``"kind":
+    "jsonl"``; SQLite-backed corpora carry ``"kind": "sqlite"`` plus
+    the meta-table fields (display_name, trust_tier, source_url,
+    chunk_count) when available.
+    """
     summary: list[dict] = []
     seen: set[str] = set()
+
+    # SQLite corpora first — they win the prefer-DB rule.
+    for desc in _sqlite_corpus_descriptors():
+        corpus = desc["corpus"]
+        if corpus in seen:
+            continue
+        seen.add(corpus)
+        meta = desc["meta"]
+        summary.append(
+            {
+                "corpus": corpus,
+                "pages": desc["chunk_count"],
+                "path": str(desc["db_path"]),
+                "kind": "sqlite",
+                "trust_tier": desc["trust_tier"],
+                "display_name": desc["display_name"],
+                "source_url": desc["source_url"],
+                "schema_version": meta.get("schema_version", "0"),
+                "build_date": meta.get("build_date", ""),
+                "builder_name": meta.get("builder_name", ""),
+            }
+        )
+
+    # JSONL corpora — only if not already covered by a SQLite descriptor.
     for root in _EXTERNAL_CORPORA_ROOTS:
         if not root.is_dir():
             continue
@@ -294,6 +593,13 @@ def _corpora_summary() -> list[dict]:
                         "corpus": corpus_dir.name,
                         "pages": count,
                         "path": str(pages_path),
+                        "kind": "jsonl",
+                        # Legacy JSONL has no meta — best-effort defaults
+                        # so callers can rely on these keys existing.
+                        "trust_tier": "bundled",
+                        "display_name": corpus_dir.name,
+                        "source_url": "",
+                        "schema_version": "0",
                     }
                 )
         except Exception:
@@ -361,6 +667,7 @@ def handle_knowledge_search(body: dict) -> dict:
     if not query:
         return {"error": "Missing required field: query"}
 
+    # In-memory pool: bundled + user + jsonl-backed external corpora.
     docs = _all_entries_for_search()
     if category:
         docs = [d for d in docs if d.get("category", "").lower() == category]
@@ -374,17 +681,46 @@ def handle_knowledge_search(body: dict) -> dict:
             or d.get("source", "").lower() == f"corpus:{corpus_filter}"
             or d.get("source", "").lower() == corpus_filter
         ]
-    if not docs:
+
+    bm25_matches = _bm25_search(query, docs, top_k) if docs else []
+
+    # Phase 1.1 — query each SQLite-backed corpus via FTS5 in addition
+    # to the in-memory BM25 above. Each corpus contributes up to
+    # ``top_k`` candidates; we merge by score and trim to ``top_k``
+    # globally. SQLite corpora carry trust_tier / url / chunk_id on
+    # every match so the agent can weight evidence (Phase 3.2).
+    sqlite_matches: list[dict] = []
+    for desc in _sqlite_corpus_descriptors():
+        if corpus_filter and desc["corpus"].lower() != corpus_filter:
+            continue
+        if category:
+            # SQLite corpora carry a per-chunk doc_type column. We
+            # filter post-query for simplicity — the result-set is
+            # already capped at top_k per corpus.
+            partial = _query_sqlite_fts(desc["db_path"], query, top_k, meta=desc["meta"])
+            partial = [m for m in partial if (m.get("category") or "").lower() == category]
+            sqlite_matches.extend(partial)
+        else:
+            sqlite_matches.extend(_query_sqlite_fts(desc["db_path"], query, top_k, meta=desc["meta"]))
+
+    all_matches = bm25_matches + sqlite_matches
+    if not all_matches:
         return {"ok": True, "count": 0, "matches": []}
 
-    matches = _bm25_search(query, docs, top_k)
-    return {"ok": True, "count": len(matches), "matches": matches}
+    # Sort by score descending; trim to top_k. BM25 and FTS bm25() use
+    # different scales but both are normalised into the [0, 1] range
+    # before this point so the merge is meaningful.
+    all_matches.sort(key=lambda m: m.get("score", 0.0), reverse=True)
+    all_matches = all_matches[:top_k]
+
+    return {"ok": True, "count": len(all_matches), "matches": all_matches}
 
 
 def handle_knowledge_get(body: dict) -> dict:
     """Load full content of a knowledge entry by name. Searches local
-    (bundled + user) first, then external docsbrain corpora. Title
-    match wins over filename match."""
+    (bundled + user) first, then jsonl-backed external corpora, then
+    SQLite-backed corpora. Title match wins over filename match.
+    """
     name = (body.get("name") or "").strip()
     if not name:
         return {"error": "Missing required field: name"}
@@ -399,7 +735,58 @@ def handle_knowledge_get(body: dict) -> dict:
                 "source": entry["source"],
                 "url": entry.get("url", ""),
                 "content": entry["text"],
+                "trust_tier": entry.get("trust_tier", "bundled"),
             }
+
+    # Phase 1.1 — fall back to SQLite-backed corpora. Match by title
+    # (chunks_fts only stores indexed text); chunk_id-by-direct-equality
+    # is checked too because handle_knowledge_search now surfaces
+    # chunk_ids the model can echo back.
+    for desc in _sqlite_corpus_descriptors():
+        try:
+            conn = sqlite3.connect(str(desc["db_path"]))
+        except sqlite3.DatabaseError:
+            continue
+        try:
+            try:
+                row = conn.execute(
+                    """SELECT chunk_id, COALESCE(title, section_title) AS title,
+                              COALESCE(url, '') AS url,
+                              COALESCE(doc_type, 'reference') AS category,
+                              COALESCE(trust_tier, ?) AS trust_tier,
+                              content
+                       FROM chunks
+                       WHERE chunk_id = ? OR title = ? OR section_title = ?
+                       LIMIT 1""",
+                    (desc["trust_tier"], name, name, name),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                # Legacy DB lacking title column — fall back.
+                row = conn.execute(
+                    """SELECT chunk_id, section_title AS title, '' AS url,
+                              COALESCE(doc_type, 'reference') AS category,
+                              ? AS trust_tier, content
+                       FROM chunks
+                       WHERE chunk_id = ? OR section_title = ?
+                       LIMIT 1""",
+                    (desc["trust_tier"], name, name),
+                ).fetchone()
+        finally:
+            conn.close()
+        if row:
+            chunk_id, title, url, category, trust_tier, content = row
+            return {
+                "ok": True,
+                "name": title or chunk_id,
+                "filename": (chunk_id or title) + ".md",
+                "category": category or "reference",
+                "description": "",
+                "source": f"corpus:{desc['corpus']}",
+                "url": url or "",
+                "content": content or "",
+                "trust_tier": trust_tier or desc["trust_tier"],
+            }
+
     return {"error": f"Knowledge entry not found: {name}"}
 
 
@@ -467,7 +854,13 @@ def handle_knowledge_add(body: dict) -> dict:
 
 def _bm25_search(query: str, docs: list[dict], top_k: int) -> list[dict]:
     """Score docs and return knowledge-shaped match dicts (category +
-    source instead of memory's filename + type)."""
+    source instead of memory's filename + type).
+
+    Phase 1.1 — propagate ``trust_tier`` and ``url`` so jsonl-backed
+    corpora's hits look uniform with SQLite hits at the agent layer.
+    Bundled / user entries default to ``trust_tier="bundled"``;
+    explicit values from the doc dict win.
+    """
     from tdpilot_api_bm25 import bm25_score  # type: ignore[import-not-found]
 
     matches: list[dict] = []
@@ -482,6 +875,9 @@ def _bm25_search(query: str, docs: list[dict], top_k: int) -> list[dict]:
                 "source": doc.get("source"),
                 "score": round(score, 3),
                 "snippet": snippet,
+                "url": doc.get("url", ""),
+                "trust_tier": doc.get("trust_tier", "bundled"),
+                "corpus": doc.get("corpus", ""),
             }
         )
     return matches
