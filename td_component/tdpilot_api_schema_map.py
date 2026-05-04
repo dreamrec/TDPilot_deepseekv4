@@ -200,4 +200,6 @@ TOOL_TO_HANDLER: dict[str, tuple[str, Callable[[dict], dict]]] = {
     "td_get_server_metrics": ("handle_get_server_metrics", _id),
     "td_describe_surface": ("handle_describe_surface", _id),
     "td_get_capabilities": ("handle_get_capabilities", _id),
+    # ---- Tool batch (Phase 2.1 — handler in tdpilot_api_batch.py) ----
+    "tool_batch": ("handle_tool_batch", _id),
 }
