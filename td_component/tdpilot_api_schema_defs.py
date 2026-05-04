@@ -1764,6 +1764,53 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         ),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
+    {
+        "name": "tool_batch",
+        "description": (
+            "Run multiple TDPilot tool calls in one round trip. Saves "
+            "LLM round-trip cost when you need several independent "
+            "lookups (e.g. info + errors + capabilities) — submit them "
+            "all here instead of issuing N separate tool_use blocks. "
+            "Each sub-call's result is returned in `results[i]` with "
+            "the same shape as a normal tool result. A failed sub-call "
+            "does NOT abort the batch — the failure is reported in "
+            "results[i].error and the rest still run. Max 8 sub-calls "
+            "per batch; nested tool_batch is rejected. Sub-calls "
+            "execute serially on the cook thread (TD's API isn't "
+            "thread-safe), so the win is round-trip latency, not "
+            "per-tool latency."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "calls": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "description": "List of tool calls to dispatch.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {
+                                "type": "string",
+                                "description": (
+                                    "Name of an existing TDPilot tool (must be "
+                                    "in TOOL_SCHEMAS — tool_batch itself is rejected)."
+                                ),
+                            },
+                            "args": {
+                                "type": "object",
+                                "description": "Arguments dict for that tool. May be empty.",
+                            },
+                        },
+                        "required": ["tool"],
+                    },
+                },
+            },
+            "required": ["calls"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
