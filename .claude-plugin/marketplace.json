@@ -1,0 +1,33 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "dreamrec-TDPilot-dpsk4",
+  "description": "AI copilot for TouchDesigner (DeepSeek v4 optimized) — 103 MCP tools for live node graph control, parameter management, diagnostics, safety, streaming, technique memory, knowledge corpus, focus + locations, hint injection, component notes, and typed patch sessions.",
+  "owner": {
+    "name": "dreamrec",
+    "email": "dreamrec@users.noreply.github.com"
+  },
+  "plugins": [
+    {
+      "name": "tdpilot-dpsk4",
+      "description": "AI copilot for TouchDesigner with live MCP control (DeepSeek v4 optimized) — 103 tools, focus + locations, hint injection, component notes, POPx inspection, knowledge corpus, project lifecycle, custom parameter authoring, snapshots, undo-block safety, and typed patch sessions. Works with Claude Desktop, Claude Code (DeepSeek v4 backend), and any MCP-compatible client.",
+      "version": "1.6.11",
+      "author": {
+        "name": "silviu"
+      },
+      "source": "./",
+      "category": "integration",
+      "homepage": "https://github.com/dreamrec/TDPilot_deepseekv4",
+      "keywords": [
+        "touchdesigner",
+        "td",
+        "mcp",
+        "deepseek",
+        "creative-coding",
+        "visual-programming",
+        "popx",
+        "particles",
+        "simulations"
+      ]
+    }
+  ]
+}

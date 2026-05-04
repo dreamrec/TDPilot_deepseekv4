@@ -1,0 +1,179 @@
+#!/usr/bin/env node
+/**
+ * TDPilot — npm wrapper
+ *
+ * Usage:
+ *   npx tdpilot                 run the MCP server (default)
+ *   npx tdpilot install         install TD auto-load (.toe + pref.txt)
+ *   npx tdpilot uninstall       undo install
+ *   npx tdpilot plugin-install  install as a Claude Code plugin via marketplace
+ *   npx tdpilot plugin-uninstall remove the Claude Code plugin
+ *   npx tdpilot brains          manage downloaded brain DBs
+ */
+
+const { execSync, spawn } = require("child_process");
+const { existsSync } = require("fs");
+const { join } = require("path");
+const os = require("os");
+
+const REPO = "https://github.com/dreamrec/TDPilot_deepseekv4.git";
+const INSTALL_DIR = join(os.homedir(), ".tdpilot-dpsk4");
+
+function run(cmd, opts = {}) {
+  return execSync(cmd, { encoding: "utf-8", stdio: "pipe", ...opts }).trim();
+}
+
+function pinToLatestTag(dir) {
+  // Auto-pin clones to the most recent reachable git tag rather than HEAD
+  // of main. Without this, `npx tdpilot@1.5.1` would happily run whatever
+  // bleeding-edge code is on main at fetch time — package.json's `version`
+  // field would be decorative. With this, users get the latest published
+  // release. Falls back silently if no tags exist (offline / private fork
+  // / pre-release) since stay-on-main is a reasonable degraded mode.
+  try {
+    const latestTag = run("git describe --tags --abbrev=0", { cwd: dir });
+    if (latestTag) {
+      run(`git checkout ${latestTag}`, { cwd: dir });
+      console.log(`[TDPilot] Pinned to ${latestTag}`);
+      return latestTag;
+    }
+  } catch {
+    console.warn("[TDPilot] No release tag found upstream; staying on main.");
+  }
+  return null;
+}
+
+function hasCommand(cmd) {
+  try {
+    run(os.platform() === "win32" ? `where ${cmd}` : `which ${cmd}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function installUv() {
+  console.log("[TDPilot] Installing uv...");
+  if (os.platform() === "win32") {
+    execSync(
+      'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"',
+      { stdio: "inherit" }
+    );
+  } else {
+    execSync("curl -LsSf https://astral.sh/uv/install.sh | sh", {
+      stdio: "inherit",
+      shell: "/bin/bash",
+    });
+  }
+
+  // Add common uv locations to PATH
+  const uvBin = join(os.homedir(), ".local", "bin");
+  if (!process.env.PATH.includes(uvBin)) {
+    process.env.PATH = `${uvBin}${os.platform() === "win32" ? ";" : ":"}${process.env.PATH}`;
+  }
+}
+
+function ensureRepo() {
+  const marker = join(INSTALL_DIR, "pyproject.toml");
+  if (existsSync(marker)) {
+    // Auto-update is OPT-IN — prior behavior silently ran `git pull` on every
+    // invocation, which surprised users with local edits. Set TDPILOT_AUTO_UPDATE=1
+    // to restore the old behavior, or use `npx tdpilot update` (see brains.js)
+    // for an explicit refresh.
+    if (process.env.TDPILOT_AUTO_UPDATE === "1") {
+      try {
+        // Fetch tags too, then re-pin to the latest tag so users move
+        // forward across releases (not just to HEAD of main).
+        run("git fetch --tags origin main", { cwd: INSTALL_DIR });
+        run("git checkout main", { cwd: INSTALL_DIR });
+        run("git pull", { cwd: INSTALL_DIR });
+        pinToLatestTag(INSTALL_DIR);
+        console.log("[TDPilot] Updated to latest version (TDPILOT_AUTO_UPDATE=1).");
+      } catch {
+        // Offline or no git — fine, use what we have
+      }
+    }
+    return;
+  }
+
+  console.log(`[TDPilot] Downloading to ${INSTALL_DIR}...`);
+  if (hasCommand("git")) {
+    execSync(`git clone ${REPO} "${INSTALL_DIR}"`, { stdio: "inherit" });
+    pinToLatestTag(INSTALL_DIR);
+  } else {
+    // Fallback: download zip
+    const zipUrl =
+      "https://github.com/dreamrec/TDPilot_deepseekv4/archive/refs/heads/main.zip";
+    const tmpZip = join(os.tmpdir(), "tdpilot.zip");
+    const tmpDir = join(os.tmpdir(), "tdpilot-extract");
+    if (os.platform() === "win32") {
+      run(`powershell -c "Invoke-WebRequest -Uri '${zipUrl}' -OutFile '${tmpZip}'"`);
+      run(`powershell -c "Expand-Archive -Path '${tmpZip}' -DestinationPath '${tmpDir}' -Force"`);
+    } else {
+      run(`curl -L -o "${tmpZip}" "${zipUrl}"`);
+      run(`unzip -q "${tmpZip}" -d "${tmpDir}"`);
+    }
+    const extracted = join(tmpDir, "TDPilot_deepseekv4-main");
+    if (os.platform() === "win32") {
+      run(`move "${extracted}" "${INSTALL_DIR}"`);
+    } else {
+      run(`mv "${extracted}" "${INSTALL_DIR}"`);
+    }
+  }
+}
+
+// ── Subcommands that don't need uv/repo ──────────────────────
+// (plugin-install runs Claude Code — no Python needed)
+const subcommand = process.argv[2];
+
+if (subcommand === "plugin-install" || subcommand === "plugin-uninstall") {
+  const { install, uninstall } = require("./plugin");
+  if (subcommand === "plugin-install") install();
+  else uninstall();
+  process.exit(0);
+}
+
+// ── Main ──────────────────────────────────────────────────────
+
+if (!hasCommand("uv")) {
+  installUv();
+  if (!hasCommand("uv")) {
+    console.error("[TDPilot] Failed to install uv. Install it manually: https://docs.astral.sh/uv/");
+    process.exit(1);
+  }
+}
+
+ensureRepo();
+
+if (subcommand === "brains") {
+  const { main: brainsMain } = require("./brains");
+  brainsMain(process.argv.slice(3));
+  process.exit(0);
+}
+
+if (subcommand === "install" || subcommand === "uninstall") {
+  const { install, uninstall } = require("./install");
+  if (subcommand === "install") {
+    install();
+  } else {
+    uninstall();
+  }
+  process.exit(0);
+}
+
+// Pass through env vars
+const env = {
+  ...process.env,
+  TD_MCP_HOST: process.env.TD_MCP_HOST || "127.0.0.1",
+  TD_MCP_PORT: process.env.TD_MCP_PORT || "9985",
+};
+
+// Run the Python MCP server via uv
+const userArgs = process.argv.slice(2);
+const child = spawn("uv", ["run", "--directory", INSTALL_DIR, "tdpilot-dpsk4", ...userArgs], {
+  stdio: "inherit",
+  env,
+  shell: os.platform() === "win32",
+});
+
+child.on("exit", (code) => process.exit(code || 0));

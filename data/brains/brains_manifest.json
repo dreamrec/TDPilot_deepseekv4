@@ -1,0 +1,42 @@
+{
+  "manifest_version": 2,
+  "updated_at": "2026-04-24",
+  "source": "bundled (shipped with the repo and plugin zip)",
+  "brains": {
+    "derivative": {
+      "display_name": "Derivative Official Docs",
+      "description": "Official TouchDesigner documentation — 25,887 chunks, 674 operators. Scraped from docs.derivative.ca.",
+      "trust_tier": "official",
+      "source_url": "https://docs.derivative.ca",
+      "install_mode": "download",
+      "runtime_db": "data/normalized/derivative/docsbrain.db",
+      "files": [
+        {
+          "name": "docsbrain.db",
+          "drive_id": "1yDJ8LYpv_lBmIzFMfN7DrBgb7RB39u1b",
+          "size_mb": 164
+        },
+        {
+          "name": "build_manifest.json",
+          "drive_id": "12sR9Et2s6qrDEDYZB-mBYHZi8u_Sy35J",
+          "size_mb": 0.001
+        },
+        {
+          "name": "operator_changelog.json",
+          "drive_id": "18eLY03sFo0jlyrJOe3btSI5X5mHnp0f_",
+          "size_mb": 0.3
+        }
+      ]
+    },
+    "popx": {
+      "display_name": "POPx Operator Reference",
+      "description": "POPx GPU-accelerated operators — 59 operators. Build locally from your own licensed POPx scrape via scripts/build_popx_brain.py.",
+      "trust_tier": "licensed",
+      "source_url": "https://www.popsextension.com",
+      "install_mode": "build_locally",
+      "runtime_db": "data/normalized/popx/popxbrain.db",
+      "install_notes": "POPx is a paid TouchDesigner plugin. Public hosting of the prebuilt brain isn't provided — see data/brains/popx.yaml + scripts/build_popx_brain.py to build your own from a legitimate POPx scrape.",
+      "files": []
+    }
+  }
+}
