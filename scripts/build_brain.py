@@ -362,7 +362,12 @@ def _make_chunk(
 
 
 def build_fts_index(
-    chunks_path: Path, db_path: Path, brain_id: str, *, trust_tier: str = DEFAULT_TRUST_TIER
+    chunks_path: Path,
+    db_path: Path,
+    brain_id: str,
+    *,
+    trust_tier: str = DEFAULT_TRUST_TIER,
+    extra_meta: dict[str, str] | None = None,
 ) -> int:
     """Thin wrapper around the shared v1 indexer.
 
@@ -376,6 +381,7 @@ def build_fts_index(
         db_path,
         brain_id=brain_id,
         trust_tier=trust_tier,
+        extra_meta=extra_meta,
     )
 
 
@@ -486,7 +492,22 @@ def main() -> None:
     # Stage 3: Index — Chunk Schema v1 (see docs/CHUNK_SCHEMA.md).
     logger.info("Stage 3: Building FTS5 index (Chunk Schema v1, trust_tier=%s)", trust_tier)
     db_path = output / f"{brain_id}brain.db"
-    indexed = build_fts_index(chunks_path, db_path, brain_id, trust_tier=trust_tier)
+    # Phase 1.6 self-description meta — let the runtime surface this
+    # without filename heuristics.
+    extra_meta: dict[str, str] = {
+        "display_name": str(config.get("display_name", brain_id)),
+        "description": str(config.get("description", "")),
+        "source_url": str(config.get("source_url", "")),
+        "source_type": str(config.get("source_type", "html")),
+        "builder_name": "build_brain.py",
+    }
+    indexed = build_fts_index(
+        chunks_path,
+        db_path,
+        brain_id,
+        trust_tier=trust_tier,
+        extra_meta=extra_meta,
+    )
     logger.info("  → %d chunks indexed", indexed)
 
     # Stage 4: Build manifest
