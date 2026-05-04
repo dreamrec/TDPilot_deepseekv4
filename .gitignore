@@ -107,6 +107,10 @@ docs/archive/
 # loaded by the plugin / baked into the .tox / shipped via npm.
 /docs/*.md
 !/docs/MANUAL.md
+# Chunk Schema v1 — code-adjacent contract spec referenced by builders,
+# tests, and runtime readers (see scripts/_chunk_schema_v1.py). Not
+# free-form planning doc — exempt from the docs/ ignore.
+!/docs/CHUNK_SCHEMA.md
 /CHANGELOG.md
 /CLAUDE.md
 # plugin_README.md is bundled as README.md inside the Claude Code plugin

@@ -20,7 +20,6 @@ import logging
 import os
 import re
 import shutil
-import sqlite3
 import subprocess
 import sys
 import time
@@ -34,6 +33,14 @@ try:
     import yaml
 except ImportError:
     yaml = None  # type: ignore[assignment]
+
+# Shared Chunk Schema v1 helpers — see docs/CHUNK_SCHEMA.md.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _chunk_schema_v1 import (  # noqa: E402
+    DEFAULT_TRUST_TIER,
+    build_v1_fts_index,
+    enrich_to_v1,
+)
 
 # ── toeexpand ────────────────────────────────────────────────
 
@@ -514,6 +521,7 @@ def process_tutorial(
     folder_path: Path,
     toeexpand_bin: str | None,
     chunk_duration_ms: int = 120_000,
+    trust_tier: str = DEFAULT_TRUST_TIER,
 ) -> list[dict[str, Any]]:
     """Process a single tutorial folder into chunks."""
     folder_name = folder_path.name
@@ -589,24 +597,30 @@ def process_tutorial(
         slug = re.sub(r"[^a-z0-9]+", "_", snippet["path"].lower()).strip("_")
         chunk_id = f"tutorial__{_slugify(meta['title'])}__{lang}_{slug}"
         code_chunks.append(
-            {
-                "chunk_id": chunk_id,
-                "page_id": f"tutorial__{_slugify(meta['title'])}",
-                "doc_type": "tutorial_code",
-                "section_title": f"{meta['title']} -- {lang.upper()} ({snippet['path']})",
-                "operator_family": None,
-                "operator_name": None,
-                "mentioned_operators": [],
-                "parameter_names": [],
-                "python_symbols": [],
-                "build_number": None,
-                "build_date": meta["date"],
-                "change_category": topic,
-                "token_estimate": _token_estimate(code),
-                "content": f"```{lang}\n{code}\n```",
-                "source": "toeexpand",
-                "url": "",
-            }
+            enrich_to_v1(
+                {
+                    "chunk_id": chunk_id,
+                    "page_id": f"tutorial__{_slugify(meta['title'])}",
+                    "title": f"{meta['title']} -- {lang.upper()} ({snippet['path']})",
+                    "section_title": f"{meta['title']} -- {lang.upper()} ({snippet['path']})",
+                    "doc_type": "tutorial_code",
+                    "operator_family": None,
+                    "operator_name": None,
+                    "mentioned_operators": [],
+                    "parameter_names": [],
+                    "python_symbols": [],
+                    "build_number": None,
+                    "build_date": meta["date"],
+                    "change_category": topic,
+                    "token_estimate": _token_estimate(code),
+                    "content": f"```{lang}\n{code}\n```",
+                    "source": "toeexpand",
+                    "url": "",
+                },
+                trust_tier=trust_tier,
+                source="toeexpand",
+                brain_id=f"tutorial__{_slugify(meta['title'])}",
+            )
         )
 
     # Chunk transcript by time
@@ -634,24 +648,31 @@ def process_tutorial(
             mentioned_ops = _extract_mentioned_operators(text)
 
             chunks.append(
-                {
-                    "chunk_id": f"{page_id}__t{i:04d}",
-                    "page_id": page_id,
-                    "doc_type": "tutorial",
-                    "section_title": section,
-                    "operator_family": None,
-                    "operator_name": None,
-                    "mentioned_operators": mentioned_ops,
-                    "parameter_names": [],
-                    "python_symbols": [],
-                    "build_number": None,
-                    "build_date": meta["date"],
-                    "change_category": topic,
-                    "token_estimate": _token_estimate(content),
-                    "content": content,
-                    "source": "transcript",
-                    "url": "",
-                }
+                enrich_to_v1(
+                    {
+                        "chunk_id": f"{page_id}__t{i:04d}",
+                        "page_id": page_id,
+                        "title": section,
+                        "section_title": section,
+                        "doc_type": "tutorial",
+                        "operator_family": None,
+                        "operator_name": None,
+                        "mentioned_operators": mentioned_ops,
+                        "parameter_names": [],
+                        "python_symbols": [],
+                        "build_number": None,
+                        "build_date": meta["date"],
+                        "change_category": topic,
+                        "chunk_offset": i,
+                        "token_estimate": _token_estimate(content),
+                        "content": content,
+                        "source": "transcript",
+                        "url": "",
+                    },
+                    trust_tier=trust_tier,
+                    source="transcript",
+                    brain_id=page_id,
+                )
             )
     elif txt_files:
         # Fallback: chunk plain transcript by word count
@@ -670,24 +691,31 @@ def process_tutorial(
             mentioned_ops = _extract_mentioned_operators(chunk_text)
 
             chunks.append(
-                {
-                    "chunk_id": f"{page_id}__w{i // chunk_size + 1:04d}",
-                    "page_id": page_id,
-                    "doc_type": "tutorial",
-                    "section_title": meta["title"],
-                    "operator_family": None,
-                    "operator_name": None,
-                    "mentioned_operators": mentioned_ops,
-                    "parameter_names": [],
-                    "python_symbols": [],
-                    "build_number": None,
-                    "build_date": meta["date"],
-                    "change_category": topic,
-                    "token_estimate": _token_estimate(content),
-                    "content": content,
-                    "source": "transcript",
-                    "url": "",
-                }
+                enrich_to_v1(
+                    {
+                        "chunk_id": f"{page_id}__w{i // chunk_size + 1:04d}",
+                        "page_id": page_id,
+                        "title": meta["title"],
+                        "section_title": meta["title"],
+                        "doc_type": "tutorial",
+                        "operator_family": None,
+                        "operator_name": None,
+                        "mentioned_operators": mentioned_ops,
+                        "parameter_names": [],
+                        "python_symbols": [],
+                        "build_number": None,
+                        "build_date": meta["date"],
+                        "change_category": topic,
+                        "chunk_offset": i // chunk_size + 1,
+                        "token_estimate": _token_estimate(content),
+                        "content": content,
+                        "source": "transcript",
+                        "url": "",
+                    },
+                    trust_tier=trust_tier,
+                    source="transcript",
+                    brain_id=page_id,
+                )
             )
 
     # Add a project overview chunk if we have TOE data and no transcript chunks
@@ -696,28 +724,40 @@ def process_tutorial(
         if toe_context:
             overview += f"\n{toe_context}"
         chunks.append(
-            {
-                "chunk_id": f"{page_id}__overview",
-                "page_id": page_id,
-                "doc_type": "tutorial_project",
-                "section_title": f"{meta['title']} -- Project Overview",
-                "operator_family": None,
-                "operator_name": None,
-                "mentioned_operators": [],
-                "parameter_names": [],
-                "python_symbols": [],
-                "build_number": None,
-                "build_date": meta["date"],
-                "change_category": topic,
-                "token_estimate": _token_estimate(overview),
-                "content": overview,
-                "source": "toeexpand",
-                "url": "",
-            }
+            enrich_to_v1(
+                {
+                    "chunk_id": f"{page_id}__overview",
+                    "page_id": page_id,
+                    "title": f"{meta['title']} -- Project Overview",
+                    "section_title": f"{meta['title']} -- Project Overview",
+                    "doc_type": "tutorial_project",
+                    "operator_family": None,
+                    "operator_name": None,
+                    "mentioned_operators": [],
+                    "parameter_names": [],
+                    "python_symbols": [],
+                    "build_number": None,
+                    "build_date": meta["date"],
+                    "change_category": topic,
+                    "chunk_offset": 1,
+                    "token_estimate": _token_estimate(overview),
+                    "content": overview,
+                    "source": "toeexpand",
+                    "url": "",
+                },
+                trust_tier=trust_tier,
+                source="toeexpand",
+                brain_id=page_id,
+            )
         )
 
     # Add code chunks
     chunks.extend(code_chunks)
+
+    # Stamp chunk_total now that we know the full count for this tutorial.
+    total = len(chunks)
+    for c in chunks:
+        c["chunk_total"] = total
 
     return chunks
 
@@ -763,101 +803,26 @@ def _extract_mentioned_operators(text: str) -> list[str]:
 # ── FTS5 Indexer ─────────────────────────────────────────────
 
 
-def build_fts_index(chunks: list[dict[str, Any]], db_path: Path, brain_id: str) -> int:
-    """Build SQLite FTS5 index from chunk list."""
-    if db_path.exists():
-        db_path.unlink()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+def build_fts_index(
+    chunks: list[dict[str, Any]],
+    db_path: Path,
+    brain_id: str,
+    *,
+    trust_tier: str = DEFAULT_TRUST_TIER,
+) -> int:
+    """Thin wrapper around the shared v1 indexer.
 
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS chunks (
-                chunk_id TEXT PRIMARY KEY,
-                page_id TEXT,
-                url TEXT,
-                page_title TEXT,
-                doc_type TEXT,
-                section_title TEXT,
-                operator_family TEXT,
-                operator_name TEXT,
-                mentioned_operators TEXT DEFAULT '[]',
-                parameter_names TEXT DEFAULT '[]',
-                python_symbols TEXT DEFAULT '[]',
-                build_number TEXT,
-                build_date TEXT,
-                change_category TEXT,
-                source TEXT DEFAULT 'transcript',
-                token_estimate INTEGER,
-                content TEXT
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-                section_title, operator_name, parameter_names,
-                python_symbols, content,
-                content='',
-                tokenize='porter unicode61'
-            );
-            CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
-        """)
-        conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-            ("brain_name", brain_id),
-        )
-
-        count = 0
-        for chunk in chunks:
-            conn.execute(
-                """INSERT OR REPLACE INTO chunks
-                   (chunk_id, page_id, url, doc_type, section_title,
-                    operator_family, operator_name, mentioned_operators,
-                    parameter_names, python_symbols, build_number,
-                    build_date, change_category, source, token_estimate, content)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    chunk["chunk_id"],
-                    chunk["page_id"],
-                    chunk.get("url", ""),
-                    chunk["doc_type"],
-                    chunk["section_title"],
-                    chunk.get("operator_family"),
-                    chunk.get("operator_name"),
-                    json.dumps(chunk.get("mentioned_operators", [])),
-                    json.dumps(chunk.get("parameter_names", [])),
-                    json.dumps(chunk.get("python_symbols", [])),
-                    chunk.get("build_number"),
-                    chunk.get("build_date"),
-                    chunk.get("change_category"),
-                    chunk.get("source", "transcript"),
-                    chunk.get("token_estimate", 0),
-                    chunk["content"],
-                ),
-            )
-            conn.execute(
-                """INSERT INTO chunks_fts
-                   (rowid, section_title, operator_name, parameter_names,
-                    python_symbols, content)
-                   VALUES (?,?,?,?,?,?)""",
-                (
-                    count + 1,
-                    chunk.get("section_title", ""),
-                    " ".join(
-                        filter(None, [chunk.get("operator_name", ""), *chunk.get("mentioned_operators", [])])
-                    ),
-                    " ".join(chunk.get("parameter_names", [])),
-                    " ".join(chunk.get("python_symbols", [])),
-                    chunk["content"],
-                ),
-            )
-            count += 1
-
-        conn.commit()
-        return count
-    finally:
-        conn.close()
+    See ``scripts/_chunk_schema_v1.build_v1_fts_index`` for the table
+    layout. Kept as a function in this module so existing call sites
+    don't break and so a future schema-v2 migration can be staged here
+    without touching consumers.
+    """
+    return build_v1_fts_index(
+        chunks,
+        db_path,
+        brain_id=brain_id,
+        trust_tier=trust_tier,
+    )
 
 
 # ── Main Pipeline ────────────────────────────────────────────
@@ -929,6 +894,7 @@ def main() -> None:
         logger.error("Config %s missing required key 'brain_id'", args.config)
         sys.exit(1)
     brain_id = config["brain_id"]
+    trust_tier = config.get("trust_tier", "transcript")
 
     if not args.source.is_dir():
         logger.error("Source directory not found: %s", args.source)
@@ -967,7 +933,7 @@ def main() -> None:
         if i % 20 == 0 or i == len(tutorial_dirs):
             logger.info("  Processing %d/%d: %s", i, len(tutorial_dirs), folder.name[:60])
 
-        chunks = process_tutorial(folder, toeexpand_bin, chunk_duration_ms)
+        chunks = process_tutorial(folder, toeexpand_bin, chunk_duration_ms, trust_tier=trust_tier)
         if chunks:
             all_chunks.extend(chunks)
             processed += 1
@@ -1012,24 +978,31 @@ def main() -> None:
                 overview += f"Expressions: {'; '.join(params[:20])}\n"
 
             all_chunks.append(
-                {
-                    "chunk_id": f"{page_id}__overview",
-                    "page_id": page_id,
-                    "doc_type": "tutorial_project",
-                    "section_title": f"{toe_file.stem} -- Premium Project",
-                    "operator_family": None,
-                    "operator_name": None,
-                    "mentioned_operators": [],
-                    "parameter_names": [],
-                    "python_symbols": [],
-                    "build_number": data.get("build_info", {}).get("build"),
-                    "build_date": None,
-                    "change_category": "technique",
-                    "token_estimate": _token_estimate(overview),
-                    "content": overview,
-                    "source": "toeexpand",
-                    "url": "",
-                }
+                enrich_to_v1(
+                    {
+                        "chunk_id": f"{page_id}__overview",
+                        "page_id": page_id,
+                        "title": f"{toe_file.stem} -- Premium Project",
+                        "section_title": f"{toe_file.stem} -- Premium Project",
+                        "doc_type": "tutorial_project",
+                        "operator_family": None,
+                        "operator_name": None,
+                        "mentioned_operators": [],
+                        "parameter_names": [],
+                        "python_symbols": [],
+                        "build_number": data.get("build_info", {}).get("build"),
+                        "build_date": None,
+                        "change_category": "technique",
+                        "chunk_offset": 1,
+                        "token_estimate": _token_estimate(overview),
+                        "content": overview,
+                        "source": "toeexpand",
+                        "url": "",
+                    },
+                    trust_tier=trust_tier,
+                    source="toeexpand",
+                    brain_id=page_id,
+                )
             )
 
             # Add code snippets
@@ -1038,24 +1011,30 @@ def main() -> None:
                     continue
                 slug = re.sub(r"[^a-z0-9]+", "_", snippet["path"].lower()).strip("_")
                 all_chunks.append(
-                    {
-                        "chunk_id": f"{page_id}__{snippet['language']}_{slug}",
-                        "page_id": page_id,
-                        "doc_type": "tutorial_code",
-                        "section_title": f"{toe_file.stem} -- {snippet['language'].upper()}",
-                        "operator_family": None,
-                        "operator_name": None,
-                        "mentioned_operators": [],
-                        "parameter_names": [],
-                        "python_symbols": [],
-                        "build_number": None,
-                        "build_date": None,
-                        "change_category": "technique",
-                        "token_estimate": _token_estimate(snippet["code"]),
-                        "content": f"```{snippet['language']}\n{snippet['code']}\n```",
-                        "source": "toeexpand",
-                        "url": "",
-                    }
+                    enrich_to_v1(
+                        {
+                            "chunk_id": f"{page_id}__{snippet['language']}_{slug}",
+                            "page_id": page_id,
+                            "title": f"{toe_file.stem} -- {snippet['language'].upper()}",
+                            "section_title": f"{toe_file.stem} -- {snippet['language'].upper()}",
+                            "doc_type": "tutorial_code",
+                            "operator_family": None,
+                            "operator_name": None,
+                            "mentioned_operators": [],
+                            "parameter_names": [],
+                            "python_symbols": [],
+                            "build_number": None,
+                            "build_date": None,
+                            "change_category": "technique",
+                            "token_estimate": _token_estimate(snippet["code"]),
+                            "content": f"```{snippet['language']}\n{snippet['code']}\n```",
+                            "source": "toeexpand",
+                            "url": "",
+                        },
+                        trust_tier=trust_tier,
+                        source="toeexpand",
+                        brain_id=page_id,
+                    )
                 )
 
         logger.info("  -> %d premium TOE files processed", len(premium_toes))
@@ -1067,10 +1046,10 @@ def main() -> None:
             f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
     logger.info("  -> %d total chunks saved to %s", len(all_chunks), chunks_path)
 
-    # Stage 3: Build FTS5 index
-    logger.info("Stage 3: Building FTS5 index")
+    # Stage 3: Build FTS5 index (Chunk Schema v1, see docs/CHUNK_SCHEMA.md).
+    logger.info("Stage 3: Building FTS5 index (Chunk Schema v1, trust_tier=%s)", trust_tier)
     db_path = output / f"{brain_id}brain.db"
-    indexed = build_fts_index(all_chunks, db_path, brain_id)
+    indexed = build_fts_index(all_chunks, db_path, brain_id, trust_tier=trust_tier)
     logger.info("  -> %d chunks indexed", indexed)
 
     # Stage 4: Build manifest

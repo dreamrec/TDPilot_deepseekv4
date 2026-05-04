@@ -16,12 +16,19 @@ import hashlib
 import json
 import logging
 import re
-import sqlite3
 import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+
+# Shared Chunk Schema v1 helpers — see docs/CHUNK_SCHEMA.md.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _chunk_schema_v1 import (  # noqa: E402
+    DEFAULT_TRUST_TIER,
+    build_v1_fts_index,
+    enrich_to_v1,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -192,7 +199,12 @@ def _token_estimate(text: str) -> int:
 
 
 def chunk_page(page: dict[str, Any], html_path: Path, config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Split a page into chunks by headings."""
+    """Split a page into Chunk Schema v1 records.
+
+    The page-level URL and trust tier flow into every emitted chunk so
+    runtime search hits know provenance + tier without having to look
+    them up separately.
+    """
     if BeautifulSoup is None:
         return []
 
@@ -215,6 +227,8 @@ def chunk_page(page: dict[str, Any], html_path: Path, config: dict[str, Any]) ->
     page_id = page["page_id"]
     doc_type = page["doc_type"]
     op_name = page.get("operator_name")
+    page_url = page.get("url", "")
+    trust_tier = config.get("trust_tier", DEFAULT_TRUST_TIER)
     seq = 0
 
     headings = main.find_all(["h2", "h3", "h4"])
@@ -229,7 +243,18 @@ def chunk_page(page: dict[str, Any], html_path: Path, config: dict[str, Any]) ->
         intro = "\n".join(p for p in intro_parts if p)
         if intro and len(intro.split()) >= 10:
             seq += 1
-            chunks.append(_make_chunk(page_id, seq, page["title"], doc_type, op_name, intro))
+            chunks.append(
+                _make_chunk(
+                    page_id,
+                    seq,
+                    page["title"],
+                    doc_type,
+                    op_name,
+                    intro,
+                    url=page_url,
+                    trust_tier=trust_tier,
+                )
+            )
 
         for h_tag in headings:
             h_text = h_tag.get_text(strip=True)
@@ -246,13 +271,40 @@ def chunk_page(page: dict[str, Any], html_path: Path, config: dict[str, Any]) ->
             if not text or len(text.split()) < 5:
                 continue
             seq += 1
-            chunks.append(_make_chunk(page_id, seq, h_text, doc_type, op_name, text))
+            chunks.append(
+                _make_chunk(
+                    page_id,
+                    seq,
+                    h_text,
+                    doc_type,
+                    op_name,
+                    text,
+                    url=page_url,
+                    trust_tier=trust_tier,
+                    headings=[page["title"], h_text],
+                )
+            )
     else:
         # No headings — whole page as one chunk
         text = page.get("text", "")
         if text and len(text.split()) >= 10:
             seq += 1
-            chunks.append(_make_chunk(page_id, seq, page["title"], doc_type, op_name, text))
+            chunks.append(
+                _make_chunk(
+                    page_id,
+                    seq,
+                    page["title"],
+                    doc_type,
+                    op_name,
+                    text,
+                    url=page_url,
+                    trust_tier=trust_tier,
+                )
+            )
+
+    # Stamp chunk_total now that we know the count.
+    for c in chunks:
+        c["chunk_total"] = len(chunks)
 
     return chunks
 
@@ -264,13 +316,34 @@ def _make_chunk(
     doc_type: str,
     operator_name: str | None,
     content: str,
+    *,
+    url: str = "",
+    page_url: str | None = None,
+    trust_tier: str = DEFAULT_TRUST_TIER,
+    source: str = "html",
+    chunk_total: int | None = None,
+    headings: list[str] | None = None,
 ) -> dict[str, Any]:
+    """Build a Chunk Schema v1 record. See docs/CHUNK_SCHEMA.md.
+
+    Required v1 fields are populated here so the chunks.jsonl is a
+    valid v1 document independent of the indexer (downstream tools
+    can read the JSONL directly without going through SQLite).
+    """
     slug = _slugify(section_title)
-    return {
+    chunk = {
         "chunk_id": f"{page_id}__{slug}__{seq:04d}",
         "page_id": page_id,
-        "doc_type": doc_type,
+        "title": section_title,
         "section_title": section_title,
+        "url": url or page_url or "",
+        "source": source,
+        "doc_type": doc_type,
+        "trust_tier": trust_tier,
+        "chunk_offset": seq,
+        "chunk_total": chunk_total,
+        "headings": list(headings or []),
+        "code_blocks": [],
         "operator_family": None,
         "operator_name": operator_name,
         "mentioned_operators": [],
@@ -282,104 +355,28 @@ def _make_chunk(
         "token_estimate": _token_estimate(content),
         "content": content,
     }
+    return enrich_to_v1(chunk, trust_tier=trust_tier, source=source, brain_id=page_id)
 
 
 # ── Indexer ───────────────────────────────────────────────────
 
 
-def build_fts_index(chunks_path: Path, db_path: Path, brain_id: str) -> int:
-    """Build SQLite FTS5 index from chunks.jsonl."""
-    if db_path.exists():
-        db_path.unlink()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+def build_fts_index(
+    chunks_path: Path, db_path: Path, brain_id: str, *, trust_tier: str = DEFAULT_TRUST_TIER
+) -> int:
+    """Thin wrapper around the shared v1 indexer.
 
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS chunks (
-                chunk_id TEXT PRIMARY KEY,
-                page_id TEXT,
-                url TEXT,
-                page_title TEXT,
-                doc_type TEXT,
-                section_title TEXT,
-                operator_family TEXT,
-                operator_name TEXT,
-                mentioned_operators TEXT DEFAULT '[]',
-                parameter_names TEXT DEFAULT '[]',
-                python_symbols TEXT DEFAULT '[]',
-                build_number TEXT,
-                build_date TEXT,
-                change_category TEXT,
-                source TEXT DEFAULT 'html',
-                token_estimate INTEGER,
-                content TEXT
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-                section_title, operator_name, parameter_names,
-                python_symbols, content,
-                content='',
-                tokenize='porter unicode61'
-            );
-            CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
-        """)
-        conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-            ("brain_name", brain_id),
-        )
-
-        count = 0
-        with open(chunks_path, encoding="utf-8") as f:
-            for line in f:
-                chunk = json.loads(line)
-                conn.execute(
-                    """INSERT OR REPLACE INTO chunks
-                       (chunk_id, page_id, doc_type, section_title,
-                        operator_family, operator_name, mentioned_operators,
-                        parameter_names, python_symbols, build_number,
-                        build_date, change_category, token_estimate, content)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        chunk["chunk_id"],
-                        chunk["page_id"],
-                        chunk["doc_type"],
-                        chunk["section_title"],
-                        chunk.get("operator_family"),
-                        chunk.get("operator_name"),
-                        json.dumps(chunk.get("mentioned_operators", [])),
-                        json.dumps(chunk.get("parameter_names", [])),
-                        json.dumps(chunk.get("python_symbols", [])),
-                        chunk.get("build_number"),
-                        chunk.get("build_date"),
-                        chunk.get("change_category"),
-                        chunk.get("token_estimate", 0),
-                        chunk["content"],
-                    ),
-                )
-                conn.execute(
-                    """INSERT INTO chunks_fts
-                       (rowid, section_title, operator_name, parameter_names,
-                        python_symbols, content)
-                       VALUES (?,?,?,?,?,?)""",
-                    (
-                        count + 1,
-                        chunk.get("section_title", ""),
-                        chunk.get("operator_name", "") or "",
-                        " ".join(chunk.get("parameter_names", [])),
-                        " ".join(chunk.get("python_symbols", [])),
-                        chunk["content"],
-                    ),
-                )
-                count += 1
-
-        conn.commit()
-        return count
-    finally:
-        conn.close()
+    See ``scripts/_chunk_schema_v1.build_v1_fts_index`` for the table
+    layout. Kept as a function in this module so existing call sites
+    don't break and so a future schema-v2 migration can be staged here
+    without touching consumers.
+    """
+    return build_v1_fts_index(
+        chunks_path,
+        db_path,
+        brain_id=brain_id,
+        trust_tier=trust_tier,
+    )
 
 
 # ── Main pipeline ─────────────────────────────────────────────
@@ -417,6 +414,7 @@ def main() -> None:
 
     config = load_config(args.config)
     brain_id = config["brain_id"]
+    trust_tier = config.get("trust_tier", DEFAULT_TRUST_TIER)
 
     if not args.source.is_dir():
         logger.error("Source directory not found: %s", args.source)
@@ -466,7 +464,18 @@ def main() -> None:
                     continue
                 heading_match = re.match(r"^##\s+(.+)", section)
                 title = heading_match.group(1).strip() if heading_match else md_file.stem
-                all_chunks.append(_make_chunk(ref_page_id, i, title, "reference", None, section))
+                all_chunks.append(
+                    _make_chunk(
+                        ref_page_id,
+                        i,
+                        title,
+                        "reference",
+                        None,
+                        section,
+                        trust_tier=trust_tier,
+                        source="markdown_ref",
+                    )
+                )
 
     chunks_path = output / "chunks.jsonl"
     with open(chunks_path, "w", encoding="utf-8") as f:
@@ -474,10 +483,10 @@ def main() -> None:
             f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
     logger.info("  → %d total chunks", len(all_chunks))
 
-    # Stage 3: Index
-    logger.info("Stage 3: Building FTS5 index")
+    # Stage 3: Index — Chunk Schema v1 (see docs/CHUNK_SCHEMA.md).
+    logger.info("Stage 3: Building FTS5 index (Chunk Schema v1, trust_tier=%s)", trust_tier)
     db_path = output / f"{brain_id}brain.db"
-    indexed = build_fts_index(chunks_path, db_path, brain_id)
+    indexed = build_fts_index(chunks_path, db_path, brain_id, trust_tier=trust_tier)
     logger.info("  → %d chunks indexed", indexed)
 
     # Stage 4: Build manifest
