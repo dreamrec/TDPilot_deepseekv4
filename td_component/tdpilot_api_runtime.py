@@ -428,6 +428,17 @@ class AgentRuntime:
         self._worker: threading.Thread | None = None
         self._lock = threading.Lock()
 
+        # Phase 0.1 — dynamic context snapshot. ``build_dynamic_context``
+        # touches TD globals (parent().op('kb') for bundled knowledge
+        # entries) so it MUST run on the cook thread. We refresh this
+        # field on every ``start_turn`` (which IS the cook thread — the
+        # COMP extension calls it from a button pulse / param exec) and
+        # the worker-thread Agent reads the cached snapshot via
+        # ``_dynamic_context_snapshot``. No locking needed: each turn's
+        # write happens-before its worker-thread reads.
+        self._dynamic_context_snapshot: list[dict] = []
+        self._refresh_dynamic_context()
+
         self._agent: Agent | None = None
         self._build_agent()
 
@@ -450,8 +461,11 @@ class AgentRuntime:
             # recipes indexes) is injected as synthetic messages at API
             # call time so the system prompt itself stays byte-stable
             # (DeepSeek auto-cache hits at ~50× discount on cached
-            # input tokens).
-            dynamic_context_provider=build_dynamic_context,
+            # input tokens). The snapshot is built on the cook thread
+            # in ``_refresh_dynamic_context`` (called from start_turn);
+            # the Agent worker thread just reads the cached list, never
+            # touching TD globals like parent().op('kb').
+            dynamic_context_provider=lambda: list(self._dynamic_context_snapshot),
             model=cfg["model"],
             base_url=cfg["base_url"],
             max_tokens=cfg["max_tokens"],
@@ -491,6 +505,29 @@ class AgentRuntime:
                 self._agent.messages = preserved
 
     # ------------------------------------------------------------------
+    # Phase 0.1 — dynamic context refresh (cook-thread only)
+    # ------------------------------------------------------------------
+
+    def _refresh_dynamic_context(self) -> None:
+        """Snapshot the per-turn volatile context on the cook thread.
+
+        :func:`build_dynamic_context` enumerates the bundled knowledge
+        index, which calls ``parent().op('kb').children`` — TD globals
+        that are NOT thread-safe. If the worker thread invokes the
+        agent's ``dynamic_context_provider`` directly, TD pops a
+        THREAD CONFLICT dialog (and the call returns junk under the
+        graceful try/except). Pre-computing on the cook thread (in
+        ``__init__`` for the first turn, in ``start_turn`` for every
+        subsequent turn) lifts the TD-touching work onto the safe
+        thread; the worker reads the resulting list.
+        """
+        try:
+            self._dynamic_context_snapshot = build_dynamic_context()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/runtime] dynamic context refresh failed: {exc}")
+            self._dynamic_context_snapshot = []
+
+    # ------------------------------------------------------------------
     # Public API used by the COMP extension
     # ------------------------------------------------------------------
 
@@ -501,6 +538,12 @@ class AgentRuntime:
             return False
         if self._worker is not None and self._worker.is_alive():
             return False
+        # Refresh the dynamic-context snapshot on the cook thread BEFORE
+        # the worker thread starts. The worker reads the snapshot inside
+        # _call_api; if we let the worker build it instead, every API
+        # call would re-trigger TD's THREAD CONFLICT detector when the
+        # bundled-knowledge enumerator hits parent().op('kb').
+        self._refresh_dynamic_context()
         self._agent.add_user_message(user_text)
         self._push(EV_STATE, "thinking")
         self._worker = threading.Thread(target=self._run_safe, name="tdpilot_api_agent", daemon=True)

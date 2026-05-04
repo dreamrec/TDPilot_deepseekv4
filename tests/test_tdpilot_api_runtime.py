@@ -285,3 +285,92 @@ def test_build_dynamic_context_returns_paired_when_any_index_present(monkeypatch
     assert msgs[0]["role"] == "user"
     assert msgs[1]["role"] == "assistant"
     assert "kb_hint_present" in msgs[0]["content"][0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 0.1 — cook-thread refresh.
+#
+# THREAD CONFLICT regression: build_dynamic_context() touches TD globals
+# (parent().op('kb') for bundled knowledge). The Agent's worker thread
+# must NEVER call it directly. The runtime pre-computes on the cook
+# thread via _refresh_dynamic_context and the Agent reads the cached
+# snapshot. These tests lock that contract in.
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_refreshes_dynamic_context_on_start_turn(monkeypatch, tmp_path):
+    """start_turn must call _refresh_dynamic_context BEFORE the worker
+    thread launches — the cook thread is the only safe place to invoke
+    the TD-touching bundled-knowledge enumerator.
+    """
+    import tdpilot_api_config as cfg_mod  # type: ignore[import-not-found]
+    from tdpilot_api_runtime import AgentRuntime
+
+    # Real fetch_api_key would read ~/.tdpilot-api/config.json. Stub it.
+    monkeypatch.setattr(cfg_mod, "fetch_api_key", lambda: "sk-fake")
+
+    refresh_calls: list[str] = []
+    original = AgentRuntime._refresh_dynamic_context
+
+    def tracking_refresh(self):
+        refresh_calls.append(threading.current_thread().name)
+        original(self)
+
+    monkeypatch.setattr(AgentRuntime, "_refresh_dynamic_context", tracking_refresh)
+
+    rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+    # Construction calls _refresh_dynamic_context once for the warmup.
+    assert len(refresh_calls) == 1, f"warmup refresh missing: {refresh_calls}"
+
+    # We can't actually run the worker without a real API endpoint, but
+    # we can assert the refresh fires. Stub the agent's worker spawn so
+    # start_turn returns True without launching a real thread.
+    class _FakeAgent:
+        messages: list = []
+
+        def add_user_message(self, text):
+            self.messages.append({"role": "user", "content": text})
+
+    rt._agent = _FakeAgent()  # type: ignore[assignment]
+
+    # Override the thread spawn — we just want to confirm refresh ran.
+    monkeypatch.setattr(
+        threading,
+        "Thread",
+        lambda *a, **k: type("T", (), {"start": lambda self: None, "is_alive": lambda self: False})(),
+    )
+
+    rt.start_turn("hello")
+    # Now we expect 2 calls: 1 warmup + 1 from start_turn.
+    assert len(refresh_calls) == 2, f"start_turn didn't refresh: {refresh_calls}"
+
+
+def test_runtime_dynamic_context_provider_reads_snapshot(monkeypatch):
+    """The Agent's dynamic_context_provider must read self._dynamic_context_snapshot,
+    NOT call build_dynamic_context() itself. Otherwise the worker thread
+    races into TD globals and pops THREAD CONFLICT.
+    """
+    import tdpilot_api_config as cfg_mod  # type: ignore[import-not-found]
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(cfg_mod, "fetch_api_key", lambda: "sk-fake")
+
+    rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+
+    # Simulate the cook-thread refresh having captured a known snapshot.
+    sentinel = [
+        {"role": "user", "content": [{"type": "text", "text": "[[TDPILOT_CONTEXT]] sentinel"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "ack"}]},
+    ]
+    rt._dynamic_context_snapshot = sentinel
+
+    # Pull the provider that was wired into the Agent (a bound lambda
+    # over rt._dynamic_context_snapshot).
+    provider = rt._agent.dynamic_context_provider  # type: ignore[union-attr]
+    assert provider is not None
+    out = provider()
+    assert out == sentinel
+    # AND the snapshot must be a defensive copy, not the live list — so
+    # mutating the agent-side return value cannot leak into the runtime.
+    out.append({"role": "user", "content": []})
+    assert len(rt._dynamic_context_snapshot) == 2
