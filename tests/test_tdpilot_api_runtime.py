@@ -169,3 +169,119 @@ def test_cancel_pending_unblocks_worker():
     assert "result" in holder
     assert "error" in holder["result"]
     assert "cancelled" in holder["result"]["error"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 0.1 — cache-stable dynamic-context slot. Runtime side.
+# ---------------------------------------------------------------------------
+
+
+def test_build_system_prompt_excludes_volatile_indexes():
+    """build_system_prompt() must NOT contain the per-turn-volatile
+    memory / knowledge / recipes index headers — those moved to
+    build_dynamic_context() in Phase 0.1.
+    """
+    from tdpilot_api_runtime import build_system_prompt
+
+    prompt = build_system_prompt()
+    # Headers that used to live in the system prompt — gone in 0.1.
+    assert "## Memory Index" not in prompt
+    assert "## Knowledge Index" not in prompt
+    assert "## Recipes" not in prompt
+    # The base instructions ARE still in there.
+    assert "TDPilot API" in prompt
+    assert "Operating protocol" in prompt
+
+
+def test_build_system_prompt_byte_stable_when_memory_changes(tmp_path, monkeypatch):
+    """Saving a memory / knowledge / recipe entry between calls must NOT
+    change the system prompt — it now lives in dynamic context.
+    """
+    import tdpilot_api_memory as mem  # type: ignore[import-not-found]
+    from tdpilot_api_runtime import build_system_prompt
+
+    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
+    # Establish baseline.
+    before = build_system_prompt()
+
+    # Mutate memory.
+    mem.handle_memory_save(
+        {
+            "name": "test_dynamic_ctx",
+            "description": "Phase 0.1 regression",
+            "type": "feedback",
+            "content": "irrelevant body",
+        }
+    )
+
+    after = build_system_prompt()
+    assert before == after, "system prompt must be insensitive to memory writes"
+
+
+def test_build_dynamic_context_emits_paired_messages(tmp_path, monkeypatch):
+    """When indexes are non-empty, output is a paired user/assistant
+    message list with the [[TDPILOT_CONTEXT]] delimiter.
+    """
+    import tdpilot_api_memory as mem  # type: ignore[import-not-found]
+    from tdpilot_api_runtime import DYNAMIC_CONTEXT_DELIMITER, build_dynamic_context
+
+    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
+    mem.handle_memory_save(
+        {
+            "name": "phase01_dyn",
+            "description": "marker for dynamic context test",
+            "type": "feedback",
+            "content": "body",
+        }
+    )
+
+    msgs = build_dynamic_context()
+    assert isinstance(msgs, list)
+    assert len(msgs) == 2
+    assert msgs[0]["role"] == "user"
+    assert msgs[1]["role"] == "assistant"
+    user_text = msgs[0]["content"][0]["text"]
+    assert user_text.startswith(DYNAMIC_CONTEXT_DELIMITER)
+    # The memory we just saved should appear in the user-side context.
+    assert "phase01_dyn" in user_text
+
+
+def test_build_dynamic_context_returns_empty_when_no_indexes(monkeypatch):
+    """No memory / knowledge / recipes content → empty list (skip
+    prepending). Prevents wasting tokens on empty headers.
+
+    Stubs the three index-hint functions to return ``""`` directly so
+    we don't depend on the on-disk layout of dirs / bundled corpora.
+    """
+    import tdpilot_api_knowledge as kb  # type: ignore[import-not-found]
+    import tdpilot_api_memory as mem  # type: ignore[import-not-found]
+    import tdpilot_api_recipes as rec  # type: ignore[import-not-found]
+    from tdpilot_api_runtime import build_dynamic_context
+
+    monkeypatch.setattr(mem, "get_memory_index_content", lambda: "")
+    monkeypatch.setattr(kb, "get_knowledge_index_hint", lambda: "")
+    monkeypatch.setattr(rec, "get_recipes_index_hint", lambda: "")
+
+    msgs = build_dynamic_context()
+    assert msgs == []
+
+
+def test_build_dynamic_context_returns_paired_when_any_index_present(monkeypatch):
+    """Even if just ONE index has content, output is a paired
+    user/assistant list — required to preserve the alternation
+    invariant when the conversation continues with a real user msg.
+    """
+    import tdpilot_api_knowledge as kb  # type: ignore[import-not-found]
+    import tdpilot_api_memory as mem  # type: ignore[import-not-found]
+    import tdpilot_api_recipes as rec  # type: ignore[import-not-found]
+    from tdpilot_api_runtime import build_dynamic_context
+
+    monkeypatch.setattr(mem, "get_memory_index_content", lambda: "")
+    monkeypatch.setattr(kb, "get_knowledge_index_hint", lambda: "kb_hint_present")
+    monkeypatch.setattr(rec, "get_recipes_index_hint", lambda: "")
+
+    msgs = build_dynamic_context()
+    assert len(msgs) == 2
+    assert msgs[0]["role"] == "user"
+    assert msgs[1]["role"] == "assistant"
+    assert "kb_hint_present" in msgs[0]["content"][0]["text"]

@@ -187,6 +187,17 @@ class Agent:
         # on_model_change(reason, picked_model) — surfaced to the COMP
         # Status line so the user can see which tier each turn used.
         on_model_change: Callable[[str, str], None] = _noop,
+        # Phase 0.1 — cache-stable dynamic-context slot. Callable invoked
+        # ONCE per API call (not once per turn — the same turn can fire
+        # multiple API calls during tool-use chains). It returns a list
+        # of synthetic messages (typically [user, assistant]) prepended
+        # to ``self.messages`` for that one call. The system prompt
+        # stays byte-stable; this is where volatile retrieval / index
+        # context lives WITHOUT busting DeepSeek's auto-cache prefix.
+        # The provider's output is NOT persisted to ``self.messages`` so
+        # it's free to vary turn-to-turn (memory_save propagates here,
+        # not in the system prompt).
+        dynamic_context_provider: Callable[[], list[dict]] | None = None,
         # Callbacks — all optional. Receive primitive args.
         on_text: Callable[[str], None] = _noop,
         on_tool_call: Callable[[str, dict], None] = _noop,
@@ -229,6 +240,8 @@ class Agent:
         self.temperature = temperature
         self.turn_budget = turn_budget
         self.request_timeout = request_timeout
+
+        self.dynamic_context_provider = dynamic_context_provider
 
         self.on_text = on_text
         self.on_tool_call = on_tool_call
@@ -408,6 +421,42 @@ class Agent:
         raise TurnBudgetExceeded(f"Tool-use loop exceeded turn_budget={self.turn_budget}")
 
     # ------------------------------------------------------------------
+    # Dynamic context (Phase 0.1)
+    # ------------------------------------------------------------------
+
+    def _materialise_dynamic_context(self) -> list[dict]:
+        """Invoke ``dynamic_context_provider`` and validate its output.
+
+        Returns a list of message dicts to prepend to the API request.
+        Failures (provider raises, returns junk) degrade to an empty
+        list and log; the agent never crashes on a bad provider.
+        """
+        provider = self.dynamic_context_provider
+        if provider is None:
+            return []
+        try:
+            raw = provider() or []
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/agent] dynamic_context_provider raised: {exc}")
+            return []
+        if not isinstance(raw, list):
+            print(
+                "[tdpilot_API/agent] dynamic_context_provider returned non-list "
+                f"({type(raw).__name__}); ignoring"
+            )
+            return []
+        out: list[dict] = []
+        for msg in raw:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") not in ("user", "assistant"):
+                continue
+            if "content" not in msg:
+                continue
+            out.append(msg)
+        return out
+
+    # ------------------------------------------------------------------
     # HTTP
     # ------------------------------------------------------------------
 
@@ -416,10 +465,17 @@ class Agent:
         # (instead of self.model) is what makes Sprint 4.3 routing
         # actually take effect — flash for simple lookups, pro for
         # complex builds.
+        #
+        # Phase 0.1 — prepend dynamic context (per-turn retrievals /
+        # session indexes) WITHOUT mutating self.messages. The system
+        # prompt stays byte-stable so DeepSeek's auto-cache hits on it.
+        # The dynamic context busts cache only on the per-turn portion
+        # (small compared to system prompt + tools schema).
+        dynamic = self._materialise_dynamic_context()
         body: dict[str, Any] = {
             "model": self._active_model or self.model,
             "max_tokens": self.max_tokens,
-            "messages": self.messages,
+            "messages": [*dynamic, *self.messages],
             "temperature": self.temperature,
         }
         if self.system_prompt:
