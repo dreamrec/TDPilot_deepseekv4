@@ -374,3 +374,94 @@ def test_runtime_dynamic_context_provider_reads_snapshot(monkeypatch):
     # mutating the agent-side return value cannot leak into the runtime.
     out.append({"role": "user", "content": []})
     assert len(rt._dynamic_context_snapshot) == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.2 — memory saved mid-session must surface in the next turn.
+#
+# The original concern was: ``Agent._system_prompt`` is set ONCE at
+# AgentRuntime.__init__, so memories saved during the session never
+# propagated to the model's context. Phase 0.1 implicitly fixed this by
+# moving memory/knowledge/recipes indexes OUT of the system prompt and
+# into the per-turn dynamic context. Phase 1.2 just locks that
+# behaviour in with a regression test that simulates the exact flow:
+# turn N → memory_save → turn N+1 sees the new memory.
+# ---------------------------------------------------------------------------
+
+
+def test_memory_saved_mid_session_propagates_to_next_turn(monkeypatch, tmp_path):
+    """Phase 1.2 contract: a memory saved during turn N appears in the
+    dynamic-context messages sent for turn N+1.
+    """
+    import tdpilot_api_config as cfg_mod  # type: ignore[import-not-found]
+    import tdpilot_api_memory as mem  # type: ignore[import-not-found]
+    from tdpilot_api_runtime import DYNAMIC_CONTEXT_DELIMITER, AgentRuntime
+
+    monkeypatch.setattr(cfg_mod, "fetch_api_key", lambda: "sk-fake")
+    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path / "memory")
+
+    rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+
+    # ---- Turn N: snapshot the dynamic context (cook-thread refresh) ----
+    rt._refresh_dynamic_context()
+    snapshot_n = list(rt._dynamic_context_snapshot)
+    text_n = ""
+    if snapshot_n:
+        text_n = snapshot_n[0]["content"][0]["text"]
+
+    # The new memory's name must NOT be in turn N's snapshot — it
+    # hasn't been saved yet. (The dynamic context may be empty here
+    # because the test memory dir starts blank; that's fine.)
+    assert "phase12_marker" not in text_n
+
+    # ---- Mid-turn: save a memory (simulates an in-turn memory_save call) ----
+    mem.handle_memory_save(
+        {
+            "name": "phase12_marker",
+            "description": "Phase 1.2 propagation test",
+            "type": "feedback",
+            "content": "irrelevant body",
+        }
+    )
+
+    # ---- Turn N+1: refresh the snapshot again (start_turn does this) ----
+    rt._refresh_dynamic_context()
+    snapshot_n_plus_1 = list(rt._dynamic_context_snapshot)
+    assert snapshot_n_plus_1, "dynamic context for turn N+1 was empty"
+    text_n_plus_1 = snapshot_n_plus_1[0]["content"][0]["text"]
+    assert text_n_plus_1.startswith(DYNAMIC_CONTEXT_DELIMITER)
+    assert "phase12_marker" in text_n_plus_1, (
+        "memory saved at turn N didn't appear in turn N+1's dynamic context"
+    )
+
+
+def test_system_prompt_is_unchanged_by_mid_session_memory_save(monkeypatch, tmp_path):
+    """Phase 1.2 + 0.1 jointly: saving a memory mid-session MUST NOT
+    mutate the Agent's system_prompt. Otherwise the DeepSeek auto-cache
+    busts on the next turn.
+    """
+    import tdpilot_api_config as cfg_mod  # type: ignore[import-not-found]
+    import tdpilot_api_memory as mem  # type: ignore[import-not-found]
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(cfg_mod, "fetch_api_key", lambda: "sk-fake")
+    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path / "memory")
+
+    rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+    before = rt._agent.system_prompt  # type: ignore[union-attr]
+
+    mem.handle_memory_save(
+        {
+            "name": "phase12_cache_check",
+            "description": "system prompt must stay byte-stable",
+            "type": "feedback",
+            "content": "x",
+        }
+    )
+
+    # No call to ``_build_agent`` between save and check — saving a
+    # memory does not, and must not, rebuild the Agent. The system
+    # prompt the Agent holds in self.system_prompt is the byte-stable
+    # one captured at construction.
+    after = rt._agent.system_prompt  # type: ignore[union-attr]
+    assert before == after
