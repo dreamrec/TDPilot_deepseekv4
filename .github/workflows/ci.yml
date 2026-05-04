@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+
+      - name: Install dependencies (with dev extras)
+        run: uv sync --extra dev --frozen
+
+      - name: Ruff check
+        run: uv run ruff check src tests scripts td_component
+
+      - name: Ruff format check
+        # v1.4.4: flipped from continue-on-error to enforcing after the
+        # mechanical `ruff format` pass landed (commit e9ca15e). If this
+        # step fails, run `uv run ruff format .` locally, commit, and
+        # add the commit hash to .git-blame-ignore-revs if it's purely
+        # mechanical.
+        run: uv run ruff format --check src tests scripts td_component
+
+      - name: Version drift check
+        run: uv run python scripts/check_versions.py
+
+      - name: .tox freshness check
+        run: uv run python scripts/check_tox_freshness.py
+
+      # Static script invocation — no GitHub event data consumed, so no
+      # injection risk from user-controlled inputs. The script greps tracked
+      # files for /Users/<name>/ and C:\Users\<name>\ patterns.
+      - name: Personal path leak check
+        run: bash scripts/check_no_personal_paths.sh
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+
+      - name: Install dependencies
+        run: uv sync --extra dev --frozen
+
+      - name: Run tests with coverage
+        run: uv run pytest tests/ -q --cov=src/td_mcp --cov-report=term --cov-report=xml
+
+      - name: Upload coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+      - name: Run registry smoke check
+        run: uv run python scripts/smoke_mcp_registry.py
+
+      - name: Run doctor (offline mode)
+        run: uv run tdpilot-dpsk4 doctor --json --skip-td-check
+
+      - name: Validate release-gate checker
+        run: |
+          cat > /tmp/bench.json <<'JSON'
+          {
+            "benchmarks": {
+              "td_get_nodes": {"latency_ms": {"p95": 250.0}, "error_rate_pct": 0.0},
+              "td_get_params": {"latency_ms": {"p95": 200.0}, "error_rate_pct": 0.0},
+              "td_set_params": {"latency_ms": {"p95": 150.0}, "error_rate_pct": 0.0},
+              "td_capture_and_analyze_capture_only": {"latency_ms": {"p95": 600.0}, "error_rate_pct": 0.0}
+            }
+          }
+          JSON
+          uv run python scripts/check_release_gates.py --bench-report /tmp/bench.json --require-complete
+
+      - name: Validate bundle integrity
+        run: |
+          uv run python -c "
+          import json, sys
+          from td_mcp import __version__, TOX_FILENAME
+          manifest = json.load(open('mcp/manifest.json'))
+          errors = []
+          if manifest['version'] != __version__:
+              errors.append(f'manifest version {manifest[\"version\"]} != {__version__}')
+          expected_tox = f'td_component/{TOX_FILENAME}'
+          if manifest['artifacts']['td_component_tox'] != expected_tox:
+              errors.append(f'manifest tox {manifest[\"artifacts\"][\"td_component_tox\"]} != {expected_tox}')
+          if errors:
+              print('\n'.join(errors)); sys.exit(1)
+          print('Bundle integrity OK')
+          "
+
+      - name: Ensure no legacy repo/path drift
+        run: |
+          if rg -n "TDPilot-v1\.0|TDPilot-claude-refactor|mcp_server_codex" README.md pyproject.toml src npm install.sh install.ps1 mcp scripts td_component setup_mcp_in_td.py plugin_README.md; then
+            echo "Legacy references found."
+            exit 1
+          fi
+
+      - name: Package build smoke (wheel + npm pack + plugin zip)
+        run: bash scripts/check_package_builds.sh --cleanup
+
+  install-parse:
+    name: Install script parse-check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Bash install script syntax-check (macOS)
+        if: runner.os == 'macOS'
+        run: bash -n install.sh
+      - name: PowerShell install script parse-check (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $script = Get-Content install.ps1 -Raw
+          $null = [ScriptBlock]::Create($script)
+          Write-Host "install.ps1 parses cleanly"

@@ -1,0 +1,143 @@
+name: Publish to npm
+
+# Auto-publishes the npm/ directory's JS wrapper to the npm registry
+# whenever a release tag (vX.Y.Z) is pushed. Also supports manual
+# dispatch so you can backfill releases that pre-date this workflow.
+#
+# Why this exists: prior to this workflow, publishing was manual
+# (cd npm && npm publish) — and was missed for v1.5.0 and v1.5.1.
+# Result: `npx tdpilot` users got the v1.4.2 wrapper which lacked the
+# auto-pin-to-latest-tag fix landed in 0dc633e. With this workflow,
+# every release auto-publishes and stays in sync.
+#
+# Setup required (one-time):
+#   1. Create an npm access token at npmjs.com -> Access Tokens ->
+#      "Granular" or "Automation" type with publish scope for the
+#      `tdpilot` package.
+#   2. Add it to this repo's GitHub Actions secrets as `NPM_TOKEN`
+#      (Settings -> Secrets and variables -> Actions -> New secret).
+#   3. After this workflow lands, push a tag (e.g. v1.5.2) and the
+#      workflow fires. Or backfill v1.5.1 via Actions UI ->
+#      "Publish to npm" -> "Run workflow" -> tag: v1.5.1.
+#
+# All run: blocks below capture untrusted/dispatch inputs into env
+# vars first and reference them as shell variables, per
+# https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v1.5.1). Leave blank to use the current ref."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: npm publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve ref
+        id: resolve
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+          GH_REF: ${{ github.ref }}
+        run: |
+          if [ -n "$DISPATCH_TAG" ]; then
+            ref="$DISPATCH_TAG"
+          else
+            ref="${GH_REF#refs/tags/}"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Publishing ref: $ref"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.resolve.outputs.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Upgrade npm to a version that supports Trusted Publisher OIDC
+        # Node 20 ships with npm 10.x. npm 10's `--provenance` flag uses
+        # OIDC tokens for sigstore attestation signing, but the registry
+        # AUTHENTICATION path still expects a long-lived token (NPM_TOKEN
+        # or equivalent). Trusted Publisher OIDC auth — where the
+        # registry exchanges a workflow OIDC token for a short-lived
+        # publish token — landed in npm 11.5. Without this upgrade the
+        # publish request goes out without a valid auth token and the
+        # registry returns the cryptic "E404 'pkg@ver' is not in this
+        # registry" error (npm's way of saying "I refuse to tell you
+        # about this package via this auth context").
+        run: npm install -g npm@latest
+
+      - name: Verify package.json version matches the tag
+        env:
+          REF: ${{ steps.resolve.outputs.ref }}
+        run: |
+          tag_version="${REF#v}"
+          pkg_version=$(node -p "require('./npm/package.json').version")
+          echo "Tag version:        $tag_version"
+          echo "package.json version: $pkg_version"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::npm/package.json version ($pkg_version) does not match tag ($tag_version)."
+            exit 1
+          fi
+
+      - name: Skip if version already on npm
+        # Re-tagging the same vX.Y.Z (post-release rebuild, doc fixup,
+        # whatever) re-fires this workflow. npm rejects re-publishing
+        # the same version with "You cannot publish over the previously
+        # published versions: X.Y.Z" — the publish would fail and the
+        # run would show red even though the registry already has the
+        # right bytes (the npm tarball only contains JS wrappers, not
+        # the .tox or skill content, so re-tagging rarely changes what
+        # would land on npm).
+        # Detect the case via `npm view` and short-circuit cleanly. A
+        # genuine bump to a new version lands here as "not-on-registry"
+        # and proceeds to the Publish step.
+        id: registry_check
+        env:
+          REF: ${{ steps.resolve.outputs.ref }}
+        run: |
+          tag_version="${REF#v}"
+          if npm view "tdpilot@${tag_version}" version >/tmp/npm-view-out.txt 2>/tmp/npm-view-err.log; then
+            on_registry="yes"
+          else
+            on_registry="no"
+          fi
+          echo "on_registry=$on_registry" >> "$GITHUB_OUTPUT"
+          if [ "$on_registry" = "yes" ]; then
+            echo "::notice::tdpilot@${tag_version} is already on the npm registry — skipping publish (likely a re-tag)."
+          else
+            echo "tdpilot@${tag_version} not on registry — will publish."
+          fi
+
+      - name: Publish
+        if: steps.registry_check.outputs.on_registry != 'yes'
+        working-directory: npm
+        # Auth model: this workflow is registered as a Trusted Publisher on
+        # the `tdpilot` npm package (npmjs.com -> Settings -> Trusted Publisher
+        # -> GitHub Actions -> dreamrec/TDPilot, npm-publish.yml). With that
+        # binding, `npm publish --provenance` performs an OIDC handshake
+        # against npm's registry using the workflow's `id-token: write`
+        # permission and uses the resulting short-lived token to publish.
+        # NODE_AUTH_TOKEN is intentionally NOT set — when it is present,
+        # npm uses it instead of OIDC, and any token (granular or classic)
+        # then needs the "bypass 2FA" flag because the package's
+        # publishing-access policy demands it. OIDC sidesteps that whole
+        # axis: the publish identity is the workflow run itself, verified
+        # against the Trusted Publisher binding npm has on file.
+        run: |
+          npm publish --provenance --access public

@@ -1,0 +1,332 @@
+"""Hint query API + auto-injection rule table.
+
+This module is the *only* public surface most callers should touch:
+
+    from td_mcp.hints import query_hints, auto_inject_hints
+
+``query_hints`` is what ``td_get_hints`` is built on top of. ``auto_inject_hints``
+is what the high-risk-tool wrappers call to decide whether to attach hints to
+a tool response without the caller asking for them.
+
+v1.6.2 added **response-surface routing** (the 2-axis topic × surface model).
+Each tool's auto-injection passes a ``surface`` value derived from
+``TOOL_SURFACES`` below; ``query_hints(surface=...)`` filters out hints whose
+``when.surface`` clause excludes that surface. Hints without a surface clause
+fire from any surface (backward compatible with v1 packs).
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from td_mcp.hints.loader import HintMatch, default_registry
+
+# Tool name → response-surface name. Single source of truth for what surface
+# auto-injection passes when each tool's response is wrapped by `_attach_hints`.
+# Keep in sync with ``loader.ALLOWED_SURFACES``. Adding a tool here does NOT
+# automatically wire injection — the tool's wrapper still needs to call
+# ``_attach_hints`` for hints to surface at all.
+TOOL_SURFACES: dict[str, str] = {
+    "td_create_node": "create_node",
+    "td_set_params": "set_params",
+    "td_exec_python": "exec",
+    "td_get_errors": "errors",
+    "td_plan_patch": "plan",
+    "td_patch_preview": "preview",
+    "td_get_hints": "query",
+    "td_get_node_detail": "inspect",
+    "td_screenshot": "screenshot",
+    "td_capture_frame": "screenshot",
+    "td_capture_and_analyze": "screenshot",
+}
+
+
+# Auto-injection rules, keyed by tool name. Each rule is a callable that
+# inspects the request payload + response and returns a (topic, op_type,
+# intent_text, error_text, reason) tuple when injection should fire, or
+# None otherwise.
+#
+# Keep these patterns LITERAL and SAFE to match — no eval, no string
+# concatenation that could leak request payloads back into the response.
+@dataclass(frozen=True)
+class _AutoTrigger:
+    tool: str
+    detector: Any  # callable(payload, response) -> dict | None
+
+
+def _trigger_create_node(payload: dict[str, Any], response: dict[str, Any]) -> dict[str, Any] | None:
+    op_type = (payload.get("type") or payload.get("op_type") or payload.get("node_type") or "").strip()
+    if not op_type:
+        return None
+    risky = {
+        "feedbackTOP",
+        "feedbackEdgeTOP",
+        "glslTOP",
+        "glslMAT",
+        "moviefileoutTOP",
+        "extensionDAT",
+        "panelCOMP",
+        "geometryCOMP",
+        "audiofileinCHOP",
+    }
+    if op_type in risky:
+        return {
+            "op_type": op_type,
+            "reason": f"op_type={op_type}",
+        }
+    return None
+
+
+_REFERENCE_PARAM_NAMES = re.compile(
+    r"^(instanceop|material|camera|lights|geometry|top|chop|sop|dat|comp|cameras|geometries)$",
+    re.IGNORECASE,
+)
+
+
+def _trigger_set_params(payload: dict[str, Any], response: dict[str, Any]) -> dict[str, Any] | None:
+    params = payload.get("params") or {}
+    if not isinstance(params, dict):
+        return None
+    for name, value in params.items():
+        if not isinstance(name, str):
+            continue
+        if not _REFERENCE_PARAM_NAMES.match(name.strip()):
+            continue
+        if isinstance(value, str) and value.strip():
+            return {
+                "topic": "render_pipeline",
+                "intent": f"set parameter {name} to a string reference",
+                "reason": f"reference-style param '{name}' assigned a string value",
+            }
+    return None
+
+
+_RESTRICTED_HINTS_PATTERNS = (
+    "import ",
+    "open(",
+    "subprocess",
+    "socket",
+    "__import__",
+    ".text=",
+    ".par.file=",
+)
+
+
+def _trigger_exec_python(payload: dict[str, Any], response: dict[str, Any]) -> dict[str, Any] | None:
+    code = payload.get("code") or ""
+    if not isinstance(code, str):
+        return None
+    code_lower = code.lower()
+    for pat in _RESTRICTED_HINTS_PATTERNS:
+        if pat.lower() in code_lower:
+            return {
+                "topic": "render_pipeline",
+                "intent": "execute python; possible restricted-mode violation",
+                "reason": f"code contains pattern {pat!r}",
+            }
+    return None
+
+
+def _trigger_get_errors(payload: dict[str, Any], response: dict[str, Any]) -> dict[str, Any] | None:
+    text = ""
+    if isinstance(response, dict):
+        for key in ("errors", "warnings", "messages", "text"):
+            value = response.get(key)
+            if isinstance(value, str):
+                text += value + "\n"
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str):
+                        text += item + "\n"
+                    elif isinstance(item, dict):
+                        msg = item.get("message") or item.get("error") or item.get("text")
+                        if isinstance(msg, str):
+                            text += msg + "\n"
+    text = text.strip()
+    if not text:
+        return None
+    triggers = [
+        ("Not enough sources", "feedbackTOP", "feedback"),
+        ("missing input", None, "render_pipeline"),
+        ("extension", "extensionDAT", "extensions"),
+    ]
+    text_lower = text.lower()
+    for needle, op_type, topic in triggers:
+        if needle.lower() in text_lower:
+            return {
+                "op_type": op_type,
+                "topic": topic,
+                "error_text": text[:500],
+                "reason": f"detected error pattern {needle!r}",
+            }
+    return None
+
+
+def _trigger_planning(payload: dict[str, Any], response: dict[str, Any]) -> dict[str, Any] | None:
+    blob = ""
+    for source in (payload, response):
+        if not isinstance(source, dict):
+            continue
+        for value in source.values():
+            if isinstance(value, str):
+                blob += value + "\n"
+    blob_lower = blob.lower()
+    keywords = [
+        ("feedback", "feedbackTOP", "feedback"),
+        ("glsl", "glslTOP", "glsl"),
+        ("audio", None, "audio_reactive"),
+    ]
+    for needle, op_type, topic in keywords:
+        if needle in blob_lower:
+            return {
+                "op_type": op_type,
+                "topic": topic,
+                "intent": needle,
+                "reason": f"plan/preview blob mentions {needle!r}",
+            }
+    return None
+
+
+AUTO_INJECT_RULES: dict[str, Any] = {
+    "td_create_node": _trigger_create_node,
+    "td_set_params": _trigger_set_params,
+    "td_exec_python": _trigger_exec_python,
+    "td_get_errors": _trigger_get_errors,
+    "td_plan_patch": _trigger_planning,
+    "td_patch_preview": _trigger_planning,
+}
+
+
+def query_hints(
+    *,
+    topic: str | None = None,
+    op_type: str | None = None,
+    intent: str | None = None,
+    node_path: str | None = None,
+    error_text: str | None = None,
+    surface: str | None = None,
+    max_hints: int = 8,
+    include_static_metadata: bool = True,
+) -> dict[str, Any]:
+    """Return hints + metadata in the shape ``td_get_hints`` exposes.
+
+    ``surface`` (v1.6.2) gates which surface-restricted hints can fire:
+    a hint that declares ``when.surface=["errors"]`` only fires when
+    ``surface="errors"`` is passed here. Hints without ``when.surface``
+    fire regardless. ``surface=None`` means surface-restricted hints
+    are excluded — passing ``surface`` is opt-in.
+
+    ``include_static_metadata`` (v1.6.10, DeepSeek v4 optimization) —
+    when False, omits ``available_topics``, ``available_op_types``,
+    and ``available_surfaces`` from the response. Auto-injection callers
+    pass False since they only use ``hints`` + ``next_tools``.
+    """
+    registry = default_registry()
+    matches: list[HintMatch] = registry.find(
+        topic=topic,
+        op_type=op_type,
+        intent=intent,
+        error_text=error_text,
+        node_path=node_path,
+        surface=surface,
+    )
+    selected = matches[: max(1, min(max_hints, 20))] if matches else []
+    response_hints = []
+    next_tools: list[str] = []
+    for m in selected:
+        response_hints.append(m.hint.as_response_dict())
+        for nt in m.hint.next_tools:
+            if nt not in next_tools:
+                next_tools.append(nt)
+    confidence = 0.0
+    if selected:
+        max_score = max(m.score for m in selected) or 1.0
+        confidence = min(1.0, max_score / 5.0)
+    result = {
+        "topic": topic,
+        "op_type": op_type,
+        "surface": surface,
+        "confidence": round(confidence, 2),
+        "hints": response_hints,
+        "next_tools": next_tools,
+        "hint_pack_version": registry.pack_version,
+    }
+    if include_static_metadata:
+        result["available_topics"] = registry.topics()
+        result["available_op_types"] = registry.op_types()
+        result["available_surfaces"] = sorted(set(TOOL_SURFACES.values()))
+    return result
+
+
+# Session-level dedup for auto-injected hints (DeepSeek v4 optimization).
+# Tracks (tool_name, hint_id) pairs that have been auto-injected so the
+# same hint isn't re-sent to the model on repeated tool calls within one
+# session. Cleared on process restart (server lifecycle).
+_seen_auto_hints: set[tuple[str, str]] = set()
+
+
+def auto_inject_hints(
+    tool_name: str,
+    payload: dict[str, Any] | None,
+    response: Any,
+    *,
+    max_hints: int = 4,
+) -> dict[str, Any] | None:
+    """Decide whether to attach hints to a tool response without the caller asking.
+
+    Returns ``None`` when no auto-trigger fires; otherwise returns the
+    ``hints`` block that the high-risk-tool wrapper should merge into the
+    response.
+
+    Session-level dedup (v1.6.10): once a specific hint has been injected for
+    a given tool, it won't be re-injected for the same tool in the same
+    session. Prevents re-sending identical hint blocks when the same
+    error/trigger repeats across multiple tool calls.
+
+    Defensive: any exception inside the detector is swallowed (returning
+    ``None``) so a buggy hint pattern can never break a tool call.
+    """
+    detector = AUTO_INJECT_RULES.get(tool_name)
+    if detector is None:
+        return None
+    try:
+        signal = detector(payload or {}, response if isinstance(response, dict) else {})
+    except Exception:
+        return None
+    if not signal:
+        return None
+    surface = TOOL_SURFACES.get(tool_name)
+    try:
+        result = query_hints(
+            topic=signal.get("topic"),
+            op_type=signal.get("op_type"),
+            intent=signal.get("intent"),
+            error_text=signal.get("error_text"),
+            surface=surface,
+            max_hints=max_hints,
+            include_static_metadata=False,
+        )
+    except Exception:
+        return None
+    if not result.get("hints"):
+        return None
+    # Dedup: filter out hints already seen for this tool in this session
+    fresh_hints = []
+    for h in result["hints"]:
+        hint_id = h.get("id")
+        if hint_id and (tool_name, hint_id) in _seen_auto_hints:
+            continue
+        fresh_hints.append(h)
+        if hint_id:
+            _seen_auto_hints.add((tool_name, hint_id))
+    if not fresh_hints:
+        return None
+    return {
+        "auto_triggered": True,
+        "trigger_reason": signal.get("reason"),
+        "items": fresh_hints,
+        "next_tools": result.get("next_tools", []),
+        "hint_pack_version": result.get("hint_pack_version"),
+    }

@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TDPILOT_API</title>
+<style>
+  :root {
+    --bg:        #0a0612;
+    --bg-2:      #120a24;
+    --bg-3:      #1c1138;
+    --accent:    #6B47FF;
+    --accent-2:  #9176ff;
+    --accent-dim:#4d33b8;
+    --text:      #d8d2ec;
+    --muted:     #6a5e8a;
+    --user-fg:   #b6a8ff;
+    --tool-fg:   #7e9aa6;
+    --error-fg:  #ff7878;
+    --border:    #2a1f55;
+    --rule:      #3a2c70;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow: hidden;
+    -webkit-font-smoothing: subpixel-antialiased;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* CRT-ish scanline overlay so the panel reads as terminal, not webpage. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image: repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.012) 0,
+      rgba(255,255,255,0.012) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  /* Top status bar: terminal window-chrome look. */
+  #status-bar {
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--rule);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #status-bar .lhs {
+    color: var(--accent-2);
+  }
+  /* The ▰▰▰ prefix is a *data attribute* so JS can animate it as a
+     three-cell wave while the agent is working. CSS reads attr() so we
+     get smooth swaps without rebuilding DOM each frame. */
+  #status-bar .lhs::before {
+    content: attr(data-prefix);
+    color: var(--accent);
+    letter-spacing: 0;
+    margin-right: 6px;
+    transition: color 120ms;
+  }
+  #status-bar.working .lhs::before { color: var(--accent-2); }
+  #status-bar .rhs {
+    color: var(--muted);
+    position: relative;
+  }
+  #status-bar .rhs::before {
+    content: "[";
+    color: var(--rule);
+  }
+  #status-bar .rhs::after {
+    content: "]";
+    color: var(--rule);
+  }
+  /* Blinking cursor block after the status text — classic CRT vibe.
+     Visible only while the agent is working; idle hides it. */
+  #status-bar .cursor {
+    display: inline-block;
+    width: 0.6em;
+    color: var(--accent);
+    margin-left: 4px;
+    animation: blink 1s step-end infinite;
+    visibility: hidden;
+  }
+  #status-bar.working .cursor { visibility: visible; }
+  @keyframes blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+  }
+
+  #history {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    scroll-behavior: smooth;
+  }
+  #history::-webkit-scrollbar { width: 6px; }
+  #history::-webkit-scrollbar-track { background: var(--bg); }
+  #history::-webkit-scrollbar-thumb {
+    background: var(--accent-dim);
+    border-radius: 0;
+  }
+
+  /* Messages: no rounded bubbles. Thin left rule + role tag. Terminal log feel. */
+  .msg {
+    border-left: 2px solid var(--rule);
+    padding: 4px 0 4px 14px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    word-break: break-word;
+  }
+  .msg .role {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 3px;
+  }
+  .msg .role::before { content: "[ "; color: var(--rule); }
+  .msg .role::after  { content: " ]"; color: var(--rule); }
+  .msg.user {
+    border-left-color: var(--accent);
+    color: var(--user-fg);
+  }
+  .msg.user .role { color: var(--accent-2); }
+  .msg.assistant {
+    border-left-color: var(--accent-2);
+  }
+  .msg.assistant .role { color: var(--accent-2); }
+  .msg.tool_call,
+  .msg.tool_result {
+    border-left-color: var(--tool-fg);
+    color: var(--tool-fg);
+    font-size: 12px;
+    opacity: 0.85;
+  }
+  .msg.tool_call .role,
+  .msg.tool_result .role { color: var(--tool-fg); }
+  .msg.error {
+    border-left-color: var(--error-fg);
+    color: var(--error-fg);
+  }
+  .msg.error .role { color: var(--error-fg); }
+
+  /* Welcome screen: ASCII block logo + minimal instructions. */
+  .welcome {
+    color: var(--muted);
+    text-align: center;
+    margin: 24px auto;
+    max-width: 92%;
+  }
+  .welcome pre.logo {
+    color: var(--accent);
+    font-size: 10px;
+    line-height: 1.0;
+    margin: 0 0 18px;
+    text-shadow: 0 0 8px rgba(107, 71, 255, 0.35);
+    letter-spacing: 0;
+  }
+  .welcome .tag {
+    color: var(--accent-2);
+    letter-spacing: 0.3em;
+    font-size: 10px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .welcome .body {
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--muted);
+  }
+  .welcome .body kbd {
+    font-family: inherit;
+    background: var(--bg-2);
+    border: 1px solid var(--rule);
+    padding: 1px 6px;
+    color: var(--accent-2);
+  }
+
+  hr.divider {
+    border: 0;
+    border-top: 1px dashed var(--rule);
+    margin: 8px 0;
+  }
+
+  #input-bar {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-2);
+    border-top: 1px solid var(--rule);
+    align-items: stretch;
+  }
+  #input-bar::before {
+    content: ">";
+    color: var(--accent);
+    align-self: center;
+    font-size: 16px;
+    font-weight: bold;
+    margin-right: 2px;
+  }
+  #input {
+    flex: 1 1 auto;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--rule);
+    border-radius: 0;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.4;
+    resize: none;
+    outline: none;
+    min-height: 40px;
+    max-height: 120px;
+    caret-color: var(--accent);
+  }
+  #input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 0 12px -2px rgba(107, 71, 255, 0.4);
+  }
+  #input::placeholder { color: var(--muted); }
+  #send, #stop {
+    flex: 0 0 auto;
+    width: 88px;
+    background: transparent;
+    border-radius: 0;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 80ms ease;
+  }
+  #send {
+    color: var(--accent-2);
+    border: 1px solid var(--accent);
+  }
+  #send:hover {
+    background: var(--accent);
+    color: var(--bg);
+    box-shadow: 0 0 12px -2px rgba(107, 71, 255, 0.6);
+  }
+  #send:active { background: var(--accent-dim); }
+  #send:disabled {
+    background: transparent;
+    color: var(--rule);
+    border-color: var(--rule);
+    cursor: not-allowed;
+  }
+  #stop {
+    /* Hidden by default — only revealed while the agent is working.
+       Red so the user immediately recognises this as "abort, not send".  */
+    display: none;
+    width: 72px;
+    color: var(--error-fg);
+    border: 1px solid var(--error-fg);
+  }
+  #stop.visible { display: inline-block; }
+  #stop:hover {
+    background: var(--error-fg);
+    color: var(--bg);
+    box-shadow: 0 0 12px -2px rgba(255, 120, 120, 0.6);
+  }
+  #stop:active { opacity: 0.7; }
+  #stop:disabled {
+    color: var(--rule);
+    border-color: var(--rule);
+    cursor: not-allowed;
+  }
+</style>
+</head>
+<body>
+  <div id="status-bar">
+    <span class="lhs" data-prefix="▰▰▰">tdpilot_api</span>
+    <span class="rhs">
+      <span id="status-text">idle</span><span class="cursor">█</span>
+    </span>
+  </div>
+  <div id="history">
+    <div class="welcome">
+<pre class="logo">████████╗██████╗ ██████╗ ██╗██╗      ██████╗ ████████╗
+╚══██╔══╝██╔══██╗██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝
+   ██║   ██║  ██║██████╔╝██║██║     ██║   ██║   ██║
+   ██║   ██║  ██║██╔═══╝ ██║██║     ██║   ██║   ██║
+   ██║   ██████╔╝██║     ██║███████╗╚██████╔╝   ██║
+   ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝</pre>
+      <div class="tag">api · standalone · deepseek v4</div>
+      <hr class="divider" />
+      <div class="body">
+        type a message and press <kbd>enter</kbd><br/>
+        <kbd>shift</kbd>+<kbd>enter</kbd> for newline
+      </div>
+    </div>
+  </div>
+  <div id="input-bar">
+    <textarea id="input" placeholder="ask touchdesigner to do something…" rows="2" autocomplete="off" spellcheck="false"></textarea>
+    <button id="stop" title="Interrupt the agent (POST /stop)">stop</button>
+    <button id="send">send</button>
+  </div>
+
+<script>
+(() => {
+  const params = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const TD_PORT = params.get('port') || '9987';
+  const TD_HOST = params.get('host') || '127.0.0.1';
+  const SEND_URL = `http://${TD_HOST}:${TD_PORT}/send`;
+  const STOP_URL = `http://${TD_HOST}:${TD_PORT}/stop`;
+
+  const $history = document.getElementById('history');
+  const $input = document.getElementById('input');
+  const $send = document.getElementById('send');
+  const $stop = document.getElementById('stop');
+  const $status = document.getElementById('status-text');
+  const $statusBar = document.getElementById('status-bar');
+  const $lhs = $statusBar.querySelector('.lhs');
+
+  // Three-cell block-wave animation that ties to the project's ASCII
+  // logo aesthetic. Active while the agent is working; pauses to a
+  // steady triple-block when idle.
+  const PULSE_FRAMES = ['▰▱▱', '▱▰▱', '▱▱▰', '▱▰▱'];
+  const PULSE_INTERVAL_MS = 180;
+  const STEADY_PREFIX = '▰▰▰';
+  let pulseTimer = null;
+  let pulseIdx = 0;
+
+  function isWorkingStatus(s) {
+    const t = String(s || '').toLowerCase();
+    if (!t || t === 'idle' || t === 'connected' || t === 'ready' || t === 'reset') return false;
+    if (t.startsWith('error') || t.startsWith('send failed')) return false;
+    return true;
+  }
+
+  function startPulse() {
+    if (pulseTimer) return;
+    $statusBar.classList.add('working');
+    pulseTimer = setInterval(() => {
+      pulseIdx = (pulseIdx + 1) % PULSE_FRAMES.length;
+      $lhs.dataset.prefix = PULSE_FRAMES[pulseIdx];
+    }, PULSE_INTERVAL_MS);
+  }
+
+  function stopPulse() {
+    if (pulseTimer) {
+      clearInterval(pulseTimer);
+      pulseTimer = null;
+    }
+    $statusBar.classList.remove('working');
+    $lhs.dataset.prefix = STEADY_PREFIX;
+  }
+
+  let welcomed = true;
+
+  function clearWelcome() {
+    if (!welcomed) return;
+    welcomed = false;
+    const w = $history.querySelector('.welcome');
+    if (w) w.remove();
+  }
+
+  function autoScroll() {
+    requestAnimationFrame(() => {
+      $history.scrollTop = $history.scrollHeight;
+    });
+  }
+
+  function appendMessage(role, message) {
+    clearWelcome();
+    const div = document.createElement('div');
+    div.className = 'msg ' + (
+      role === 'user' ? 'user' :
+      role === 'assistant' ? 'assistant' :
+      role === 'tool_call' ? 'tool_call' :
+      role === 'tool_result' ? 'tool_result' :
+      role === 'error' ? 'error' : 'tool_call'
+    );
+    const r = document.createElement('div');
+    r.className = 'role';
+    r.textContent = role;
+    div.appendChild(r);
+    const body = document.createElement('div');
+    body.textContent = message == null ? '' : String(message);
+    div.appendChild(body);
+    $history.appendChild(div);
+    autoScroll();
+  }
+
+  function setStatus(text) {
+    const t = (text || 'idle').toLowerCase();
+    $status.textContent = t;
+    if (isWorkingStatus(t)) {
+      startPulse();
+      $stop.classList.add('visible');
+      $stop.disabled = false;
+    } else {
+      stopPulse();
+      $stop.classList.remove('visible');
+    }
+  }
+
+  function fullSync(rows) {
+    $history.innerHTML = '';
+    welcomed = false;
+    if (!rows || !rows.length) {
+      welcomed = true;
+      $history.innerHTML = `
+        <div class="welcome">
+<pre class="logo">████████╗██████╗ ██████╗ ██╗██╗      ██████╗ ████████╗
+╚══██╔══╝██╔══██╗██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝
+   ██║   ██║  ██║██████╔╝██║██║     ██║   ██║   ██║
+   ██║   ██║  ██║██╔═══╝ ██║██║     ██║   ██║   ██║
+   ██║   ██████╔╝██║     ██║███████╗╚██████╔╝   ██║
+   ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝</pre>
+          <div class="tag">api · standalone · deepseek v4</div>
+          <hr class="divider" />
+          <div class="body">
+            type a message and press <kbd>enter</kbd><br/>
+            <kbd>shift</kbd>+<kbd>enter</kbd> for newline
+          </div>
+        </div>`;
+      return;
+    }
+    for (const r of rows) appendMessage(r.role, r.message);
+  }
+
+  function send() {
+    const text = $input.value;
+    const trimmed = (text || '').trim();
+    if (!trimmed) return;
+    $input.value = '';
+    $send.disabled = true;
+    setStatus('sending…');
+    appendMessage('user', trimmed);
+    fetch(SEND_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: trimmed,
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        setStatus('thinking…');
+      })
+      .catch((err) => {
+        setStatus('send failed: ' + err.message);
+        appendMessage('error', 'Could not reach TD WebServer at ' + SEND_URL + ': ' + err.message);
+      })
+      .finally(() => {
+        $send.disabled = false;
+        $input.focus();
+      });
+  }
+
+  function stopAgent() {
+    // POST /stop is best-effort — the cooperative cancel checks the
+    // flag between API calls, so the agent finishes the current call
+    // before exiting. Show "stopping…" until the runtime emits its
+    // own status change ('idle' / 'stopped') over the WebSocket.
+    $stop.disabled = true;
+    setStatus('stopping…');
+    fetch(STOP_URL, { method: 'POST' })
+      .catch((err) => {
+        appendMessage('error', 'Stop request failed: ' + err.message);
+      });
+  }
+
+  $send.addEventListener('click', send);
+  $stop.addEventListener('click', stopAgent);
+  $input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+    // Esc anywhere in the chat is a quick keyboard shortcut for stop.
+    if (e.key === 'Escape' && $stop.classList.contains('visible')) {
+      e.preventDefault();
+      stopAgent();
+    }
+  });
+  // Esc at document scope too — useful when focus is on the body.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $stop.classList.contains('visible') && document.activeElement !== $input) {
+      e.preventDefault();
+      stopAgent();
+    }
+  });
+
+  // Public API still callable from TD-side webRenderTOP.executeJavaScript().
+  window.tdpilotChat = {
+    appendMessage,
+    setStatus,
+    fullSync,
+    clear: () => fullSync([]),
+  };
+
+  // ---------------------------------------------------------------------
+  // WebSocket subscribe to TD-side broadcast for real-time updates.
+  // ---------------------------------------------------------------------
+  let ws = null;
+  let reconnectDelay = 500;
+
+  function applyMessage(msg) {
+    if (!msg || !msg.type) return;
+    switch (msg.type) {
+      case 'append':   appendMessage(msg.role, msg.message); break;
+      case 'status':   setStatus(msg.status); break;
+      case 'fullSync': fullSync(msg.rows || []); break;
+      case 'clear':    fullSync([]); break;
+    }
+  }
+
+  function connectWS() {
+    try {
+      ws = new WebSocket(`ws://${TD_HOST}:${TD_PORT}/`);
+    } catch (err) {
+      console.error('[tdpilot] WS construct failed', err);
+      scheduleReconnect();
+      return;
+    }
+    ws.onopen = () => {
+      reconnectDelay = 500;
+      setStatus('connected');
+    };
+    ws.onmessage = (ev) => {
+      try { applyMessage(JSON.parse(ev.data)); }
+      catch (err) { console.error('[tdpilot] bad WS payload', err, ev.data); }
+    };
+    ws.onerror = (err) => { console.warn('[tdpilot] WS error', err); };
+    ws.onclose = () => { ws = null; scheduleReconnect(); };
+  }
+
+  function scheduleReconnect() {
+    setStatus(`reconnecting in ${reconnectDelay}ms`);
+    setTimeout(connectWS, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+  }
+
+  connectWS();
+
+  console.log('[tdpilot] ready, send url=', SEND_URL);
+})();
+</script>
+</body>
+</html>

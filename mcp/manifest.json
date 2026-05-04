@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "name": "TDPilot DPSK4",
+  "slug": "tdpilot-dpsk4",
+  "version": "1.6.11",
+  "repository": "https://github.com/dreamrec/TDPilot_deepseekv4",
+  "description": "MCP server for TouchDesigner (DeepSeek v4 optimized) with live graph control, diagnostics, safety, streaming, knowledge corpus, technique memory, and typed patch sessions.",
+  "entrypoints": {
+    "npm": {
+      "command": "npx",
+      "args": ["-y", "tdpilot-dpsk4"]
+    },
+    "python": {
+      "command": "uv",
+      "args": ["run", "--directory", "<repo-path>", "tdpilot-dpsk4"]
+    }
+  },
+  "defaults": {
+    "env": {
+      "TD_MCP_HOST": "127.0.0.1",
+      "TD_MCP_PORT": "9985",
+      "TD_MCP_WS_PORT": "9986"
+    },
+    "transport": "stdio"
+  },
+  "surface": {
+    "tool_count": 103,
+    "resource_template_count": 6,
+    "static_resource_count": 1
+  },
+  "artifacts": {
+    "td_component_tox": "td_component/tdpilot-dpsk4.tox",
+    "profiles_dir": "mcp/profiles"
+  }
+}
