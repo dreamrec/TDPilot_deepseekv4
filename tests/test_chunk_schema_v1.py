@@ -349,6 +349,132 @@ def test_builder_imports_shared_v1_helpers(script_path):
     assert "build_v1_fts_index" in text, f"{script_path} doesn't reference build_v1_fts_index"
 
 
+# ---------------------------------------------------------------------------
+# Phase 1.6 — meta table for self-description.
+# ---------------------------------------------------------------------------
+
+
+def test_build_index_auto_stamps_build_date_and_chunk_count(v1, tmp_path):
+    """The shared indexer must always populate build_date + chunk_count
+    in the meta table — Phase 1.6 contract.
+    """
+    db = tmp_path / "auto_meta.db"
+    n = v1.build_v1_fts_index(_seed_chunks(), db, brain_id="b", trust_tier="bundled")
+    assert n == 3
+
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = dict(conn.execute("SELECT key, value FROM meta"))
+    finally:
+        conn.close()
+
+    assert rows["chunk_count"] == "3"
+    assert "build_date" in rows
+    # Format: ISO 8601 UTC, e.g. "2026-05-05T12:34:56Z"
+    bd = rows["build_date"]
+    assert len(bd) >= 19
+    assert bd.endswith("Z")
+    assert "T" in bd
+    # builder_version is also stamped automatically.
+    assert rows["builder_version"] == v1.BUILDER_VERSION
+
+
+def test_build_index_extra_meta_overrides_auto_stamp(v1, tmp_path):
+    """Caller-provided values in extra_meta beat the auto-stamps."""
+    db = tmp_path / "override.db"
+    v1.build_v1_fts_index(
+        _seed_chunks(),
+        db,
+        brain_id="b",
+        trust_tier="bundled",
+        extra_meta={
+            "build_date": "2030-01-01T00:00:00Z",
+            "builder_version": "test-99.99",
+            "chunk_count": "999",  # explicit override even though we'd normally compute
+        },
+    )
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = dict(conn.execute("SELECT key, value FROM meta"))
+    finally:
+        conn.close()
+    assert rows["build_date"] == "2030-01-01T00:00:00Z"
+    assert rows["builder_version"] == "test-99.99"
+    assert rows["chunk_count"] == "999"
+
+
+def test_build_index_writes_phase_16_self_description_keys(v1, tmp_path):
+    """Spec: each brain.db meta should accommodate display_name,
+    description, source_url, source_type, builder_name.
+    """
+    db = tmp_path / "selfdesc.db"
+    v1.build_v1_fts_index(
+        _seed_chunks(),
+        db,
+        brain_id="testbrain",
+        trust_tier="official",
+        extra_meta={
+            "display_name": "Test Brain",
+            "description": "Test brain for unit tests.",
+            "source_url": "https://example.com/docs",
+            "source_type": "html",
+            "builder_name": "build_brain.py",
+        },
+    )
+    rows = v1.read_brain_meta(db)
+    # Required v1.6 self-description keys
+    assert rows["display_name"] == "Test Brain"
+    assert rows["description"] == "Test brain for unit tests."
+    assert rows["source_url"] == "https://example.com/docs"
+    assert rows["source_type"] == "html"
+    assert rows["builder_name"] == "build_brain.py"
+    # Required core keys
+    assert rows["brain_id"] == "testbrain"
+    assert rows["trust_tier"] == "official"
+    assert rows["schema_version"] == "1"
+
+
+def test_read_brain_meta_returns_empty_for_missing_db(v1, tmp_path):
+    """Missing file is not an error — returns {} so callers can fall
+    back to filename heuristics gracefully.
+    """
+    assert v1.read_brain_meta(tmp_path / "does_not_exist.db") == {}
+
+
+def test_read_brain_meta_returns_empty_for_legacy_db_without_meta_table(v1, tmp_path):
+    """A pre-v1 brain.db that has chunks but no meta table must not
+    crash the reader — it's a legitimate state for older corpora.
+    """
+    db = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("CREATE TABLE chunks (chunk_id TEXT, content TEXT)")
+        conn.execute("INSERT INTO chunks VALUES ('x', 'hello')")
+        conn.commit()
+    finally:
+        conn.close()
+    assert v1.read_brain_meta(db) == {}
+
+
+def test_read_brain_meta_round_trips(v1, tmp_path):
+    """write → read identity check."""
+    db = tmp_path / "rt.db"
+    v1.build_v1_fts_index(
+        _seed_chunks(),
+        db,
+        brain_id="b",
+        trust_tier="official",
+        extra_meta={"display_name": "B", "source_url": "https://b.example"},
+    )
+    meta = v1.read_brain_meta(db)
+    assert meta["brain_id"] == "b"
+    assert meta["display_name"] == "B"
+    assert meta["source_url"] == "https://b.example"
+    assert meta["trust_tier"] == "official"
+    assert meta["schema_version"] == "1"
+    assert meta["chunk_count"] == "3"
+
+
 def test_build_brain_make_chunk_emits_v1_record():
     """build_brain.py's _make_chunk helper must emit a Chunk Schema v1 record.
 

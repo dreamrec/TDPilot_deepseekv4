@@ -26,11 +26,19 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
 CHUNK_SCHEMA_VERSION = 1
+
+# Builder version. Bumped only when the shared indexer's behaviour
+# changes in a way that producers/consumers must coordinate around.
+# Different from CHUNK_SCHEMA_VERSION: the schema can stay at v1 while
+# the builder fixes a chunking bug, in which case BUILDER_VERSION
+# bumps but old brains still read fine.
+BUILDER_VERSION = "1.0"
 
 VALID_TRUST_TIERS = (
     "official",
@@ -42,6 +50,11 @@ VALID_TRUST_TIERS = (
 )
 
 DEFAULT_TRUST_TIER = "bundled"
+
+# Recognised values for the meta.source_type field. Free-form is
+# permitted; this list documents the canonical set so runtime UIs can
+# special-case display ("video" vs "html docs" labelling).
+KNOWN_SOURCE_TYPES = ("html", "youtube", "transcript", "docs", "markdown", "mixed")
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +342,11 @@ def build_v1_fts_index(
         conn.execute(_CREATE_FTS_V1)
         conn.execute(_CREATE_META)
 
+        # Phase 1.6 self-description meta. ``schema_version`` /
+        # ``brain_id`` / ``trust_tier`` are required and always written
+        # here; ``build_date`` and ``builder_version`` are auto-stamped
+        # but overridable via ``extra_meta``; ``chunk_count`` is written
+        # AFTER the indexing loop because the count is only known then.
         meta_rows = {
             "schema_version": str(CHUNK_SCHEMA_VERSION),
             "brain_id": brain_id,
@@ -337,8 +355,11 @@ def build_v1_fts_index(
             # learn to read brain_id.
             "brain_name": brain_id,
             "trust_tier": trust_tier if trust_tier in VALID_TRUST_TIERS else DEFAULT_TRUST_TIER,
+            "build_date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "builder_version": BUILDER_VERSION,
         }
         if extra_meta:
+            # Caller-provided values override the auto-defaults.
             meta_rows.update(extra_meta)
         for k, v in meta_rows.items():
             conn.execute(
@@ -387,7 +408,52 @@ def build_v1_fts_index(
             )
             count += 1
 
+        # Phase 1.6 — chunk_count is only known after the loop; stamp
+        # it now unless caller already provided one (some pipelines
+        # know it ahead of time).
+        if not extra_meta or "chunk_count" not in extra_meta:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                ("chunk_count", str(count)),
+            )
+
         conn.commit()
         return count
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Read-side helper — used by the standalone runtime to surface a
+# brain's identity + trust tier without filename heuristics.
+# ---------------------------------------------------------------------------
+
+
+def read_brain_meta(db_path: Path) -> dict[str, str]:
+    """Return the `meta` table contents from a brain.db.
+
+    Phase 1.6 contract: returns ``{}`` (not error) if the DB is missing,
+    if the meta table doesn't exist (legacy v0 brain), or if the file
+    can't be opened. Callers branch on key presence — they should never
+    crash because a brain wasn't fully self-describing.
+
+    Each call opens its own connection; the function is safe to invoke
+    from any thread (sqlite3.connect is thread-affine, so a
+    long-lived connection couldn't be shared anyway).
+    """
+    if not db_path.is_file():
+        return {}
+    try:
+        conn = sqlite3.connect(str(db_path))
+    except sqlite3.DatabaseError:
+        return {}
+    try:
+        try:
+            rows = conn.execute("SELECT key, value FROM meta").fetchall()
+        except sqlite3.DatabaseError:
+            # No meta table — legacy / pre-v1 brain. Synthesise nothing;
+            # the caller falls back to filename heuristics.
+            return {}
+        return {str(k): str(v) for k, v in rows if k}
     finally:
         conn.close()
