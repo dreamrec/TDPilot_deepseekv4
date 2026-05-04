@@ -200,7 +200,12 @@ def test_build_system_prompt_byte_stable_when_memory_changes(tmp_path, monkeypat
     import tdpilot_api_memory as mem  # type: ignore[import-not-found]
     from tdpilot_api_runtime import build_system_prompt
 
+    # Both ``MEMORY_DIR`` and ``MEMORY_INDEX`` are module-level — patching
+    # only the first leaves ``MEMORY_INDEX`` pointing at the developer's
+    # real ``~/.tdpilot-api/memory/MEMORY.md``. CI cleanrooms don't have
+    # that file so the test fails. Patch both.
     monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
+    monkeypatch.setattr(mem, "MEMORY_INDEX", tmp_path / "MEMORY.md")
     # Establish baseline.
     before = build_system_prompt()
 
@@ -226,6 +231,7 @@ def test_build_dynamic_context_emits_paired_messages(tmp_path, monkeypatch):
     from tdpilot_api_runtime import DYNAMIC_CONTEXT_DELIMITER, build_dynamic_context
 
     monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
+    monkeypatch.setattr(mem, "MEMORY_INDEX", tmp_path / "MEMORY.md")
     mem.handle_memory_save(
         {
             "name": "phase01_dyn",
@@ -303,11 +309,16 @@ def test_runtime_refreshes_dynamic_context_on_start_turn(monkeypatch, tmp_path):
     thread launches — the cook thread is the only safe place to invoke
     the TD-touching bundled-knowledge enumerator.
     """
-    import tdpilot_api_config as cfg_mod  # type: ignore[import-not-found]
+    import tdpilot_api_runtime as rt_mod  # type: ignore[import-not-found]
     from tdpilot_api_runtime import AgentRuntime
 
-    # Real fetch_api_key would read ~/.tdpilot-api/config.json. Stub it.
-    monkeypatch.setattr(cfg_mod, "fetch_api_key", lambda: "sk-fake")
+    # ``fetch_api_key`` was imported by name into ``tdpilot_api_runtime``
+    # at module load — patching the source module
+    # (``tdpilot_api_config``) doesn't affect runtime's already-bound
+    # reference. Patch the runtime's copy directly. Locally this masked
+    # itself because the developer machine has a real config.json on
+    # disk that fetch_api_key successfully reads; CI cleanrooms don't.
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
 
     refresh_calls: list[str] = []
     original = AgentRuntime._refresh_dynamic_context
@@ -350,10 +361,10 @@ def test_runtime_dynamic_context_provider_reads_snapshot(monkeypatch):
     NOT call build_dynamic_context() itself. Otherwise the worker thread
     races into TD globals and pops THREAD CONFLICT.
     """
-    import tdpilot_api_config as cfg_mod  # type: ignore[import-not-found]
+    import tdpilot_api_runtime as rt_mod  # type: ignore[import-not-found]
     from tdpilot_api_runtime import AgentRuntime
 
-    monkeypatch.setattr(cfg_mod, "fetch_api_key", lambda: "sk-fake")
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
 
     rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
 
@@ -393,12 +404,13 @@ def test_memory_saved_mid_session_propagates_to_next_turn(monkeypatch, tmp_path)
     """Phase 1.2 contract: a memory saved during turn N appears in the
     dynamic-context messages sent for turn N+1.
     """
-    import tdpilot_api_config as cfg_mod  # type: ignore[import-not-found]
     import tdpilot_api_memory as mem  # type: ignore[import-not-found]
+    import tdpilot_api_runtime as rt_mod  # type: ignore[import-not-found]
     from tdpilot_api_runtime import DYNAMIC_CONTEXT_DELIMITER, AgentRuntime
 
-    monkeypatch.setattr(cfg_mod, "fetch_api_key", lambda: "sk-fake")
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
     monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path / "memory")
+    monkeypatch.setattr(mem, "MEMORY_INDEX", tmp_path / "memory" / "MEMORY.md")
 
     rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
 
@@ -463,10 +475,10 @@ def _drain_runtime_events(rt) -> list[tuple[str, dict]]:
 
 
 def _build_runtime_for_hint_tests(monkeypatch):
-    import tdpilot_api_config as cfg_mod  # type: ignore[import-not-found]
+    import tdpilot_api_runtime as rt_mod  # type: ignore[import-not-found]
     from tdpilot_api_runtime import AgentRuntime
 
-    monkeypatch.setattr(cfg_mod, "fetch_api_key", lambda: "sk-fake")
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
     return AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
 
 
@@ -626,12 +638,13 @@ def test_system_prompt_is_unchanged_by_mid_session_memory_save(monkeypatch, tmp_
     mutate the Agent's system_prompt. Otherwise the DeepSeek auto-cache
     busts on the next turn.
     """
-    import tdpilot_api_config as cfg_mod  # type: ignore[import-not-found]
     import tdpilot_api_memory as mem  # type: ignore[import-not-found]
+    import tdpilot_api_runtime as rt_mod  # type: ignore[import-not-found]
     from tdpilot_api_runtime import AgentRuntime
 
-    monkeypatch.setattr(cfg_mod, "fetch_api_key", lambda: "sk-fake")
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
     monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path / "memory")
+    monkeypatch.setattr(mem, "MEMORY_INDEX", tmp_path / "memory" / "MEMORY.md")
 
     rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
     before = rt._agent.system_prompt  # type: ignore[union-attr]
