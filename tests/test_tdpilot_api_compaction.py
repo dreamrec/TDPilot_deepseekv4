@@ -115,11 +115,35 @@ def test_needs_compaction_zero_disables():
 
 
 def test_compact_returns_synthetic_plus_recent():
-    msgs = _build_long_history(8)  # 32 messages
+    """Use a clean history (text-only assistant replies) where the
+    natural cut at len-keep_recent lands on a non-tool_result message
+    so the boundary repair from Phase 1.6.13 doesn't kick in.
+    """
+    # 30 plain user/assistant pairs.
+    msgs: list[dict] = []
+    for i in range(15):
+        msgs.append(_user(f"u{i}"))
+        msgs.append(_assistant_text(f"a{i}"))
     out = compaction.compact(msgs, keep_recent=10)
     assert len(out) == 11  # synthetic + 10 recent
     assert out[0]["role"] == "assistant"
     assert out[1:] == msgs[-10:]  # recent slice unchanged
+
+
+def test_compact_returns_synthetic_plus_smaller_recent_when_boundary_repaired():
+    """Phase 1.6.13 — when the natural cut would orphan a
+    user/tool_result, the repair eats into keep_recent. With a
+    32-message tool-chain history and keep_recent=10, the cut at
+    index 22 lands on a tool_result and gets advanced to 23, so
+    the retained slice is 9 messages (synthetic + 9 = 10 total).
+    """
+    msgs = _build_long_history(8)  # 32 messages
+    out = compaction.compact(msgs, keep_recent=10)
+    # Length is 10 (synthetic + 9 recent) NOT 11 — boundary repair.
+    assert len(out) == 10
+    assert out[0]["role"] == "assistant"
+    # The retained slice must NOT lead with a tool_result.
+    assert compaction._starts_with_tool_result(out[1]) is False
 
 
 def test_compact_synthetic_message_is_text_only_no_thinking():
@@ -485,3 +509,92 @@ def test_runtime_disabled_compactor_when_threshold_zero(monkeypatch, tmp_path):
         },
     )
     assert rt._compactor is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.6.13 — boundary-orphan repair (audit finding P1)
+# ---------------------------------------------------------------------------
+
+
+def _build_history_with_tool_chain():
+    """30 messages where the natural cut at len-10 lands inside a
+    tool chain — message [20] is a user/tool_result whose matching
+    assistant/tool_use is at message [19]. Pre-fix this would yield
+    a synthetic-+-orphan-tool_result slice that 400s on the next
+    API call.
+    """
+    msgs: list[dict] = []
+    for i in range(7):
+        msgs.append(_user(f"turn {i} user"))
+        msgs.append(_assistant_with_tool_use("td_get_info"))
+        msgs.append(_user_tool_result("tu_td_get_info"))
+        msgs.append(_assistant_with_thinking(f"reply {i}"))
+    # 28 messages so far; total 30 with the trailing 2.
+    msgs.append(_user("turn 7 user"))
+    msgs.append(_assistant_with_thinking("reply 7"))
+    return msgs
+
+
+def test_compact_does_not_orphan_tool_result_at_boundary():
+    """Audit P1 — when the slice point would land on a leading
+    user/tool_result, advance forward so the retained slice starts
+    on a clean message boundary. The retained slice may end up
+    smaller than ``keep_recent`` — by design.
+    """
+    msgs = _build_long_history(8)  # 32 messages, 4 per turn
+    # keep_recent=10 → cut at index 22, message[22] is tool_use
+    # (assistant role) — that's safe. Try keep_recent=11 → cut at
+    # index 21, message[21] is the user/tool_result. THAT's the
+    # orphan we want to repair.
+    out = compaction.compact(msgs, keep_recent=11)
+    # The retained slice must NOT start with a tool_result.
+    first_recent = out[1]
+    assert first_recent["role"] != "user" or not any(
+        isinstance(b, dict) and b.get("type") == "tool_result" for b in first_recent.get("content", [])
+    ), f"retained slice starts with orphan tool_result: {first_recent}"
+
+
+def test_compact_advances_past_multiple_tool_results():
+    """Multi-block tool_result tails — advance until the next
+    non-tool_result message.
+    """
+    msgs = []
+    msgs.append(_user("first user goal"))
+    msgs.append(_assistant_with_tool_use("td_create_node"))
+    # Cut would land here if we asked for keep_recent=4:
+    msgs.append(_user_tool_result("tu_td_create_node"))  # orphan #1
+    msgs.append(_assistant_with_tool_use("td_get_errors"))
+    msgs.append(_user_tool_result("tu_td_get_errors"))
+    msgs.append(_assistant_with_thinking("ok all good"))
+    msgs.append(_user("next turn please"))
+    msgs.append(_assistant_with_thinking("done"))
+    out = compaction.compact(msgs, keep_recent=6)
+    # After repair, retained must NOT lead with tool_result.
+    assert compaction._starts_with_tool_result(out[1]) is False
+
+
+def test_compact_handles_pathological_all_tool_results():
+    """If every "recent" message is a tool_result tail, the repair
+    eats them all — synthetic stands alone. Never raises.
+    """
+    msgs = []
+    for i in range(20):
+        msgs.append(_user_tool_result(f"tu_{i}"))
+    out = compaction.compact(msgs, keep_recent=5)
+    # The synthetic message remains. Any retained recents either
+    # don't exist or are not tool_result-led.
+    assert out[0]["role"] == "assistant"
+    for m in out[1:]:
+        assert compaction._starts_with_tool_result(m) is False
+
+
+def test_starts_with_tool_result_helper():
+    """Spot-check the predicate the compactor uses for boundary repair."""
+    assert compaction._starts_with_tool_result(_user_tool_result("x")) is True
+    assert compaction._starts_with_tool_result(_user("normal text")) is False
+    assert compaction._starts_with_tool_result(_assistant_text("a")) is False
+    assert compaction._starts_with_tool_result(_assistant_with_tool_use("td_get_info")) is False
+    # Defensive — non-dict / malformed inputs.
+    assert compaction._starts_with_tool_result(None) is False  # type: ignore[arg-type]
+    assert compaction._starts_with_tool_result({"role": "user"}) is False  # missing content
+    assert compaction._starts_with_tool_result({"role": "user", "content": []}) is False

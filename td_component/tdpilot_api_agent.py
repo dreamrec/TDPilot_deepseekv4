@@ -265,12 +265,27 @@ class Agent:
         self.messages.append({"role": "user", "content": [{"type": "text", "text": text}]})
 
     def reset(self) -> None:
+        """Clear conversation history.
+
+        Phase 1.6.13 — does NOT clear ``_stop_flag``. If a stop was
+        requested before reset, that signal must propagate so the
+        worker exits its loop. Caller (AgentRuntime.reset) is
+        responsible for joining/retiring any in-flight worker BEFORE
+        invoking this method, then clearing the stop flag manually
+        once the old worker is gone.
+        """
         self.messages.clear()
-        self._stop_flag.clear()
 
     def stop(self) -> None:
         """Cooperative cancellation. Checked between API calls."""
         self._stop_flag.set()
+
+    def clear_stop(self) -> None:
+        """Reset the stop flag. ONLY safe to call when the previous
+        worker has been joined — otherwise the old worker can keep
+        running into a fresh session.
+        """
+        self._stop_flag.clear()
 
     # ------------------------------------------------------------------
     # Loop

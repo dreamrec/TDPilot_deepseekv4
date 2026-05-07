@@ -92,17 +92,35 @@ def compact(
       - ``keep_recent`` >= ``len(messages)``: return a copy of
         ``messages`` unchanged (nothing to compact away).
       - ``len(messages) <= 1``: return a copy unchanged (degenerate).
-      - The slice point lands mid-tool-chain (assistant tool_use
-        WITHOUT its matching tool_result): we still slice. The
-        synthetic message replaces the gap; the API contract only
-        requires thinking-block echo, not tool-call pairing across
-        the historical boundary.
+      - The slice point lands mid tool-chain — i.e. the retained
+        slice would START with a user ``tool_result`` block whose
+        matching assistant ``tool_use`` was archived. The Anthropic
+        API rejects that with ``messages.0: tool_result block
+        without matching tool_use``. We advance the cut FORWARD
+        past every leading tool_result so the retained slice starts
+        on a clean boundary (typically the next user text message
+        or the next assistant turn). This eats into ``keep_recent``
+        — by design; an unsendable history is worse than a slightly
+        smaller one. Phase 1.6.13 fix.
     """
     if keep_recent < 0:
         keep_recent = 0
     if len(messages) <= max(1, keep_recent):
         return list(messages)
     cut = len(messages) - keep_recent
+
+    # Advance ``cut`` forward while the FIRST retained message is a
+    # user message that contains ANY tool_result block. Without
+    # repair, that tool_result references a tool_use_id from an
+    # archived assistant turn and the API 400s on the next call.
+    while cut < len(messages) and _starts_with_tool_result(messages[cut]):
+        cut += 1
+    if cut >= len(messages):
+        # Pathological — every "recent" message was a tool_result
+        # tail. Fall back to keeping nothing recent; the synthetic
+        # summary stands alone.
+        cut = len(messages)
+
     older = messages[:cut]
     recent = messages[cut:]
     summary_text = _summarise_old_turns(older)
@@ -116,6 +134,24 @@ def compact(
         ],
     }
     return [synthetic, *recent]
+
+
+def _starts_with_tool_result(message: dict) -> bool:
+    """True if this message is a user message whose first content
+    block is a ``tool_result``. That's the marker for "this message
+    is the tail of a previous turn's tool chain" — its
+    ``tool_use_id`` references an assistant block that, after
+    compaction, would no longer exist in the history.
+    """
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return False
+    content = message.get("content")
+    if not isinstance(content, list) or not content:
+        return False
+    first = content[0]
+    if not isinstance(first, dict):
+        return False
+    return first.get("type") == "tool_result"
 
 
 def persist_history_chunk(
