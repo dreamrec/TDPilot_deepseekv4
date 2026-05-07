@@ -18,7 +18,7 @@
 [![TouchDesigner](https://img.shields.io/badge/TouchDesigner-2025.30000%2B-ff6200)](https://derivative.ca)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-v4-00a86b)](https://deepseek.com)
 
-An AI assistant that lives inside TouchDesigner. It can inspect your network, build new operators, wire them up, debug errors, take screenshots, remember things between sessions, and replay successful patterns.
+An AI assistant that lives inside TouchDesigner. It can inspect your network, build new operators, wire them up, debug errors, take screenshots, remember things between sessions, replay successful patterns, surface relevant memories before each turn, batch tool calls, recover from failures with actionable hints, and survive long conversations via context compaction.
 
 There are two ways to run it. Pick whichever fits — they coexist in the same TD project if you want both.
 
@@ -183,6 +183,23 @@ Both variants run on the same DeepSeek backend and share the same TD-side handle
 
 **Now in BOTH variants** (Tier 1+2 ports landed in the standalone): official-docs lookup (5 tools), TD 2025 native introspection (6 tools), recommendations (3 tools), server introspection (3 tools), audit/validate utilities (2 tools), memory export/import/favorite (3 tools).
 
+**Standalone-exclusive runtime improvements** (shipped post-1.6.11, see [CHANGELOG](CHANGELOG.md)):
+
+| Capability | What it does |
+|---|---|
+| **Cache-stable dynamic context** | Volatile per-turn state (memory / knowledge / recipes indexes) lives in a synthetic message slot so the system prompt prefix stays byte-stable — DeepSeek's auto-cache hits at ~50× discount |
+| **SQLite/FTS corpus support** | `knowledge_search` / `td_search_official_docs` now work against `*brain.db` files installed via `npx tdpilot-dpsk4 brains add <corpus>`, alongside the legacy `pages.jsonl` path |
+| **Pre-turn retrieval injection** | Top memory / recipe / knowledge hits surface as ambient context before each turn, no tool round-trip needed |
+| **Trigger-based skill loading** | A user message containing `popx` / `slow` / `fps` / etc. auto-loads the matching skill body for the rest of the session |
+| **Trust-tier-aware results** | Every search hit carries `trust_tier` (`official` > `bundled` > `personal` > `community` > `transcript` > `experimental`); the agent weights evidence and validates community/transcript hits before claiming behaviour as fact |
+| **Severity-tracked validation hints** | High-severity mutations (create_node, exec_python, …) without a follow-up `td_get_errors` get a soft nudge in the chat — informational, never blocks |
+| **Failure recovery hints** | 10 known error patterns ("Unknown operator type", "THREAD CONFLICT", 401, "corpus not installed", …) attach an actionable `recovery_hint` so the agent doesn't retry the same failed call 3× |
+| **`tool_batch`** | Run up to 8 independent tool calls in one round trip instead of N — saves model→server→model latency on chained reads |
+| **Per-turn observability traces** | `~/.tdpilot-api/traces/<YYYY-MM-DD>.jsonl` captures timing + tool calls + outcomes per turn (user text + args hashed for privacy); read via `td_get_recent_traces` |
+| **Conversation compaction** | At 20+ messages the oldest portion summarises into one synthetic assistant message; recent 10 turns kept verbatim with their original thinking-block signatures intact; full history forensically preserved at `~/.tdpilot-api/history/` |
+| **First-run wizard** | The chat panel polls `/firstrun` and renders a 3-step quickstart checklist (paste key → install brain → save first memory) until completion |
+| **Doctor `--live`** | `python3 scripts/doctor_live.py [--deep]` probes webserver health, key validity, brain inventory, memory + user-tool dirs |
+
 The standalone has 90 tools that cover the everyday inspect → build → wire → verify loop, plus persistent memory, knowledge corpus, recipes, snapshots, subagents (parallel fan-out), multi-model routing (auto/flash/pro), macros, user-pluggable tools (drop a `.py` in `~/.tdpilot-api/tools/`), official-docs lookup against the derivative corpus, TD 2025 runtime introspection (Python env, threading, color pipeline), and project-audit + recipe-validation utilities.
 
 **Run both at the same time.** The two .tox files coexist in the same TD project — different ports, different config dirs, different COMP names. Standalone in the browser for quick chat, CLI in the terminal for heavy work.
@@ -198,8 +215,14 @@ td_component/         TouchDesigner-side source (textDATs baked into the .tox)
   build_tdpilot_api_tox.py   Build script for the standalone .tox
 src/td_mcp/           DPSK4 MCP server (Python, 103 tools)
 skills/               Claude Code skills (CLI plugin)
-tests/                pytest suite (881 tests)
+tests/                pytest suite (1122 tests + 12 agent-eval skeletons)
+  agent_evals/        Live-integration evals (run with `pytest -m agent_eval`)
+scripts/              Build + maintenance scripts
+  doctor_live.py      Install doctor for the standalone (--deep probes DeepSeek)
+  sync_counts.py      Keep README + MANUAL tool counts in sync with TOOL_SCHEMAS
+  _chunk_schema_v1.py Shared chunk schema helpers used by every brain builder
 docs/MANUAL.md        Full user manual (parameters, tools, troubleshooting, security)
+docs/CHUNK_SCHEMA.md  Canonical chunk record format for brain.db files
 docs/images/          Drop your own screenshots here
 ```
 

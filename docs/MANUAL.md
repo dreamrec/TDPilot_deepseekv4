@@ -10,9 +10,11 @@ The full reference. Read the [README](../README.md) first if you haven't install
 - [Parameters explained](#parameters-explained)
 - [Sound](#sound)
 - [Browser chat](#browser-chat)
+- [Standalone-only behaviours](#standalone-only-behaviours)
 - [Tools](#tools)
 - [Persistent state on disk](#persistent-state-on-disk)
 - [User-pluggable tools](#user-pluggable-tools)
+- [Install doctor](#install-doctor)
 - [Building the .tox from source](#building-the-tox-from-source)
 - [Working loop](#working-loop)
 - [Troubleshooting](#troubleshooting)
@@ -257,9 +259,145 @@ The chat lives at `http://127.0.0.1:9987/` and is also rendered inside the COMP'
 
 ---
 
+## Standalone-only behaviours
+
+The standalone runtime ships several agent-quality features that don't exist in the CLI variant. They run automatically — no parameter to flip — and they're additive: they layer on top of the model's tool calls without replacing them.
+
+### Cache-stable dynamic context
+
+The system prompt is byte-stable across the entire session. Volatile per-turn state (Memory Index, Knowledge Index, Recipes Index) lives in a synthetic `[[TDPILOT_CONTEXT]]` message that prepends to the conversation history just before each API call but is NOT persisted in the agent's `messages` array. Net effect:
+
+- DeepSeek's auto-cache hits at ~50× discount on cached input tokens.
+- Saving a memory mid-session shows up in the next turn's context without rebuilding the system prompt.
+- The dynamic-context block is built on the cook thread and snapshotted; the worker thread never touches TD globals.
+
+### Pre-turn retrieval injection
+
+Every `start_turn(user_text)` runs cheap local retrieval (`memory_recall` + `recipe_recall` + `knowledge_search`) and prepends the top hits to the dynamic context, sorted by score, capped at 4 hits / ~800 tokens. The agent sees what it already knows about the prompt without having to spend a tool round-trip on a generic "search anything" probe first.
+
+### Trigger-based skill loading
+
+Skills carry a `triggers:` list in their frontmatter. When a user message contains a trigger keyword (e.g. `popx`, `slow`, `fps`), the runtime auto-loads the matching skill body for the rest of the session and emits a `hint`-role event in the chat ("Auto-loaded skill 'popx-mode'"). Re-triggering is idempotent. `Reset` clears the activation set.
+
+### Trust-tier-aware results
+
+Every search match (BM25 in-memory or FTS5 SQLite) carries a `trust_tier` field — one of `official`, `bundled`, `personal`, `community`, `transcript`, `experimental`. The system prompt instructs the model to weight evidence by tier: official docs answer facts; community / transcript hits suggest approaches and require validation via `td_get_errors` / `td_screenshot` / `td_get_operator_doc` before being claimed as fact.
+
+### Severity-tracked validation hints
+
+The runtime classifies every tool call as high / medium / low severity (`td_create_node` = high, `td_set_params` = medium, `td_get_info` = low). At turn end, if any high-severity mutation went out without a follow-up validator (`td_get_errors` / `td_audit_project` / `td_validate_recipe` / `patch_validate`), the chat shows a soft `hint`-role nudge: "You modified the network … without validating." Soft signal only — never blocks the conversation.
+
+### Failure recovery hints
+
+When a tool returns `{"error": ...}` whose message matches one of 10 registered patterns, the dispatcher attaches a `recovery_hint` field with an actionable next step. The agent sees both the error and the hint, so it routes differently on the next turn instead of retrying the same failed call.
+
+| Error pattern | Hint suggests |
+|---|---|
+| `Unknown operator type` | `td_list_families` or `td_search_official_docs` for valid type names |
+| `401` / `Unauthorized` / `API key invalid` | Pulse `Save Key to ~/.tdpilot-api/` with a fresh key |
+| `Path not found` / `No node at path` | `td_get_nodes(path='/parent_path')` to check the parent |
+| `THREAD CONFLICT` / `outside the main thread` | Don't return raw `op()` from `td_exec_python` — stringify first |
+| `corpus.*not installed` / `brain.db.*not found` | `npx tdpilot-dpsk4 brains add <corpus>` |
+| `recipe.*invalid` / `unknown tool.*replay` | `td_validate_recipe` before saving |
+| `malformed MATCH expression` / `fts5: syntax error` | Retry with simple alphanumeric terms |
+| `Module .* not found` / `No module named` | Likely a stale .tox; rebuild |
+| `Permission denied` / `read-only file system` / `EACCES` | Check `~/.tdpilot-api/` ownership |
+| `timed out` / `TimeoutError` | Narrower query, check Cooking Info for stuck operators |
+
+Patterns are deliberately narrow to avoid false positives. New patterns can be added in `td_component/tdpilot_api_recovery.py`.
+
+### `tool_batch`
+
+Run up to 8 independent tool calls in one round trip. The agent uses this for chained reads ("get info + get capabilities + get errors") so it pays one model→server→model cycle instead of N. Failed sub-calls don't abort the batch — each result reports its own success/error. Sub-calls execute SEQUENTIALLY on the cook thread because TD's Python API isn't thread-safe; the win is LLM round-trip latency, not per-tool latency.
+
+```jsonc
+// Schema (callers don't need to write this — the agent does)
+{
+  "tool": "tool_batch",
+  "input": {
+    "calls": [
+      {"tool": "td_get_info", "args": {}},
+      {"tool": "td_get_capabilities", "args": {}},
+      {"tool": "td_get_errors", "args": {"path": "/project1"}}
+    ]
+  }
+}
+```
+
+Returns `{ok, count, results: [{tool, ok, result, error, elapsed_ms}, ...]}`. Nested `tool_batch` calls are rejected.
+
+### Per-turn observability traces
+
+Every completed turn writes one JSONL line to `~/.tdpilot-api/traces/<YYYY-MM-DD>.jsonl`:
+
+```jsonc
+{
+  "ts": "2026-05-07T10:32:18.000Z",
+  "session_id": "3de5f9469904",
+  "turn_id": "ab12cd34ef56",
+  "user_text_hash": "ab12cd34ef56",   // 12-char SHA-256 prefix; raw text NEVER stored
+  "model_tier": "auto",
+  "model_used": "deepseek-v4-flash",
+  "tool_calls": [
+    {"name": "td_get_info", "args_hash": "xx12...", "latency_ms": 12, "ok": true, "error": ""}
+  ],
+  "outcome": "done",                   // done / error / interrupted
+  "duration_ms": 1842,
+  "total_tokens": 0
+}
+```
+
+Files rotate by day. Files older than 30 days are pruned at `Tracer` init. Disk writes happen on a daemon thread so the cook thread never blocks.
+
+The agent (or you) can read recent records via the `td_get_recent_traces({limit: N})` tool — newest first, max 200, walks back up to 7 days. Privacy: raw user text and tool args are SHA-256-hashed (12-char prefix) at write time so the file never holds prompt content.
+
+### Conversation compaction
+
+When the message history exceeds the threshold (default 20 messages), the runtime summarises the oldest portion into a single synthetic assistant message and keeps the most recent 10 messages verbatim. The synthetic message is **text-only** — no `thinking` block — because we can't fabricate a valid signature for one. Recent messages keep their original API-issued thinking blocks (with valid signatures) intact, so DeepSeek's "thinking-must-echo-back" contract is preserved.
+
+The summary captures: user-prompt count, first/last user goals (truncated at 200 chars), tool calls deduplicated and sorted by frequency, error count. Token-frugal — the model gets enough signal to maintain rough continuity without paying full-fidelity context cost.
+
+Forensic preservation: every compaction event appends one JSON record to `~/.tdpilot-api/history/<session_id>.jsonl` containing the entire sliced batch BEFORE compaction. A future `td_history_recall(query)` tool will let the agent re-read this when needed.
+
+Disable by setting `compaction_threshold` to 0 in `~/.tdpilot-api/config.json`.
+
+### Verify Setup pulse
+
+Callable from the TouchDesigner Textport:
+
+```python
+mod('tdpilot_api_extension').get_extension(parent()).OnVerifySetupPulse()
+```
+
+Runs the same check registry as [`scripts/doctor_live.py`](#install-doctor) and returns a JSON-serialisable dict `{ok, results, fail, warn}`. Use this when you want a one-call install sanity check from inside TD.
+
+### First-run wizard
+
+When the standalone is loaded by a fresh-install user (no API key, no memories saved, no external brains), the welcome panel renders a 3-step quickstart checklist. The chat HTML polls `GET /firstrun` every 4s to update step-completion state; once all three boxes are ticked the wizard auto-dismisses.
+
+The `/firstrun` endpoint returns:
+
+```jsonc
+{
+  "is_first_run": true,
+  "has_api_key": false,
+  "has_memory": false,
+  "has_brains": false,
+  "next_steps": [
+    {"name": "paste_api_key",  "label": "...", "done": false},
+    {"name": "install_brain",  "label": "...", "done": false, "optional": true},
+    {"name": "first_memory",   "label": "...", "done": false}
+  ]
+}
+```
+
+Also returned under `caps["first_run"]` in `td_get_capabilities`.
+
+---
+
 ## Tools
 
-90 tools across 16 categories. Full schemas in `td_component/tdpilot_api_schema_defs.py`.
+90 tools across 17 categories. Full schemas in `td_component/tdpilot_api_schema_defs.py`.
 
 | Category | Count | Examples |
 |---|---|---|
@@ -282,6 +420,8 @@ The chat lives at `http://127.0.0.1:9987/` and is also rendered inside the COMP'
 | Recommendations | 3 | `td_recommend_official_component`, `td_find_official_example`, `td_explain_better_way` |
 | TD 2025 native | 7 | `td_python_env_status`, `td_threading_status`, `td_logger_status`, `td_tdresources_inspect`, `td_color_pipeline`, `td_component_standardize`, `td_audit_project` |
 | Server introspection | 3 | `td_get_server_metrics`, `td_describe_surface`, `td_get_capabilities` |
+| Tool batch | 1 | `tool_batch` (parallel-dispatch wrapper for up to 8 independent reads) |
+| Observability | 1 | `td_get_recent_traces` (read recent per-turn JSONL records) |
 
 The CLI variant adds 15 more tools — see [Standalone vs CLI](#standalone-vs-cli--practical-differences) for the gap.
 
@@ -293,15 +433,20 @@ The CLI variant adds 15 more tools — see [Standalone vs CLI](#standalone-vs-cl
 ~/.tdpilot-api/
   config.json        API key + setting overrides (mode 0600 on POSIX)
   memory/            Markdown memory files indexed by BM25
+    MEMORY.md        Auto-generated index, refreshed on every memory_save
   knowledge/         User knowledge entries (merged with bundled)
   recipes/           Saved recipes (replayable tool sequences)
-  skills/            User skills (merged with bundled)
+  skills/            User skills (merged with bundled, auto-loaded on triggers)
   tools/             User tools — drop a *.py file with SCHEMA + handle()
   snapshots/         Saved .toe snapshots from snapshot_save
   macros/            User macro templates (merged with the 5 bundled)
+  traces/            Phase 4.1 — per-turn observability JSONL, rotated daily
+    YYYY-MM-DD.jsonl   one record per completed/interrupted turn (30-day retention)
+  history/           Phase 4.3 — full pre-compaction message history
+    <session>.jsonl    one JSON record per compaction event
 ```
 
-Every directory is created lazily on first use. You can copy this whole folder to another machine — your memories, recipes, knowledge, and tools come with you.
+Every directory is created lazily on first use. You can copy this whole folder to another machine — your memories, recipes, knowledge, and tools come with you. (Skip `traces/` and `history/` if you don't want forensic data on the destination — they're regenerated on use.)
 
 ### Sharing external corpora
 
@@ -365,6 +510,32 @@ To dry-validate without registering, ask the agent to call `tool_validate({"path
 
 ---
 
+## Install doctor
+
+`scripts/doctor_live.py` probes the most common "why isn't it working" failure modes against a running standalone. Run it from your project root:
+
+```
+python3 scripts/doctor_live.py             # offline checks only
+python3 scripts/doctor_live.py --deep      # also probe DeepSeek with the saved key
+python3 scripts/doctor_live.py --json      # machine-readable output
+python3 scripts/doctor_live.py --url http://127.0.0.1:9988/   # alt port
+```
+
+Five always-on checks plus one optional deep probe:
+
+| Check | Pass condition | If fail |
+|---|---|---|
+| `webserver_up` | `GET /health` returns 200 | "Drag the .tox out and back in to restart the webserver" |
+| `api_key_set` | `~/.tdpilot-api/config.json` has non-empty `api_key` | "Pulse Save Key on the COMP" |
+| `external_brains` | At least one corpus discoverable (jsonl OR brain.db) | (warn) "Run `npx tdpilot-dpsk4 brains add derivative`" |
+| `memory_dir` | Readable + writable | "Check ownership of `~/.tdpilot-api/memory/`" |
+| `user_tools` | Every `.py` compiles cleanly | Names the offending file + line |
+| `api_key_valid` (`--deep`) | DeepSeek probe ≠ 401 | "Generate a fresh key at platform.deepseek.com" |
+
+Exit code: 0 if no `fail` results, 1 otherwise. `warn` doesn't fail the run. The same registry is callable from the TouchDesigner Textport via `mod('tdpilot_api_extension').get_extension(parent()).OnVerifySetupPulse()` — see [Verify Setup pulse](#verify-setup-pulse) for the in-TD flow.
+
+---
+
 ## Building the .tox from source
 
 Edit the source files in `td_component/`, then rebuild via TD's Textport:
@@ -406,10 +577,15 @@ For CLI typed patch sessions (`td_plan_patch` → `td_preflight_patch` → `td_p
 | Chat panel stuck on "thinking…" | `executor` DAT didn't force-cook | Drop the .tox out and back in. The build script and `onServerStart` both call `executor.cook(force=True)`. |
 | Chat panel blank | webRenderTOP loaded `file://` | Click `Open Chat in Browser` once. Subsequent loads use `http://127.0.0.1:9987/` directly. |
 | WebSocket disconnects | Live-edited a callback DAT | The WS client registry lives in `comp.storage`, so reloads don't drop clients. If they do, click `Reset` in the chat. |
-| `ImportError: tdpilot_api_bm25` (or `_schema_defs`, `_schema_map`) | .tox is older than the source files | Rebuild via the Textport snippet under [Building the .tox from source](#building-the-tox-from-source). |
+| `ImportError: tdpilot_api_bm25` (or `_schema_defs`, `_schema_map`, `_batch`, `_recovery`, `_tracing`, `_compaction`) | .tox is older than the source files | Rebuild via the Textport snippet under [Building the .tox from source](#building-the-tox-from-source). |
 | 401 from DeepSeek | Key not loaded | Paste the key into `Api Key`, click `Save Key to ~/.tdpilot-api/`, then `Reload Config`. |
 | Agent's response is truncated | Hit `Max Tokens` ceiling | Bump `Max Tokens` (max 384000). |
 | `Active Model` always shows `pro` | Model Tier is pinned to pro | Set `Model Tier` to `auto` for cost-saving routing. |
+| Quickstart wizard stuck on a checked step | `/firstrun` poll returned a stale state | Hard-refresh the browser tab (Cmd-Shift-R). The poll runs every 4s while the welcome panel is visible. |
+| Validation hint fires on every turn | Agent IS calling high-severity tools and never validating | This is the intended nudge from Phase 1.3. Add a `td_get_errors` call after mutations OR ignore the hint — it never blocks. |
+| `THREAD CONFLICT` dialog from TD | Worker thread touched a TD global | Check the trace at `~/.tdpilot-api/traces/<today>.jsonl` for the offending tool name; usually a user tool that returned `op()` instead of `str(op)`. |
+| Conversation 400s after ~20 messages | DeepSeek rejected the post-compaction prefix | Check `~/.tdpilot-api/history/<session>.jsonl` exists (compaction archived). If yes, the issue is downstream of compaction — file an issue with the trace + history. As a workaround, set `compaction_threshold: 0` in `config.json` to disable compaction entirely. |
+| `corpus … not installed` despite a `*brain.db` on disk | Corpus dir name doesn't match the brain.db's `meta.brain_id` | Run `python3 scripts/doctor_live.py` — the `external_brains` check lists what's discoverable. Rename the dir to match. |
 
 ### Claude Code CLI
 
