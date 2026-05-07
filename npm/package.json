@@ -1,6 +1,6 @@
 {
   "name": "tdpilot-dpsk4",
-  "version": "1.6.11",
+  "version": "1.6.12",
   "description": "AI copilot for TouchDesigner with live MCP control (DeepSeek v4 optimized) — 103 tools, focus + locations, hint injection, component notes, POPx inspection, knowledge corpus, project lifecycle control, technique memory, typed patch sessions.",
   "keywords": ["touchdesigner", "mcp", "ai", "model-context-protocol", "creative-coding", "deepseek"],
   "author": "dreamrec",

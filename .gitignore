@@ -111,7 +111,7 @@ docs/archive/
 # tests, and runtime readers (see scripts/_chunk_schema_v1.py). Not
 # free-form planning doc — exempt from the docs/ ignore.
 !/docs/CHUNK_SCHEMA.md
-/CHANGELOG.md
+!/CHANGELOG.md
 /CLAUDE.md
 # plugin_README.md is bundled as README.md inside the Claude Code plugin
 # .zip (scripts/build_plugin_zip.py). Keep it tracked — it's functional
