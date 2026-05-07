@@ -193,6 +193,23 @@ def test_build_system_prompt_excludes_volatile_indexes():
     assert "Operating protocol" in prompt
 
 
+def test_system_prompt_includes_trust_tier_rule():
+    """Phase 3.2 — system prompt has a rule about how to weight
+    search hits by trust_tier. The order ladder + the
+    "validate before claiming" instruction must both be present.
+    """
+    from tdpilot_api_runtime import SYSTEM_PROMPT_BASE
+
+    # Trust ordering ladder.
+    assert "official > bundled > personal > community > transcript > experimental" in SYSTEM_PROMPT_BASE
+    # The "validate before claiming behavior is correct" instruction
+    # — wording matters less than the validators it points to.
+    assert "td_get_errors" in SYSTEM_PROMPT_BASE
+    # And the trust_tier field name itself, so the model knows what
+    # to look for on each match.
+    assert "trust_tier" in SYSTEM_PROMPT_BASE
+
+
 def test_build_system_prompt_byte_stable_when_memory_changes(tmp_path, monkeypatch):
     """Saving a memory / knowledge / recipe entry between calls must NOT
     change the system prompt — it now lives in dynamic context.
