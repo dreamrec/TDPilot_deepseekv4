@@ -383,7 +383,7 @@ def build_system_prompt() -> str:
 DYNAMIC_CONTEXT_DELIMITER = "[[TDPILOT_CONTEXT]]"
 
 
-def build_dynamic_context() -> list[dict]:
+def build_dynamic_context(extra_sections: list[str] | None = None) -> list[dict]:
     """Return a list of synthetic messages carrying volatile session state.
 
     Phase 0.1 — these messages are prepended to the conversation history
@@ -397,11 +397,15 @@ def build_dynamic_context() -> list[dict]:
     when the conversation continues.
 
     Collected sections:
+      - ``extra_sections`` (Phase 3.1) — caller-supplied prepended
+        blocks, currently used for triggered-skill bodies the runtime
+        wants to keep active across turns. Listed FIRST so they
+        anchor the model's attention before the volatile indexes.
       - Memory index (``memory_save`` writes invalidate it).
       - Knowledge index (``knowledge_add`` writes invalidate it).
       - Recipes index (``recipe_save`` writes invalidate it).
     """
-    sections: list[str] = []
+    sections: list[str] = list(extra_sections or [])
 
     try:
         from tdpilot_api_memory import get_memory_index_content  # type: ignore[import-not-found]
@@ -495,6 +499,24 @@ class AgentRuntime:
         self._worker: threading.Thread | None = None
         self._lock = threading.Lock()
 
+        # Phase 1.3 — per-turn validation tracking. Worker thread fills
+        # ``_turn_tool_calls`` via the on_tool_result callback; cook
+        # thread reads it at turn end (in the on_turn_done handler) to
+        # decide whether to emit EV_HINT. The list is cleared on every
+        # ``start_turn``. Race is benign: both reads and writes happen
+        # in producer/consumer order around the worker's lifecycle.
+        self._turn_tool_calls: list[str] = []
+
+        # Phase 3.1 — triggered skill bodies, persisted across turns
+        # within this session. Once a skill activates (its trigger
+        # keyword appeared in a user message) its body lives here and
+        # gets prepended to the dynamic context every turn until
+        # ``reset()``. ``dict[name → body]`` so re-triggering the same
+        # skill is a no-op. Initialised BEFORE the first
+        # ``_refresh_dynamic_context`` call below — the refresh reads
+        # from this dict.
+        self._session_skills_activated: dict[str, str] = {}
+
         # Phase 0.1 — dynamic context snapshot. ``build_dynamic_context``
         # touches TD globals (parent().op('kb') for bundled knowledge
         # entries) so it MUST run on the cook thread. We refresh this
@@ -505,14 +527,6 @@ class AgentRuntime:
         # write happens-before its worker-thread reads.
         self._dynamic_context_snapshot: list[dict] = []
         self._refresh_dynamic_context()
-
-        # Phase 1.3 — per-turn validation tracking. Worker thread fills
-        # ``_turn_tool_calls`` via the on_tool_result callback; cook
-        # thread reads it at turn end (in the on_turn_done handler) to
-        # decide whether to emit EV_HINT. The list is cleared on every
-        # ``start_turn``. Race is benign: both reads and writes happen
-        # in producer/consumer order around the worker's lifecycle.
-        self._turn_tool_calls: list[str] = []
 
         self._agent: Agent | None = None
         self._build_agent()
@@ -637,12 +651,75 @@ class AgentRuntime:
         ``__init__`` for the first turn, in ``start_turn`` for every
         subsequent turn) lifts the TD-touching work onto the safe
         thread; the worker reads the resulting list.
+
+        Phase 3.1 — also includes the triggered skill bodies so
+        every turn after activation continues to see them.
         """
+        extra = self._build_active_skills_section()
         try:
-            self._dynamic_context_snapshot = build_dynamic_context()
+            self._dynamic_context_snapshot = build_dynamic_context(
+                extra_sections=([extra] if extra else None)
+            )
         except Exception as exc:  # noqa: BLE001
             print(f"[tdpilot_API/runtime] dynamic context refresh failed: {exc}")
             self._dynamic_context_snapshot = []
+
+    def _build_active_skills_section(self) -> str:
+        """Render the activated-skills block for the dynamic context.
+
+        Returns ``""`` when no skills have triggered yet so the dynamic
+        context stays tight on early turns. Sorted alphabetically by
+        name so the section is byte-deterministic across turns when
+        the activation set is unchanged — that gives DeepSeek's
+        request-level cache a chance to hit on stretches where no
+        new skill activates.
+        """
+        if not self._session_skills_activated:
+            return ""
+        ordered = sorted(self._session_skills_activated.items())
+        bodies = "\n\n".join(f"### Skill: {name}\n\n{body}" for name, body in ordered)
+        return "## Active Skills (auto-loaded by trigger this session)\n\n" + bodies
+
+    # ------------------------------------------------------------------
+    # Phase 3.1 — trigger-based skill loading
+    # ------------------------------------------------------------------
+
+    def _check_skill_triggers(self, user_text: str) -> None:
+        """Scan ``user_text`` for skill triggers; activate matches that
+        haven't fired this session yet. Idempotent — re-triggering an
+        already-active skill is a no-op.
+
+        Cook-thread only. Called from ``start_turn`` before the worker
+        spawns so the activated-skill bodies are visible in the next
+        ``_refresh_dynamic_context`` snapshot.
+        """
+        if not user_text:
+            return
+        try:
+            from tdpilot_api_skills import find_triggered_skills  # type: ignore[import-not-found]
+        except ImportError:
+            return
+        try:
+            matched = find_triggered_skills(user_text)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/runtime] skill-trigger scan failed: {exc}")
+            return
+        for entry in matched:
+            name = entry.get("name")
+            if not name or name in self._session_skills_activated:
+                continue
+            body = (entry.get("text") or "").strip()
+            if not body:
+                continue
+            self._session_skills_activated[name] = body
+            self._push(
+                EV_HINT,
+                {
+                    "kind": "skill_activated",
+                    "name": name,
+                    "message": (f"Auto-loaded skill '{name}' (matched a trigger keyword in your message)."),
+                },
+            )
 
     # ------------------------------------------------------------------
     # Public API used by the COMP extension
@@ -655,6 +732,10 @@ class AgentRuntime:
             return False
         if self._worker is not None and self._worker.is_alive():
             return False
+        # Phase 3.1 — scan user_text for skill-trigger keywords BEFORE
+        # the dynamic-context refresh so the activated-skill bodies
+        # show up in this turn's snapshot.
+        self._check_skill_triggers(user_text)
         # Refresh the dynamic-context snapshot on the cook thread BEFORE
         # the worker thread starts. The worker reads the snapshot inside
         # _call_api; if we let the worker build it instead, every API
@@ -680,6 +761,14 @@ class AgentRuntime:
             self._agent.reset()
         # Make sure no in-flight tool call is left blocking the worker.
         self._cook_dispatcher.cancel_pending()
+        # Phase 3.1 — auto-loaded skills are session-scoped by design.
+        # A reset starts a fresh session, so previously-triggered
+        # skills should NOT carry over into the new conversation.
+        self._session_skills_activated.clear()
+        # Phase 1.3 — same logic for the per-turn validation ledger.
+        self._turn_tool_calls = []
+        # And the dynamic-context snapshot — rebuild from scratch.
+        self._refresh_dynamic_context()
         self._push(EV_STATE, "idle")
 
     def pump_dispatcher(self, max_per_pump: int = 8) -> int:
