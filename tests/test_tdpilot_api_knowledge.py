@@ -367,3 +367,93 @@ def test_corpora_summary_kind_field(tmp_path, monkeypatch):
     assert last_sqlite < first_jsonl, f"sqlite entries must come before jsonl. kinds={kinds}"
     assert "sqlite" in kinds
     assert "jsonl" in kinds
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.2 — every search-tool match dict carries trust_tier.
+# ---------------------------------------------------------------------------
+
+
+def test_handle_knowledge_search_sqlite_matches_carry_trust_tier(monkeypatch, tmp_path):
+    """SQLite-backed corpora flow trust_tier from the brain meta into
+    each match dict. Phase 3.2 lets the agent weight results.
+    """
+    monkeypatch.setattr(kb, "_corpus_cache", {})
+    monkeypatch.setattr(kb, "_corpus_mtime", {})
+    monkeypatch.setattr(kb, "_brain_meta_cache", {})
+    monkeypatch.setattr(kb, "_brain_meta_mtime", {})
+
+    root = tmp_path / "data" / "normalized"
+    sqlite_dir = root / "derivative"
+    sqlite_dir.mkdir(parents=True)
+    _build_v1_brain(
+        sqlite_dir / "docsbrain.db",
+        "derivative",
+        _make_chunks(3),
+        trust_tier="official",
+    )
+    monkeypatch.setattr(kb, "_EXTERNAL_CORPORA_ROOTS", (root,))
+
+    out = kb.handle_knowledge_search({"query": "noise", "top_k": 3})
+    assert out["ok"] is True
+    assert out["matches"], "no matches returned from seeded brain"
+    for m in out["matches"]:
+        assert "trust_tier" in m, f"match missing trust_tier: {m}"
+        assert m["trust_tier"] == "official"
+        # Other Phase 3.2 metadata that helps the agent attribute hits
+        # to the right corpus.
+        assert "corpus" in m
+        assert "url" in m
+
+
+def test_handle_knowledge_search_jsonl_matches_default_trust_tier(monkeypatch, tmp_path):
+    """JSONL-backed corpora pre-date the meta table so they can't
+    declare a trust tier. Default to "bundled" — the runtime never
+    sees None.
+    """
+    monkeypatch.setattr(kb, "_corpus_cache", {})
+    monkeypatch.setattr(kb, "_corpus_mtime", {})
+
+    root = tmp_path / "data" / "normalized"
+    corpus_dir = root / "popx"
+    corpus_dir.mkdir(parents=True)
+    pages = corpus_dir / "pages.jsonl"
+    pages.write_text(
+        json.dumps({"page_id": "noisetop", "title": "noiseTOP", "text": "Generates noise textures."}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kb, "_EXTERNAL_CORPORA_ROOTS", (root,))
+
+    out = kb.handle_knowledge_search({"query": "noise"})
+    assert out["matches"]
+    for m in out["matches"]:
+        assert m.get("trust_tier") == "bundled"
+
+
+def test_handle_knowledge_get_carries_trust_tier(monkeypatch, tmp_path):
+    """The full-content getter must also return trust_tier so the
+    agent can decide whether to validate downstream claims."""
+    monkeypatch.setattr(kb, "_corpus_cache", {})
+    monkeypatch.setattr(kb, "_corpus_mtime", {})
+    monkeypatch.setattr(kb, "_brain_meta_cache", {})
+    monkeypatch.setattr(kb, "_brain_meta_mtime", {})
+
+    root = tmp_path / "data" / "normalized"
+    sqlite_dir = root / "derivative"
+    sqlite_dir.mkdir(parents=True)
+    _build_v1_brain(
+        sqlite_dir / "docsbrain.db",
+        "derivative",
+        _make_chunks(2),
+        trust_tier="official",
+    )
+    monkeypatch.setattr(kb, "_EXTERNAL_CORPORA_ROOTS", (root,))
+
+    # Find a chunk via search, then fetch its full content by chunk_id.
+    search = kb.handle_knowledge_search({"query": "noise", "top_k": 1})
+    assert search["matches"], "no search hits"
+    chunk_id = search["matches"][0]["chunk_id"]
+
+    got = kb.handle_knowledge_get({"name": chunk_id})
+    assert got["ok"] is True
+    assert got.get("trust_tier") == "official"
