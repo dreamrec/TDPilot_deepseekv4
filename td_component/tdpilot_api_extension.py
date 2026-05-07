@@ -113,6 +113,7 @@ class TDPilotAPIExt:
             "tdpilot_api_introspect",
             "tdpilot_api_batch",
             "tdpilot_api_recovery",
+            "tdpilot_api_tracing",
             "mcp_webserver_callbacks",
         ):
             child = self.owner.op(name)
@@ -208,6 +209,7 @@ class TDPilotAPIExt:
                 ("tdpilot_api_td2025", "td2025_native"),
                 ("tdpilot_api_introspect", "introspect"),
                 ("tdpilot_api_batch", "tool_batch"),
+                ("tdpilot_api_tracing", "tracing"),
             ):
                 dat = self.owner.op(mod_name)
                 if dat is not None:

@@ -26,6 +26,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from queue import Empty, Queue
 from typing import Any
 
@@ -526,6 +527,15 @@ class AgentRuntime:
         # having to spend a tool round-trip on it.
         self._pre_retrieval_enabled: bool = bool(self._config.get("pre_retrieval", True))
 
+        # Phase 4.1 — per-turn observability traces. Records turn
+        # timing + every tool call's name/args_hash/latency/ok into
+        # ~/.tdpilot-api/traces/<YYYY-MM-DD>.jsonl. Async writer so
+        # the cook thread never blocks. Disable via
+        # ``config["trace_logging"] = False``.
+        self._tool_call_starts: dict[str, float] = {}
+        self._trace_dir_override: Path | None = self._config.get("traces_dir")  # type: ignore[assignment]
+        self._tracer = self._build_tracer()
+
         # Phase 0.1 — dynamic context snapshot. ``build_dynamic_context``
         # touches TD globals (parent().op('kb') for bundled knowledge
         # entries) so it MUST run on the cook thread. We refresh this
@@ -575,25 +585,124 @@ class AgentRuntime:
             model_tier=cfg.get("model_tier", "auto"),
             flash_model=cfg.get("flash_model", "deepseek-v4-flash"),
             on_text=lambda s: self._push(EV_TEXT, s),
-            on_tool_call=lambda n, a: self._push(EV_TOOL_CALL, {"name": n, "args": a}),
+            on_tool_call=lambda n, a: (
+                self._trace_tool_started(n, a),
+                self._push(EV_TOOL_CALL, {"name": n, "args": a}),
+            ),
             on_tool_result=lambda n, r, e: (
                 self._record_tool_call(n, e),
+                self._trace_record_tool(n, r, e),
                 self._push(EV_TOOL_RESULT, {"name": n, "result": r, "is_error": e}),
             ),
             on_turn_done=lambda s: (
                 self._maybe_emit_validation_hint(),
+                self._trace_end_turn("done"),
                 self._push(EV_DONE, s),
                 self._push(EV_STATE, "idle"),
             ),
             on_error=lambda exc: (
+                self._trace_end_turn("error"),
                 self._push(EV_ERROR, redact(f"{type(exc).__name__}: {exc}")),
                 self._push(EV_STATE, "idle"),
             ),
             # Surface routed model so the COMP Status param can show
             # `model: flash · thinking…` etc. Goes through the same event
             # queue + drain → extension wires this to a Status line.
-            on_model_change=lambda tier, picked: self._push(EV_MODEL, {"tier": tier, "model": picked}),
+            on_model_change=lambda tier, picked: (
+                self._trace_update_model(tier, picked),
+                self._push(EV_MODEL, {"tier": tier, "model": picked}),
+            ),
         )
+
+    # ------------------------------------------------------------------
+    # Phase 4.1 — observability tracer
+    # ------------------------------------------------------------------
+
+    def _build_tracer(self) -> Any:
+        """Construct the per-runtime Tracer. Returns ``None`` when the
+        tracing module is unavailable (older .tox builds) or when
+        ``config["trace_logging"]`` is False — both paths degrade
+        gracefully so trace consumers never crash a session.
+        """
+        enabled = bool(self._config.get("trace_logging", True))
+        try:
+            import tdpilot_api_tracing as tracing_mod  # type: ignore[import-not-found]
+        except ImportError:
+            return None
+        try:
+            return tracing_mod.Tracer(
+                traces_dir=self._trace_dir_override,
+                enabled=enabled,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/runtime] tracer init failed: {exc}")
+            return None
+
+    def _trace_tool_started(self, name: str, args: dict) -> None:
+        """Mark a tool-call start so the matching on_tool_result can
+        compute latency. Keyed by name; consecutive calls of the same
+        tool in one turn (rare — the tool-use loop is sequential)
+        overwrite the prior start time. Latency is best-effort.
+        """
+        if self._tracer is None:
+            return
+        # Store (start_monotonic, args) so the matching record can
+        # call ``record_tool`` with the original arg hash.
+        self._tool_call_starts[name] = (time.monotonic(), args)  # type: ignore[assignment]
+
+    def _trace_start_turn(self, user_text: str) -> None:
+        """Open a tracer turn record. No-op if tracing disabled."""
+        if self._tracer is None:
+            return
+        try:
+            tier = self._config.get("model_tier", "auto") or "auto"
+            self._tracer.start_turn(user_text or "", model_tier=str(tier))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/runtime] tracer.start_turn failed: {exc}")
+
+    def _trace_end_turn(self, outcome: str) -> None:
+        """Close the active tracer turn. Called from the worker thread
+        via the on_turn_done / on_error callbacks. Re-entrant safe.
+        """
+        if self._tracer is None:
+            return
+        try:
+            self._tracer.end_turn(outcome)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/runtime] tracer.end_turn failed: {exc}")
+        # Wipe any straggling tool-start markers from this turn.
+        self._tool_call_starts.clear()
+
+    def _trace_update_model(self, tier: str, picked: str) -> None:
+        if self._tracer is None:
+            return
+        try:
+            self._tracer.update_model(model_tier=tier or "", model_used=picked or "")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/runtime] tracer.update_model failed: {exc}")
+
+    def _trace_record_tool(self, name: str, _result: Any, is_error: bool) -> None:
+        """Record one tool-call's outcome on the active turn. Called
+        from the worker via on_tool_result.
+        """
+        if self._tracer is None:
+            return
+        entry = self._tool_call_starts.pop(name, None)
+        if entry is None:
+            started, args = time.monotonic(), {}
+        else:
+            started, args = entry  # type: ignore[misc]
+        latency_ms = int((time.monotonic() - started) * 1000)
+        try:
+            self._tracer.record_tool(
+                name,
+                args=args,
+                latency_ms=latency_ms,
+                ok=not is_error,
+                error=None if not is_error else "tool returned error",
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/runtime] tracer.record_tool failed: {exc}")
 
     def reload_config(self) -> None:
         """Re-read API key and settings (e.g. after the user pastes a new key)."""
@@ -861,6 +970,12 @@ class AgentRuntime:
         # Phase 1.3 — clear the per-turn tool-call ledger so the
         # validation-hint check at turn end only considers THIS turn.
         self._turn_tool_calls = []
+        # Phase 4.1 — open a tracer turn record. Must come AFTER
+        # _check_skill_triggers / _refresh_dynamic_context so the
+        # turn-record's session_id is current; must come BEFORE
+        # add_user_message so the timing ts isn't skewed by the
+        # message-append cost.
+        self._trace_start_turn(user_text)
         self._agent.add_user_message(user_text)
         self._push(EV_STATE, "thinking")
         self._worker = threading.Thread(target=self._run_safe, name="tdpilot_api_agent", daemon=True)

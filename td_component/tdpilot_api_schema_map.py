@@ -202,4 +202,6 @@ TOOL_TO_HANDLER: dict[str, tuple[str, Callable[[dict], dict]]] = {
     "td_get_capabilities": ("handle_get_capabilities", _id),
     # ---- Tool batch (Phase 2.1 — handler in tdpilot_api_batch.py) ----
     "tool_batch": ("handle_tool_batch", _id),
+    # ---- Observability traces (Phase 4.1 — handler in tdpilot_api_tracing.py) ----
+    "td_get_recent_traces": ("handle_get_recent_traces", _id),
 }

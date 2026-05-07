@@ -1755,6 +1755,33 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
+        "name": "td_get_recent_traces",
+        "description": (
+            "Return the most recent per-turn observability traces "
+            "written to ~/.tdpilot-api/traces/. Each trace is a dict "
+            "with ts, session_id, turn_id, user_text_hash, model_tier, "
+            "model_used, total_tokens, tool_calls (list of {name, "
+            "args_hash, latency_ms, ok, error}), outcome, "
+            "duration_ms. User text and tool args are hashed (12-char "
+            "SHA-256 prefix) so the file never holds raw prompt "
+            "content. Use this for debugging behaviour regressions, "
+            "or as input to eval scripts."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max records to return, newest first. Default 10, max 200.",
+                    "default": 10,
+                    "minimum": 1,
+                    "maximum": 200,
+                }
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "td_get_capabilities",
         "description": (
             "Report which features are wired in this build of the "
