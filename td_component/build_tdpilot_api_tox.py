@@ -202,6 +202,7 @@ _SOURCE_FILES = (
     ("tdpilot_api_batch", "textDAT", "td_component/tdpilot_api_batch.py"),
     ("tdpilot_api_recovery", "textDAT", "td_component/tdpilot_api_recovery.py"),
     ("tdpilot_api_tracing", "textDAT", "td_component/tdpilot_api_tracing.py"),
+    ("tdpilot_api_compaction", "textDAT", "td_component/tdpilot_api_compaction.py"),
     ("tdpilot_api_chat_html", "textDAT", "td_component/tdpilot_api_chat.html"),
     ("tdpilot_api_web_callbacks", "textDAT", "td_component/tdpilot_api_web_callbacks.py"),
     ("mcp_webserver_callbacks", "textDAT", "td_component/mcp_webserver_callbacks.py"),
