@@ -1,5 +1,94 @@
 # Changelog
 
+## 1.6.13 - 2026-05-07
+
+**Audit hotfix.** Five findings from the post-1.6.12 cold-pass review,
+all on the standalone runtime. CLI variant (`tdpilot-dpsk4`) is
+untouched at the source level; this release rebuilds its .tox solely
+to refresh `API_VERSION` baked into the binary.
+
+### [P1] Reset no longer races against an in-flight worker
+
+`Agent.reset()` used to clear `_stop_flag` unconditionally. If a
+worker thread was still running a turn, the freshly-cleared flag let
+it keep going on a now-empty history — appending stale tool_result
+blocks and potentially making a fresh API call against the cleared
+session.
+
+Post-fix:
+  - `Agent.reset()` clears `messages` only. Stop flag stays set.
+  - New `Agent.clear_stop()` lifts cancellation explicitly — only
+    safe to call after the previous worker has been joined.
+  - `AgentRuntime.reset()` reorders: signal stop → cancel pending
+    cook calls → join the worker (2s grace) → THEN mutate state →
+    finally `clear_stop()`.
+
+### [P1] Compaction no longer orphans tool_result blocks
+
+The compactor's slice point could land inside a tool chain — the
+retained slice would start with a user `tool_result` block whose
+matching assistant `tool_use` was archived. Anthropic-format APIs
+reject that with `messages.0: tool_result block without matching
+tool_use`, so long sessions could 400 exactly when compaction was
+supposed to save them.
+
+Post-fix: `compact()` advances the cut forward past every leading
+`tool_result` so the retained slice starts on a clean boundary. The
+retained slice may end up smaller than `keep_recent` — by design;
+an unsendable history is worse than a slightly smaller one. New
+helper `_starts_with_tool_result(message)` makes the predicate
+testable.
+
+### [P2] Stop pulse no longer leaves worker blocked
+
+`AgentRuntime.stop()` used to set the agent stop flag and push idle.
+But if the worker was blocked inside `CookThreadDispatcher.__call__`
+waiting for a pump, it wouldn't see the flag until the next API call
+(or the 60s timeout). The UI reported idle while `start_turn()`
+still refused new work because the old thread was alive.
+
+Post-fix: `stop()` cancels pending cook calls (waking any blocked
+worker immediately) AND waits up to 2s for the worker to actually
+exit before pushing idle.
+
+### [P2] `tool_batch` sub-calls feed into the severity ledger
+
+The validation-hint system (Phase 1.3) tracked `_turn_tool_calls`
+based on the top-level tool name the agent invoked. When the agent
+called `tool_batch`, the tracker only saw `tool_batch` (severity=low)
+— sub-calls like `td_create_node` or `td_exec_python` hidden inside
+the batch escaped the high-severity hint system entirely.
+
+Post-fix: `_record_tool_call` now peeks inside `tool_batch` results
+and feeds each successful sub-call's name into the ledger. Failed
+sub-calls are skipped (mirrors the top-level "errors don't count"
+rule). A batched `td_create_node` without a follow-up validator now
+fires the same `EV_HINT` a non-batched call would.
+
+### [P3] README title bumped to 1.6.13
+
+The 1.6.12 release left the H1 in `README.md` reading
+`# TDPilot — DeepSeek v4 · v1.6.11` — `check_versions.py` doesn't
+match that pattern, so it slipped past the lockstep enforcer.
+
+### Tests
+
+9 new regression tests covering reset/stop/compaction/severity:
+  - `test_agent_reset_does_not_clear_stop_flag`
+  - `test_runtime_reset_joins_worker_before_clearing_history`
+  - `test_runtime_stop_cancels_pending_dispatcher_calls`
+  - `test_record_tool_call_flattens_tool_batch_subcalls`
+  - `test_validation_hint_fires_for_batched_high_severity`
+  - `test_compact_returns_synthetic_plus_smaller_recent_when_boundary_repaired`
+  - `test_compact_advances_past_multiple_tool_results`
+  - `test_compact_handles_pathological_all_tool_results`
+  - `test_starts_with_tool_result_helper`
+
+Pytest 1132 passing (up from 1122). Lints + format + version drift +
+sync_counts + personal-path checks all clean.
+
+---
+
 ## 1.6.12 - 2026-05-07
 
 **Standalone runtime overhaul.** The "agent with a big prompt → small runtime

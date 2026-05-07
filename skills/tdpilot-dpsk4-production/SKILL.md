@@ -1,13 +1,13 @@
 ---
 name: tdpilot-dpsk4-production
 description: >
-  Production-grade TouchDesigner MCP workflow for TDPilot DPSK4 v1.6.12 (DeepSeek v4 optimized, 103 tools):
+  Production-grade TouchDesigner MCP workflow for TDPilot DPSK4 v1.6.13 (DeepSeek v4 optimized, 103 tools):
   staged edits with undo blocks, rollback safety via snapshots, token-efficient
   diagnostics, strict completion gates. For core patching discipline (layout, error checking,
   parameter authoring, POP inspection, technique memory), see tdpilot-dpsk4-core.
 ---
 
-# TDPilot DPSK4 Production v1.6.12
+# TDPilot DPSK4 Production v1.6.13
 
 ## Use This Skill When
 - The user asks for reliable, production-safe network edits.

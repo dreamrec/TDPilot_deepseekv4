@@ -1082,3 +1082,215 @@ def test_system_prompt_is_unchanged_by_mid_session_memory_save(monkeypatch, tmp_
     # one captured at construction.
     after = rt._agent.system_prompt  # type: ignore[union-attr]
     assert before == after
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.6.13 — audit findings
+# ---------------------------------------------------------------------------
+
+
+def test_agent_reset_does_not_clear_stop_flag():
+    """Audit P1 — Agent.reset() used to clear _stop_flag. If a worker
+    was still running, the freshly-cleared flag let it keep going on
+    a now-empty history. Post-fix: reset() leaves _stop_flag alone;
+    callers (AgentRuntime.reset) join the worker first, then clear
+    the flag explicitly via Agent.clear_stop().
+    """
+    from tdpilot_api_agent import Agent
+
+    a = Agent(api_key="sk", dispatcher=lambda *_: None)
+    a.add_user_message("x")
+    a.stop()
+    assert a._stop_flag.is_set()
+    a.reset()
+    assert a.messages == []
+    assert a._stop_flag.is_set(), "reset() must NOT silently clear stop"
+    a.clear_stop()
+    assert not a._stop_flag.is_set()
+
+
+def test_runtime_reset_joins_worker_before_clearing_history(monkeypatch):
+    """Audit P1 — runtime.reset() must call worker.join() with the
+    stop flag SET before mutating session state.
+    """
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+
+    rt = AgentRuntime(
+        dispatcher=lambda *a: {"ok": True},
+        tools=[],
+        config={
+            "model": "x",
+            "base_url": "http://x",
+            "max_tokens": 10,
+            "turn_budget": 1,
+            "temperature": 0,
+            "trace_logging": False,
+            "pre_retrieval": False,
+            "compaction_threshold": 0,
+        },
+    )
+
+    join_called = {"yes": False, "stop_was_set": None}
+
+    class _FakeWorker:
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            join_called["yes"] = True
+            join_called["stop_was_set"] = rt._agent._stop_flag.is_set()  # type: ignore[union-attr]
+
+    rt._worker = _FakeWorker()  # type: ignore[assignment]
+    rt._agent.add_user_message("user msg")  # type: ignore[union-attr]
+
+    rt.reset()
+
+    assert join_called["yes"], "reset() must call worker.join()"
+    assert join_called["stop_was_set"] is True, "stop must be set BEFORE join"
+    assert rt._agent.messages == []  # type: ignore[union-attr]
+    assert not rt._agent._stop_flag.is_set()  # type: ignore[union-attr]
+
+
+def test_runtime_stop_cancels_pending_dispatcher_calls(monkeypatch):
+    """Audit P2 — stop() used to set the agent flag and push idle
+    without waking workers blocked inside CookThreadDispatcher.
+    Post-fix: stop() also cancels pending cook calls.
+    """
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+
+    rt = AgentRuntime(
+        dispatcher=lambda *a: {"ok": True},
+        tools=[],
+        config={
+            "model": "x",
+            "base_url": "http://x",
+            "max_tokens": 10,
+            "turn_budget": 1,
+            "temperature": 0,
+            "trace_logging": False,
+            "pre_retrieval": False,
+            "compaction_threshold": 0,
+        },
+    )
+
+    cancel_calls = {"n": 0}
+    real_cancel = rt._cook_dispatcher.cancel_pending
+
+    def tracking_cancel():
+        cancel_calls["n"] += 1
+        real_cancel()
+
+    monkeypatch.setattr(rt._cook_dispatcher, "cancel_pending", tracking_cancel)
+    rt.stop()
+    assert cancel_calls["n"] == 1, "stop() must cancel pending cook calls"
+    assert rt._agent._stop_flag.is_set()  # type: ignore[union-attr]
+
+
+def test_record_tool_call_flattens_tool_batch_subcalls(monkeypatch):
+    """Audit P2 — _record_tool_call now peeks inside tool_batch
+    results and feeds each successful sub-call's name into the
+    severity ledger. Pre-fix, a batched td_create_node was invisible
+    to the validation hint system.
+    """
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+
+    rt = AgentRuntime(
+        dispatcher=lambda *a: {"ok": True},
+        tools=[],
+        config={
+            "model": "x",
+            "base_url": "http://x",
+            "max_tokens": 10,
+            "turn_budget": 1,
+            "temperature": 0,
+            "trace_logging": False,
+            "pre_retrieval": False,
+            "compaction_threshold": 0,
+        },
+    )
+    rt._turn_tool_calls = []
+
+    batch_result = {
+        "ok": True,
+        "count": 3,
+        "results": [
+            {"tool": "td_get_info", "ok": True, "result": {"fps": 60}},
+            {"tool": "td_create_node", "ok": True, "result": {"path": "/p1/n1"}},
+            {"tool": "td_exec_python", "ok": True, "result": {"out": ""}},
+        ],
+    }
+    rt._record_tool_call("tool_batch", is_error=False, result=batch_result)
+    assert rt._turn_tool_calls == ["td_get_info", "td_create_node", "td_exec_python"]
+
+    # Failed sub-calls are skipped (they didn't actually mutate state).
+    rt._turn_tool_calls = []
+    rt._record_tool_call(
+        "tool_batch",
+        is_error=False,
+        result={
+            "ok": True,
+            "results": [
+                {"tool": "td_create_node", "ok": False, "error": "Unknown op type"},
+                {"tool": "td_get_info", "ok": True, "result": {"fps": 60}},
+            ],
+        },
+    )
+    assert rt._turn_tool_calls == ["td_get_info"]
+
+
+def test_validation_hint_fires_for_batched_high_severity(monkeypatch):
+    """Audit P2 end-to-end — a tool_batch containing td_create_node
+    (no validator) must fire EV_HINT just like a non-batched call.
+    """
+    from queue import Empty
+
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import EV_HINT, AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+
+    rt = AgentRuntime(
+        dispatcher=lambda *a: {"ok": True},
+        tools=[],
+        config={
+            "model": "x",
+            "base_url": "http://x",
+            "max_tokens": 10,
+            "turn_budget": 1,
+            "temperature": 0,
+            "trace_logging": False,
+            "pre_retrieval": False,
+            "compaction_threshold": 0,
+        },
+    )
+    rt._turn_tool_calls = []
+    rt._record_tool_call(
+        "tool_batch",
+        is_error=False,
+        result={
+            "ok": True,
+            "results": [
+                {"tool": "td_create_node", "ok": True, "result": {"path": "/x"}},
+            ],
+        },
+    )
+    rt._maybe_emit_validation_hint()
+
+    events = []
+    while True:
+        try:
+            events.append(rt._events.get_nowait())
+        except Empty:
+            break
+    assert any(k == EV_HINT for k, _ in events), (
+        "tool_batch with high-severity sub-calls and no validator must fire the hint"
+    )

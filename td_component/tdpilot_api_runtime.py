@@ -605,7 +605,7 @@ class AgentRuntime:
                 self._push(EV_TOOL_CALL, {"name": n, "args": a}),
             ),
             on_tool_result=lambda n, r, e: (
-                self._record_tool_call(n, e),
+                self._record_tool_call(n, e, r),
                 self._trace_record_tool(n, r, e),
                 self._push(EV_TOOL_RESULT, {"name": n, "result": r, "is_error": e}),
             ),
@@ -770,13 +770,35 @@ class AgentRuntime:
     # Phase 1.3 — severity-tracked validation hints
     # ------------------------------------------------------------------
 
-    def _record_tool_call(self, name: str, is_error: bool) -> None:
+    def _record_tool_call(self, name: str, is_error: bool, result: Any = None) -> None:
         """Hook called from the worker thread (on_tool_result) for every
         tool the agent invokes. Failed calls don't count — the model
         already saw the error and hasn't actually mutated state.
+
+        Phase 1.6.13 fix — when the agent calls ``tool_batch``, this
+        hook used to see only the literal ``tool_batch`` name, which
+        is severity=low. Sub-calls hidden inside the batch (including
+        high-severity mutations like ``td_create_node`` or
+        ``td_exec_python``) escaped the validation-hint system. We
+        now flatten the batch's per-call results into the ledger so
+        the severity tally reflects what was ACTUALLY executed.
         """
-        if not is_error:
-            self._turn_tool_calls.append(name)
+        if is_error:
+            return
+        if name == "tool_batch" and isinstance(result, dict):
+            for sub in result.get("results", []) or []:
+                if not isinstance(sub, dict):
+                    continue
+                sub_name = sub.get("tool")
+                if not isinstance(sub_name, str) or not sub_name:
+                    continue
+                # Mirror the top-level "errors don't count" rule:
+                # a sub-call that returned an error didn't mutate.
+                if not sub.get("ok", False):
+                    continue
+                self._turn_tool_calls.append(sub_name)
+            return
+        self._turn_tool_calls.append(name)
 
     def _maybe_emit_validation_hint(self) -> None:
         """Inspect the just-finished turn's tool-call list. If any
@@ -1031,16 +1053,69 @@ class AgentRuntime:
         self._worker.start()
         return True
 
+    # Cook-thread-side worker join timeout. Long enough that a real
+    # in-flight DeepSeek call has a chance to wrap, short enough that
+    # the user pulsing Stop doesn't think the COMP is hung.
+    _STOP_JOIN_TIMEOUT = 2.0
+
     def stop(self) -> None:
+        """Cooperative cancellation. Sets the agent stop flag, cancels
+        any pending cook-thread tool calls so the worker isn't stuck
+        on a CookThreadDispatcher.__call__ wait, and only reports
+        idle once the worker has actually exited (with a 2s grace).
+
+        Phase 1.6.13 fix — pre-fix the audit caught that stop() set
+        the flag and pushed idle, but if the worker was blocked
+        inside CookThreadDispatcher waiting for a pump, it would not
+        see the flag until the next API call between tool calls.
+        Cancelling pending cook calls wakes the worker immediately;
+        the join lets the UI accurately reflect "actually stopped"
+        instead of "told to stop".
+        """
         if self._agent is not None:
             self._agent.stop()
+        # Wake any worker blocked inside CookThreadDispatcher.__call__.
+        self._cook_dispatcher.cancel_pending()
+        # Wait for the worker to actually exit. Best effort — if it
+        # doesn't exit within the grace window we still report idle
+        # (the daemon flag means the process can shut down regardless).
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=self._STOP_JOIN_TIMEOUT)
         self._push(EV_STATE, "idle")
 
     def reset(self) -> None:
+        """Clear the conversation and prep for a fresh session.
+
+        Order matters:
+          1. Set agent stop flag and cancel pending cook-thread
+             dispatch so the worker exits.
+          2. Wait (best-effort) for the worker to finish. After this
+             window, the old worker's events still in the queue can
+             arrive late but won't drive new API calls — the worker
+             checks the stop flag on every loop iteration.
+          3. THEN clear messages and reset per-session ledgers. Pre-
+             fix the audit caught that we'd reset history while a
+             worker was still alive — the worker could keep going,
+             append stale tool_results, and even start a new API
+             call against the now-empty history.
+        """
+        # 1. Signal cancellation + wake any blocked worker.
+        if self._agent is not None:
+            self._agent.stop()
+        self._cook_dispatcher.cancel_pending()
+
+        # 2. Wait for the worker to exit before mutating state.
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=self._STOP_JOIN_TIMEOUT)
+
+        # 3. Now safe to clear state. Agent.reset() clears messages but
+        # NOT the stop flag — clear_stop() lifts the cancellation only
+        # AFTER the old worker has been joined (or its grace expired).
         if self._agent is not None:
             self._agent.reset()
-        # Make sure no in-flight tool call is left blocking the worker.
-        self._cook_dispatcher.cancel_pending()
+            self._agent.clear_stop()
         # Phase 4.1 — close any open tracer turn record so an
         # interrupted turn (reset() called mid-flight) still gets
         # written to disk with outcome="interrupted" instead of
