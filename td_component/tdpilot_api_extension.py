@@ -112,6 +112,7 @@ class TDPilotAPIExt:
             "tdpilot_api_td2025",
             "tdpilot_api_introspect",
             "tdpilot_api_batch",
+            "tdpilot_api_recovery",
             "mcp_webserver_callbacks",
         ):
             child = self.owner.op(name)

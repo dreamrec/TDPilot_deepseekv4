@@ -1,0 +1,176 @@
+"""TDPilot API — failure recovery hints (Phase 2.3).
+
+When a tool returns ``{"error": ...}`` whose message matches a known
+pattern, this module annotates the result with an actionable
+``recovery_hint`` field. The dispatcher calls
+:func:`attach_hint` on every error result before handing it back to
+the agent loop. The agent sees the hint alongside the error and can
+route differently on the next turn instead of retrying the same
+failed call three times in a row.
+
+Design rules for adding new patterns:
+
+  - **Narrow matches only.** Each regex must be specific enough that
+    a false positive is unlikely. Wide patterns (``r"error"``) are
+    rejected — they'd attach hints to unrelated failures.
+  - **One hint per pattern.** The first matching pattern wins;
+    subsequent matches are skipped. Order patterns from most-specific
+    to least-specific.
+  - **Hints reference tool names the agent can actually call.** The
+    point is to nudge the agent to a concrete next step, not to
+    explain in prose why the call failed.
+  - **Never crash on bad input.** A non-string ``error`` field, a
+    None result, an unparseable regex — all degrade to "no hint
+    attached" and let the bare error pass through.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+# Each entry: (compiled regex, hint string).
+#
+# Patterns match against the error MESSAGE text only. They do NOT
+# match against ``traceback`` (stack-trace internals are noisy and
+# not what the agent should react to).
+#
+# Pattern catalog — keep narrow. Add new ones at the END so existing
+# narrow matches keep their priority.
+_RECOVERY_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"Unknown operator type|Cannot create operator", re.IGNORECASE),
+        (
+            "Operator type wasn't recognised. Call td_list_families to discover "
+            "valid op types in that family, or td_search_official_docs to find "
+            "the correct camelCase spelling (e.g. 'noiseTOP' not 'noise')."
+        ),
+    ),
+    (
+        re.compile(r"\b401\b|Unauthorized|API key invalid|API key.*missing", re.IGNORECASE),
+        (
+            "DeepSeek rejected the API key. Paste your key into the COMP's API "
+            "Key parameter and pulse Save Key to ~/.tdpilot-api/, then try again."
+        ),
+    ),
+    (
+        re.compile(
+            r"Path not found|No node at path|No (op|operator) (found )?at|"
+            r"path .* does not exist",
+            re.IGNORECASE,
+        ),
+        (
+            "The path doesn't resolve. Call td_get_nodes(path='/parent_path') to "
+            "list children of the parent COMP — the node may have been renamed "
+            "or never created."
+        ),
+    ),
+    (
+        re.compile(r"THREAD CONFLICT|thread conflict|outside the main thread", re.IGNORECASE),
+        (
+            "Tool touched TD globals from a non-cook thread. Don't return raw "
+            "op() / parent() references from td_exec_python — stringify them "
+            "first (str(op('/path'))) or just return the path."
+        ),
+    ),
+    (
+        re.compile(r"corpus.*not installed|isn't installed locally|brain.db.*not found", re.IGNORECASE),
+        (
+            "The named corpus isn't on disk. Run "
+            "`npx tdpilot-dpsk4 brains add <corpus>` to install it under "
+            "~/.tdpilot/data/normalized/, OR drop a pages.jsonl into that dir "
+            "yourself for an ad-hoc corpus."
+        ),
+    ),
+    (
+        re.compile(r"recipe.*invalid|unknown tool.*replay|Step missing tool name", re.IGNORECASE),
+        (
+            "Recipe step references a tool not in TOOL_TO_HANDLER. Run "
+            "td_validate_recipe(replay=...) before saving — it lists every "
+            "unknown name. Common cause: a typo in the tool field or a "
+            "tool that was renamed between TDPilot versions."
+        ),
+    ),
+    (
+        re.compile(r"malformed MATCH expression|fts5: syntax error", re.IGNORECASE),
+        (
+            "FTS5 query had special characters that broke the parser. The "
+            "search layer normally sanitises these — if you're seeing this "
+            "directly, retry with simple alphanumeric terms."
+        ),
+    ),
+    (
+        re.compile(r"Module .* (not found|missing)|No module named", re.IGNORECASE),
+        (
+            "An expected textDAT child of the COMP is absent. Check the COMP's "
+            "children — common cause is a stale .tox built before a new "
+            "module was added. Rebuilding tdpilot_API.tox usually fixes this."
+        ),
+    ),
+    (
+        re.compile(r"Permission denied|read-only file system|EACCES", re.IGNORECASE),
+        (
+            "Filesystem permission error. The default state dir is "
+            "~/.tdpilot-api/ — verify it exists and is writable by the "
+            "TouchDesigner process owner."
+        ),
+    ),
+    (
+        re.compile(r"timed out|TimeoutError", re.IGNORECASE),
+        (
+            "Tool exceeded its time budget. Cook-thread tools have a 60s "
+            "default; slow operations like td_screenshot can hit this on a "
+            "stalled cook. Stop the agent (pulse Stop), then try a narrower "
+            "query or check Cooking Info for stuck operators."
+        ),
+    ),
+)
+
+
+def attach_hint(result: Any) -> Any:
+    """If ``result`` is an error dict with a recognised pattern, return
+    a new dict that carries an additional ``recovery_hint`` field.
+
+    Non-error results pass through unchanged. So do error results
+    whose message doesn't match any pattern. The function never
+    raises — bad input degrades silently to the original result.
+    """
+    if not isinstance(result, dict):
+        return result
+    err = result.get("error")
+    if not isinstance(err, str) or not err:
+        return result
+    if "recovery_hint" in result:
+        # Caller already provided a hint — respect it.
+        return result
+    for pattern, hint in _RECOVERY_HINTS:
+        try:
+            if pattern.search(err):
+                enriched = dict(result)
+                enriched["recovery_hint"] = hint
+                return enriched
+        except Exception:
+            # Defensive — a bad regex or re-engine hiccup must not
+            # take down a tool result.
+            continue
+    return result
+
+
+def hint_for_message(message: str) -> str | None:
+    """Convenience for callers that want to look up the hint without
+    wrapping a full result dict (useful in tests + UX surfaces).
+    """
+    if not isinstance(message, str) or not message:
+        return None
+    for pattern, hint in _RECOVERY_HINTS:
+        if pattern.search(message):
+            return hint
+    return None
+
+
+def registered_patterns() -> tuple[str, ...]:
+    """Return the source pattern strings, in registration order.
+
+    Used by docs / introspection / tests to enumerate what's covered.
+    """
+    return tuple(p.pattern for p, _ in _RECOVERY_HINTS)

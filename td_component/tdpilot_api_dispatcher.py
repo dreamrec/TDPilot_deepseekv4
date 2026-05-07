@@ -26,6 +26,16 @@ from typing import Any
 
 from tdpilot_api_schema import TOOL_TO_HANDLER  # type: ignore[import-not-found]
 
+# Phase 2.3 — failure recovery hints. ``attach_hint`` is best-effort:
+# the registry module may be missing in stripped-down test embeds,
+# so we soft-import + degrade to a no-op.
+try:
+    from tdpilot_api_recovery import attach_hint as _attach_hint  # type: ignore[import-not-found]
+except ImportError:
+
+    def _attach_hint(result: Any) -> Any:  # noqa: ARG001 — fallback shim
+        return result
+
 
 class DispatchError(Exception):
     pass
@@ -69,24 +79,30 @@ def make_dispatcher(handlers_modules: Any, extra_mappings: dict | None = None) -
     def dispatch(tool_name: str, args: dict | None) -> Any:
         mapping = extras.get(tool_name) or TOOL_TO_HANDLER.get(tool_name)
         if mapping is None:
-            return {
-                "error": f"Unknown tool: {tool_name}",
-                "supported": sorted(set(TOOL_TO_HANDLER.keys()) | set(extras.keys())),
-            }
+            return _attach_hint(
+                {
+                    "error": f"Unknown tool: {tool_name}",
+                    "supported": sorted(set(TOOL_TO_HANDLER.keys()) | set(extras.keys())),
+                }
+            )
         handler_fn_name, adapter = mapping
         handler = _resolve_handler(handler_fn_name)
         if handler is None:
-            return {
-                "error": f"Handler {handler_fn_name} not found on any handlers module",
-            }
+            return _attach_hint(
+                {
+                    "error": f"Handler {handler_fn_name} not found on any handlers module",
+                }
+            )
         try:
             body = adapter(args or {})
             result = handler(body)
         except Exception as exc:  # noqa: BLE001 — return as tool error
-            return {
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc(limit=5),
-            }
+            return _attach_hint(
+                {
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "traceback": traceback.format_exc(limit=5),
+                }
+            )
         # mcp_webserver_callbacks handlers may return a plain dict OR a
         # (status_code, dict) tuple depending on the route. Normalize to
         # a dict so the model gets uniform JSON.
@@ -95,8 +111,11 @@ def make_dispatcher(handlers_modules: Any, extra_mappings: dict | None = None) -
             if isinstance(payload, dict):
                 payload = dict(payload)
                 payload.setdefault("_status", status)
-                return payload
-            return {"_status": status, "result": payload}
-        return result
+                return _attach_hint(payload)
+            return _attach_hint({"_status": status, "result": payload})
+        # Phase 2.3 — annotate handler-returned error dicts too. The
+        # attach_hint helper passes successful results through
+        # unchanged, so this is safe for the happy path.
+        return _attach_hint(result)
 
     return dispatch
