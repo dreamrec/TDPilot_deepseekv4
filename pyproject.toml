@@ -107,6 +107,16 @@ testpaths = ["tests"]
 # Make src/td_mcp importable whether pytest is invoked directly or via `uv run pytest`.
 # Adding "tests" lets test files share helpers via `from _constants import ...`.
 pythonpath = ["src", "tests"]
+# Phase 4.2 — agent-quality evals are integration tests that hit a
+# running tdpilot_API.tox webserver with a real DeepSeek key. They
+# take seconds per case and need external state, so they're
+# excluded from the fast unit-test run by default. Enable with:
+#     pytest -m agent_eval
+# CI keeps them out (default addopts deselects them).
+markers = [
+    "agent_eval: integration tests against a live tdpilot_API.tox (excluded by default)",
+]
+addopts = "-m 'not agent_eval'"
 
 [tool.coverage.run]
 source = ["src/td_mcp"]
