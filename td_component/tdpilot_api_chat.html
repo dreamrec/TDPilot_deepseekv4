@@ -214,6 +214,48 @@
     color: var(--accent-2);
   }
 
+  /* Phase 5.2 — first-run wizard checklist. Shown above the
+     "type a message" hint when /capabilities reports
+     first_run.is_first_run = true. Steps gain an .done class as
+     the user works through them; the JS poller updates this on a
+     short interval until the wizard completes. */
+  .welcome .wizard {
+    text-align: left;
+    margin: 12px auto 16px;
+    max-width: 480px;
+    padding: 12px 16px;
+    border: 1px dashed var(--rule);
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .welcome .wizard h4 {
+    margin: 0 0 8px;
+    color: var(--accent-2);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .welcome .wizard ol {
+    margin: 0;
+    padding-left: 22px;
+    color: var(--muted);
+  }
+  .welcome .wizard li.done {
+    color: var(--accent);
+    text-decoration: line-through;
+    opacity: 0.7;
+  }
+  .welcome .wizard li.done::marker {
+    content: "✓ ";
+    color: var(--accent);
+  }
+  .welcome .wizard .opt {
+    color: var(--muted);
+    font-size: 10px;
+    margin-left: 4px;
+  }
+
   hr.divider {
     border: 0;
     border-top: 1px dashed var(--rule);
@@ -326,6 +368,10 @@
    ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝</pre>
       <div class="tag">api · standalone · deepseek v4</div>
       <hr class="divider" />
+      <div id="wizard" class="wizard" style="display:none;">
+        <h4>quickstart</h4>
+        <ol id="wizard-steps"></ol>
+      </div>
       <div class="body">
         type a message and press <kbd>enter</kbd><br/>
         <kbd>shift</kbd>+<kbd>enter</kbd> for newline
@@ -396,6 +442,57 @@
     const w = $history.querySelector('.welcome');
     if (w) w.remove();
   }
+
+  // Phase 5.2 — first-run wizard. Polls /firstrun on load and renders
+  // the quickstart checklist in the welcome screen. Stays out of the
+  // way once the user has any of (key set, any memory saved, any
+  // brain installed) — the wizard auto-hides as steps complete.
+  function renderFirstRunWizard(state) {
+    if (!welcomed) return;
+    if (!state || !state.next_steps || state.next_steps.length === 0) {
+      const w = document.getElementById('wizard');
+      if (w) w.style.display = 'none';
+      return;
+    }
+    const wizard = document.getElementById('wizard');
+    const ol = document.getElementById('wizard-steps');
+    if (!wizard || !ol) return;
+    ol.innerHTML = '';
+    for (const step of state.next_steps) {
+      const li = document.createElement('li');
+      li.className = step.done ? 'done' : '';
+      li.textContent = step.label;
+      if (step.optional) {
+        const span = document.createElement('span');
+        span.className = 'opt';
+        span.textContent = ' (optional)';
+        li.appendChild(span);
+      }
+      ol.appendChild(li);
+    }
+    wizard.style.display = '';
+  }
+
+  async function pollFirstRun() {
+    try {
+      const resp = await fetch(`http://${TD_HOST}:${TD_PORT}/firstrun`, { method: 'GET' });
+      if (!resp.ok) return;
+      const state = await resp.json();
+      renderFirstRunWizard(state);
+      // Once the wizard is fully complete (no next_steps), stop
+      // polling. Otherwise re-check every 4s while the welcome
+      // is visible — short enough to feel responsive when the
+      // user pastes a key, long enough to not pound the server.
+      if (welcomed && state && state.next_steps && state.next_steps.length > 0) {
+        setTimeout(pollFirstRun, 4000);
+      }
+    } catch (_e) {
+      // Network blip; try once more after a longer delay so the
+      // wizard isn't stuck if the webserver was briefly down.
+      if (welcomed) setTimeout(pollFirstRun, 8000);
+    }
+  }
+  pollFirstRun();
 
   function autoScroll() {
     requestAnimationFrame(() => {
