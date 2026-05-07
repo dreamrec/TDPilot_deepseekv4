@@ -209,4 +209,122 @@ def handle_get_capabilities(body: dict) -> dict:
     except Exception:
         pass
 
+    # Phase 5.2 — first-run state. True when the user hasn't pasted
+    # an API key AND has no memories AND no external brains. The
+    # chat UI uses this to render the 3-step welcome wizard.
+    caps["first_run"] = firstrun_status()
+
     return caps
+
+
+# ---------------------------------------------------------------------------
+# Phase 5.2 — first-run detection
+# ---------------------------------------------------------------------------
+
+
+def firstrun_status() -> dict:
+    """Report whether the standalone is in a first-run state.
+
+    Returns a dict with three booleans matching the canonical
+    setup steps the chat UI walks the user through:
+
+      - has_api_key:   ``~/.tdpilot-api/config.json`` carries a
+                       non-empty ``api_key`` field.
+      - has_memory:    at least one ``*.md`` lives in
+                       ``~/.tdpilot-api/memory/`` (i.e. the user
+                       has asked the agent to remember anything yet).
+      - has_brains:    at least one external corpus is discoverable
+                       (jsonl OR brain.db) under any of the
+                       documented data roots.
+
+    A turn is "first run" when all three are False — the chat UI
+    should render the welcome wizard and a quickstart checklist.
+    Any one of them being True downgrades the welcome to the
+    minimal logo + "type a message" hint.
+    """
+    has_api_key = False
+    try:
+        from tdpilot_api_config import fetch_api_key  # type: ignore[import-not-found]
+
+        key = fetch_api_key()
+        has_api_key = bool(key and isinstance(key, str) and key.strip())
+    except Exception:
+        has_api_key = False
+
+    has_memory = False
+    try:
+        import os as _os
+        from pathlib import Path as _Path
+
+        memory_dir = _Path.home() / ".tdpilot-api" / "memory"
+        if memory_dir.is_dir():
+            for entry in _os.scandir(memory_dir):
+                if entry.is_file() and entry.name.endswith(".md"):
+                    has_memory = True
+                    break
+    except Exception:
+        has_memory = False
+
+    has_brains = False
+    try:
+        from pathlib import Path as _Path
+
+        roots = (
+            _Path.home() / ".tdpilot" / "data" / "normalized",
+            _Path.home() / ".tdpilot-dpsk4" / "data" / "normalized",
+            _Path.home() / ".tdpilot-api" / "data" / "normalized",
+        )
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for entry in root.iterdir():
+                if not entry.is_dir():
+                    continue
+                if any(entry.glob("*brain.db")) or (entry / "pages.jsonl").is_file():
+                    has_brains = True
+                    break
+            if has_brains:
+                break
+    except Exception:
+        has_brains = False
+
+    is_first_run = not (has_api_key or has_memory or has_brains)
+
+    # Steps the chat UI should highlight. Order matches the wizard
+    # flow: paste key first (everything else is gated on it), then
+    # invite the user to save a memory once they've had a real
+    # conversation, then optionally install a brain.
+    next_steps: list[dict] = []
+    if not has_api_key:
+        next_steps.append(
+            {
+                "name": "paste_api_key",
+                "label": "Paste your DeepSeek API key into the COMP and pulse Save Key.",
+                "done": False,
+            }
+        )
+    if not has_brains:
+        next_steps.append(
+            {
+                "name": "install_brain",
+                "label": "Install the official-docs brain: npx tdpilot-dpsk4 brains add derivative",
+                "done": has_brains,
+                "optional": True,
+            }
+        )
+    if not has_memory:
+        next_steps.append(
+            {
+                "name": "first_memory",
+                "label": "Ask the agent something — once it learns your preferences, save with memory_save.",
+                "done": False,
+            }
+        )
+
+    return {
+        "is_first_run": is_first_run,
+        "has_api_key": has_api_key,
+        "has_memory": has_memory,
+        "has_brains": has_brains,
+        "next_steps": next_steps,
+    }

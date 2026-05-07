@@ -119,6 +119,19 @@ def onHTTPRequest(webServerDAT, request, response):
         _json(response, 200, {"rows": rows})
         return response
 
+    if method == "GET" and path == "/firstrun":
+        # Phase 5.2 — first-run wizard status. The chat HTML polls
+        # this on load (and a few times after) to populate the
+        # quickstart checklist and to know when to dismiss it.
+        try:
+            from tdpilot_api_introspect import firstrun_status  # type: ignore[import-not-found]
+
+            _json(response, 200, firstrun_status())
+        except Exception as exc:
+            debug(f"[tdpilot_API/web] /firstrun failed: {exc}")
+            _json(response, 500, {"ok": False, "error": str(exc)})
+        return response
+
     ext = _ext()
     if ext is None:
         _text(response, 503, "extension not ready")
