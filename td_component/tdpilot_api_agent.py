@@ -198,6 +198,10 @@ class Agent:
         # it's free to vary turn-to-turn (memory_save propagates here,
         # not in the system prompt).
         dynamic_context_provider: Callable[[], list[dict]] | None = None,
+        # Phase 4.3 — conversation compaction. Optional; when set, the
+        # agent calls ``compactor.maybe_compact(self.messages)`` at the
+        # top of each ``_loop`` iteration. Set None to disable.
+        compactor: Any | None = None,
         # Callbacks — all optional. Receive primitive args.
         on_text: Callable[[str], None] = _noop,
         on_tool_call: Callable[[str, dict], None] = _noop,
@@ -242,6 +246,7 @@ class Agent:
         self.request_timeout = request_timeout
 
         self.dynamic_context_provider = dynamic_context_provider
+        self.compactor = compactor
 
         self.on_text = on_text
         self.on_tool_call = on_tool_call
@@ -337,6 +342,19 @@ class Agent:
         return self.model if score >= 2 else self.flash_model
 
     def _loop(self) -> str | None:
+        # Phase 4.3 — compact the conversation history if it has grown
+        # past the threshold. Runs ONCE at turn start, BEFORE the
+        # model's tier is resolved (the model decision works on the
+        # last user message which is preserved in the recent slice).
+        # The compactor is responsible for forensic persistence
+        # before slicing, so a "lost detail" debug session can recover
+        # the original messages from ~/.tdpilot-api/history/.
+        if self.compactor is not None:
+            try:
+                self.messages = self.compactor.maybe_compact(self.messages)
+            except Exception as exc:  # noqa: BLE001 — compaction must never break a turn
+                print(f"[tdpilot_API/agent] compaction failed: {exc}")
+
         # Pick the model ONCE at turn start. Stays pinned for the entire
         # tool-use chain (mid-turn switching busts DeepSeek's auto-cache
         # AND risks flash failing to finish what pro started). Resolve

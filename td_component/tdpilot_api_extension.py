@@ -114,6 +114,7 @@ class TDPilotAPIExt:
             "tdpilot_api_batch",
             "tdpilot_api_recovery",
             "tdpilot_api_tracing",
+            "tdpilot_api_compaction",
             "mcp_webserver_callbacks",
         ):
             child = self.owner.op(name)

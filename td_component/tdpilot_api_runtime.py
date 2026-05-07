@@ -536,6 +536,16 @@ class AgentRuntime:
         self._trace_dir_override: Path | None = self._config.get("traces_dir")  # type: ignore[assignment]
         self._tracer = self._build_tracer()
 
+        # Phase 4.3 — conversation compaction. When the agent's
+        # message history grows past the threshold, the oldest portion
+        # gets summarised into a single synthetic assistant message
+        # and the most-recent ``compaction_keep_recent`` messages are
+        # kept verbatim (preserving their original thinking blocks).
+        # Disable by setting ``config["compaction_threshold"] = 0``.
+        # See td_component/tdpilot_api_compaction.py for the design
+        # rationale on the thinking-block contract.
+        self._compactor = self._build_compactor()
+
         # Phase 0.1 — dynamic context snapshot. ``build_dynamic_context``
         # touches TD globals (parent().op('kb') for bundled knowledge
         # entries) so it MUST run on the cook thread. We refresh this
@@ -574,6 +584,11 @@ class AgentRuntime:
             # the Agent worker thread just reads the cached list, never
             # touching TD globals like parent().op('kb').
             dynamic_context_provider=lambda: list(self._dynamic_context_snapshot),
+            # Phase 4.3 — conversation compaction. The agent calls
+            # ``maybe_compact`` at the top of each ``_loop`` iteration.
+            # None (no compactor) means the history grows without
+            # bound — fine for short sessions, risky for 50+ turn ones.
+            compactor=self._compactor,
             model=cfg["model"],
             base_url=cfg["base_url"],
             max_tokens=cfg["max_tokens"],
@@ -617,6 +632,40 @@ class AgentRuntime:
     # ------------------------------------------------------------------
     # Phase 4.1 — observability tracer
     # ------------------------------------------------------------------
+
+    def _build_compactor(self) -> Any:
+        """Construct the per-runtime Compactor. Returns ``None`` when
+        the compaction module is unavailable (older .tox builds) or
+        when the threshold is set to 0 (explicit disable).
+        """
+        try:
+            import tdpilot_api_compaction as compaction_mod  # type: ignore[import-not-found]
+        except ImportError:
+            return None
+        threshold = int(self._config.get("compaction_threshold", compaction_mod.DEFAULT_THRESHOLD))
+        if threshold <= 0:
+            return None
+        keep_recent = int(self._config.get("compaction_keep_recent", compaction_mod.DEFAULT_KEEP_RECENT))
+        history_dir = self._config.get("history_dir")
+        # Re-use the tracer's session id if a tracer was built (so
+        # forensic history files line up with the trace timeline).
+        session_id = ""
+        if self._tracer is not None and hasattr(self._tracer, "session_id"):
+            session_id = self._tracer.session_id
+        if not session_id:
+            import uuid
+
+            session_id = uuid.uuid4().hex[:12]
+        try:
+            return compaction_mod.Compactor(
+                session_id=session_id,
+                threshold=threshold,
+                keep_recent=keep_recent,
+                history_dir=history_dir,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/runtime] compactor init failed: {exc}")
+            return None
 
     def _build_tracer(self) -> Any:
         """Construct the per-runtime Tracer. Returns ``None`` when the
