@@ -345,6 +345,62 @@ class TDPilotAPIExt:
         except Exception as exc:  # noqa: BLE001
             self._set_status(f"save failed: {exc}")
 
+    def OnVerifySetupPulse(self) -> dict:
+        """Phase 5.1 — run the install-doctor check registry against
+        the current standalone instance and return a JSON-serialisable
+        dict of results.
+
+        Wired to a future ``Verifysetup`` pulse param on the COMP. For
+        now the method is callable from a textport one-liner so the
+        user can sanity-check their install without leaving TD::
+
+            mod('tdpilot_api_extension').get_extension(parent()).OnVerifySetupPulse()
+
+        Falls back to a structured "skipped" result when the doctor
+        script isn't reachable (older .tox builds, restricted
+        environments).
+        """
+        try:
+            import importlib.util
+            from pathlib import Path
+
+            repo_root = Path(__file__).resolve().parent.parent
+            spec = importlib.util.spec_from_file_location(
+                "tdpilot_doctor_live",
+                repo_root / "scripts" / "doctor_live.py",
+            )
+            if spec is None or spec.loader is None:
+                raise ImportError("doctor_live.py not on disk")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            results = module.run_all_checks()
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"verify_setup failed: {exc}")
+            return {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "results": [],
+            }
+
+        out = {
+            "ok": True,
+            "results": [
+                {
+                    "name": r.name,
+                    "status": r.status,
+                    "message": r.message,
+                    "fix": r.fix,
+                }
+                for r in results
+            ],
+        }
+        n_fail = sum(1 for r in results if r.status == "fail")
+        n_warn = sum(1 for r in results if r.status == "warn")
+        out["fail"] = n_fail
+        out["warn"] = n_warn
+        self._set_status(f"verify: {n_fail} fail, {n_warn} warn")
+        return out
+
     # ------------------------------------------------------------------
     # Per-frame drain — invoked by the executeDAT onFrameStart
     # ------------------------------------------------------------------
