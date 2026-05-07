@@ -166,6 +166,52 @@ def _all_entries() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def find_triggered_skills(user_text: str) -> list[dict]:
+    """Phase 3.1 — return skill entries whose ``triggers`` match in ``user_text``.
+
+    Matching rules (deliberately conservative):
+      - Case-insensitive.
+      - Triggers shorter than 5 chars use word-boundary regex
+        (``\\bpop\\b``) to avoid matching ``popular`` / ``population``.
+      - Longer triggers use substring match (they're specific enough
+        that incidental overlap is rare).
+      - A skill matches if AT LEAST ONE of its trigger keywords fires.
+
+    Returns the matched skill entries (as produced by ``_all_entries``).
+    Order is alphabetical by skill name so the caller gets a stable,
+    deterministic list.
+    """
+    text = (user_text or "").lower().strip()
+    if not text:
+        return []
+
+    matched: list[dict] = []
+    for entry in _all_entries():
+        triggers = entry.get("triggers") or []
+        if not isinstance(triggers, list):
+            continue
+        for trig in triggers:
+            if not isinstance(trig, str):
+                continue
+            t = trig.lower().strip()
+            if not t:
+                continue
+            try:
+                if len(t) < 5:
+                    pat = r"\b" + re.escape(t) + r"\b"
+                    if re.search(pat, text):
+                        matched.append(entry)
+                        break
+                else:
+                    if t in text:
+                        matched.append(entry)
+                        break
+            except re.error:
+                continue
+    matched.sort(key=lambda e: e.get("name", ""))
+    return matched
+
+
 def get_skills_index_hint() -> str:
     """Short hint listing available skills + their triggers."""
     entries = _all_entries()

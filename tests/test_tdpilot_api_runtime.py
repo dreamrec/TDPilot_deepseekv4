@@ -650,6 +650,211 @@ def test_validation_hint_cleared_between_turns(monkeypatch):
     _ = threading.Lock
 
 
+# ---------------------------------------------------------------------------
+# Phase 3.1 — trigger-based skill loading.
+#
+# When a user message contains a keyword listed in a skill's
+# ``triggers:`` frontmatter, the runtime auto-loads that skill: its
+# body lands in the dynamic context for THIS turn and every subsequent
+# turn until reset(). Idempotent — re-triggering doesn't duplicate.
+# ---------------------------------------------------------------------------
+
+
+def test_find_triggered_skills_word_boundary_for_short_keywords():
+    """Short triggers (< 5 chars) use word boundaries — 'pop' must NOT
+    match 'population' / 'popular'.
+    """
+    import tdpilot_api_skills as skills
+
+    fake_entries = [
+        {
+            "name": "popx-mode",
+            "triggers": ["pop", "popx"],
+            "text": "popx body",
+        },
+    ]
+    # Patch the discovery to return our fake entry — keeps the test
+    # independent of bundled / user state on disk.
+    import unittest.mock as mock
+
+    with mock.patch.object(skills, "_all_entries", return_value=fake_entries):
+        # Direct hit on the short trigger via word boundary.
+        assert skills.find_triggered_skills("looking at popx particles") == fake_entries
+        assert skills.find_triggered_skills("just need a POP gun")[0]["name"] == "popx-mode"
+        # Words that contain "pop" as a prefix must NOT trigger.
+        assert skills.find_triggered_skills("the popular library") == []
+        assert skills.find_triggered_skills("population growth") == []
+
+
+def test_find_triggered_skills_substring_for_long_keywords():
+    import unittest.mock as mock
+
+    import tdpilot_api_skills as skills
+
+    fake_entries = [
+        {
+            "name": "performance-mode",
+            "triggers": ["optimize", "performance"],
+            "text": "perf body",
+        },
+    ]
+    with mock.patch.object(skills, "_all_entries", return_value=fake_entries):
+        assert skills.find_triggered_skills("optimize this") == fake_entries
+        assert skills.find_triggered_skills("a performance issue") == fake_entries
+        assert skills.find_triggered_skills("nothing relevant") == []
+
+
+def test_find_triggered_skills_case_insensitive():
+    import unittest.mock as mock
+
+    import tdpilot_api_skills as skills
+
+    fake_entries = [{"name": "x", "triggers": ["FPS"], "text": "x"}]
+    with mock.patch.object(skills, "_all_entries", return_value=fake_entries):
+        assert skills.find_triggered_skills("low fps") == fake_entries
+        assert skills.find_triggered_skills("Low FPS Now") == fake_entries
+
+
+def test_find_triggered_skills_empty_or_invalid():
+    import unittest.mock as mock
+
+    import tdpilot_api_skills as skills
+
+    fake_entries = [{"name": "x", "triggers": ["foo"], "text": "x"}]
+    with mock.patch.object(skills, "_all_entries", return_value=fake_entries):
+        assert skills.find_triggered_skills("") == []
+        assert skills.find_triggered_skills(None) == []  # type: ignore[arg-type]
+
+
+def test_runtime_check_skill_triggers_activates_match(monkeypatch):
+    """Triggering populates ``_session_skills_activated`` and emits an
+    EV_HINT(kind=skill_activated) event so the user sees the auto-load.
+    """
+    import unittest.mock as mock
+
+    import tdpilot_api_runtime as rt_mod
+    import tdpilot_api_skills as skills_mod
+    from tdpilot_api_runtime import EV_HINT, AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+
+    fake_entries = [
+        {"name": "popx-mode", "triggers": ["popx"], "text": "POPX BODY"},
+    ]
+    with mock.patch.object(skills_mod, "_all_entries", return_value=fake_entries):
+        rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+        # Initial state — nothing activated.
+        assert rt._session_skills_activated == {}
+        rt._check_skill_triggers("show me how to use POPX")
+        assert "popx-mode" in rt._session_skills_activated
+        assert rt._session_skills_activated["popx-mode"] == "POPX BODY"
+
+    events = _drain_runtime_events(rt)
+    activated = [(k, p) for k, p in events if k == EV_HINT and p.get("kind") == "skill_activated"]
+    assert len(activated) == 1
+    assert activated[0][1]["name"] == "popx-mode"
+
+
+def test_runtime_check_skill_triggers_idempotent(monkeypatch):
+    """Re-triggering an already-active skill must NOT duplicate the
+    body or emit a second EV_HINT.
+    """
+    import unittest.mock as mock
+
+    import tdpilot_api_runtime as rt_mod
+    import tdpilot_api_skills as skills_mod
+    from tdpilot_api_runtime import EV_HINT, AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+
+    fake_entries = [{"name": "popx-mode", "triggers": ["popx"], "text": "POPX BODY"}]
+    with mock.patch.object(skills_mod, "_all_entries", return_value=fake_entries):
+        rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+        rt._check_skill_triggers("popx")
+        rt._check_skill_triggers("popx again")  # second hit — no-op
+        rt._check_skill_triggers("more popx")  # third — still no-op
+
+    assert len(rt._session_skills_activated) == 1
+    events = _drain_runtime_events(rt)
+    activated = [(k, p) for k, p in events if k == EV_HINT and p.get("kind") == "skill_activated"]
+    assert len(activated) == 1, f"hint fired {len(activated)} times, want 1"
+
+
+def test_runtime_active_skills_section_appears_in_dynamic_context(monkeypatch):
+    """Once a skill activates its body is in the dynamic-context
+    snapshot for every subsequent turn.
+    """
+    import unittest.mock as mock
+
+    import tdpilot_api_runtime as rt_mod
+    import tdpilot_api_skills as skills_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+    fake_entries = [
+        {"name": "popx-mode", "triggers": ["popx"], "text": "POPX SKILL BODY"},
+    ]
+    with mock.patch.object(skills_mod, "_all_entries", return_value=fake_entries):
+        rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+        # No skill activated yet — section absent.
+        rt._refresh_dynamic_context()
+        text_before = ""
+        if rt._dynamic_context_snapshot:
+            text_before = rt._dynamic_context_snapshot[0]["content"][0]["text"]
+        assert "POPX SKILL BODY" not in text_before
+
+        # Activate by trigger, then refresh.
+        rt._check_skill_triggers("learn popx")
+        rt._refresh_dynamic_context()
+        msgs = rt._dynamic_context_snapshot
+        assert msgs, "dynamic context empty after skill activation"
+        text_after = msgs[0]["content"][0]["text"]
+        assert "POPX SKILL BODY" in text_after
+        assert "Active Skills" in text_after
+
+
+def test_runtime_reset_clears_session_skills(monkeypatch):
+    """``reset()`` is a fresh session — auto-loaded skills must NOT
+    persist into the new conversation.
+    """
+    import unittest.mock as mock
+
+    import tdpilot_api_runtime as rt_mod
+    import tdpilot_api_skills as skills_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+    fake_entries = [{"name": "popx-mode", "triggers": ["popx"], "text": "BODY"}]
+    with mock.patch.object(skills_mod, "_all_entries", return_value=fake_entries):
+        rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+        rt._check_skill_triggers("popx")
+        assert rt._session_skills_activated
+
+    rt.reset()
+    assert rt._session_skills_activated == {}
+
+
+def test_build_dynamic_context_extra_sections_listed_first(monkeypatch):
+    """Skill bodies are anchored above the volatile indexes in the
+    rendered context block.
+    """
+    import tdpilot_api_knowledge as kb_mod
+    import tdpilot_api_memory as mem_mod
+    import tdpilot_api_recipes as rec_mod
+    from tdpilot_api_runtime import build_dynamic_context
+
+    monkeypatch.setattr(mem_mod, "get_memory_index_content", lambda: "")
+    monkeypatch.setattr(kb_mod, "get_knowledge_index_hint", lambda: "kb_hint")
+    monkeypatch.setattr(rec_mod, "get_recipes_index_hint", lambda: "")
+
+    msgs = build_dynamic_context(extra_sections=["## Active Skills\n\nA SKILL"])
+    assert msgs
+    text = msgs[0]["content"][0]["text"]
+    skill_pos = text.find("Active Skills")
+    kb_pos = text.find("Knowledge Index")
+    assert 0 <= skill_pos < kb_pos, "extra_sections must come before volatile indexes"
+
+
 def test_system_prompt_is_unchanged_by_mid_session_memory_save(monkeypatch, tmp_path):
     """Phase 1.2 + 0.1 jointly: saving a memory mid-session MUST NOT
     mutate the Agent's system_prompt. Otherwise the DeepSeek auto-cache
