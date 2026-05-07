@@ -118,3 +118,168 @@ def test_none_handlers_modules_raises_dispatcherror():
 def test_empty_handlers_modules_raises_dispatcherror():
     with pytest.raises(DispatchError):
         make_dispatcher(())
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.3 — failure recovery hints.
+#
+# The dispatcher annotates error results with a ``recovery_hint`` field
+# when the error message matches one of the patterns in
+# ``tdpilot_api_recovery._RECOVERY_HINTS``. The agent sees both the
+# error and the hint, so it can route differently on the next turn
+# instead of retrying the same failed call.
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_operator_error_attaches_hint():
+    """The 'Unknown operator type' error path is the canonical
+    learn-from-failure case — the hint must point at td_list_families.
+    """
+
+    def handler(_body):
+        return {"error": "Unknown operator type: noiseTopBad"}
+
+    mod = SimpleNamespace(handle_get_info=handler)
+    extras = {"probe": ("handle_get_info", lambda d: d or {})}
+    dispatch = make_dispatcher(mod, extra_mappings=extras)
+
+    out = dispatch("probe", {})
+    assert "error" in out
+    assert "recovery_hint" in out
+    hint = out["recovery_hint"]
+    assert "td_list_families" in hint or "camelCase" in hint
+
+
+def test_path_not_found_error_attaches_hint():
+    def handler(_body):
+        return {"error": "Path not found: /project1/zoinks"}
+
+    mod = SimpleNamespace(handle_get_info=handler)
+    extras = {"probe": ("handle_get_info", lambda d: d or {})}
+    dispatch = make_dispatcher(mod, extra_mappings=extras)
+
+    out = dispatch("probe", {})
+    assert "recovery_hint" in out
+    assert "td_get_nodes" in out["recovery_hint"]
+
+
+def test_thread_conflict_error_attaches_hint():
+    """The THREAD CONFLICT pattern — most common when an exec_python
+    call returns a raw op() reference."""
+
+    def handler(_body):
+        return {"error": "THREAD CONFLICT: TouchDesigner objects cannot be accessed outside main thread"}
+
+    mod = SimpleNamespace(handle_get_info=handler)
+    extras = {"probe": ("handle_get_info", lambda d: d or {})}
+    dispatch = make_dispatcher(mod, extra_mappings=extras)
+
+    out = dispatch("probe", {})
+    assert "recovery_hint" in out
+    assert "td_exec_python" in out["recovery_hint"] or "non-cook thread" in out["recovery_hint"]
+
+
+def test_corpus_not_installed_error_attaches_hint():
+    def handler(_body):
+        return {"error": "The 'derivative' corpus isn't installed locally."}
+
+    mod = SimpleNamespace(handle_get_info=handler)
+    extras = {"probe": ("handle_get_info", lambda d: d or {})}
+    dispatch = make_dispatcher(mod, extra_mappings=extras)
+
+    out = dispatch("probe", {})
+    assert "recovery_hint" in out
+    assert "brains add" in out["recovery_hint"] or "data/normalized" in out["recovery_hint"]
+
+
+def test_handler_exception_message_matched_against_hints():
+    """A handler that RAISES (rather than returns an error dict) gets
+    its exception message run through the same matcher.
+    """
+
+    def handler(_body):
+        raise PermissionError("Permission denied: /etc/restricted")
+
+    mod = SimpleNamespace(handle_get_info=handler)
+    extras = {"probe": ("handle_get_info", lambda d: d or {})}
+    dispatch = make_dispatcher(mod, extra_mappings=extras)
+
+    out = dispatch("probe", {})
+    assert "error" in out
+    assert "recovery_hint" in out
+    assert "writable" in out["recovery_hint"] or "permission" in out["recovery_hint"].lower()
+
+
+def test_unknown_tool_error_attaches_no_hint():
+    """The "Unknown tool: X" message isn't in the registry — pass
+    through as before, no spurious hint."""
+    mod = SimpleNamespace()
+    dispatch = make_dispatcher(mod)
+
+    out = dispatch("td_does_not_exist", {})
+    assert "error" in out
+    assert "recovery_hint" not in out
+
+
+def test_successful_result_passes_through_unchanged():
+    """Happy path: no error, no recovery_hint added."""
+
+    def handler(_body):
+        return {"ok": True, "fps": 60}
+
+    mod = SimpleNamespace(handle_get_info=handler)
+    extras = {"probe": ("handle_get_info", lambda d: d or {})}
+    dispatch = make_dispatcher(mod, extra_mappings=extras)
+
+    out = dispatch("probe", {})
+    assert out == {"ok": True, "fps": 60}
+    assert "recovery_hint" not in out
+
+
+def test_caller_provided_recovery_hint_is_respected():
+    """A handler that already includes its own recovery_hint shouldn't
+    have it overwritten by the registry. Lets handlers ship more
+    specific suggestions when they have context the registry can't see.
+    """
+
+    def handler(_body):
+        return {
+            "error": "Path not found: /custom",
+            "recovery_hint": "specific custom hint",
+        }
+
+    mod = SimpleNamespace(handle_get_info=handler)
+    extras = {"probe": ("handle_get_info", lambda d: d or {})}
+    dispatch = make_dispatcher(mod, extra_mappings=extras)
+
+    out = dispatch("probe", {})
+    assert out["recovery_hint"] == "specific custom hint"
+
+
+def test_hint_for_message_helper():
+    """The standalone helper is symmetric with attach_hint and useful
+    for UI surfaces (verify panel etc.) that want to render hints
+    independent of the dispatch pipeline.
+    """
+    from tdpilot_api_recovery import hint_for_message
+
+    assert hint_for_message("Unknown operator type: x") is not None
+    assert hint_for_message("totally unrelated error message") is None
+    assert hint_for_message("") is None
+    assert hint_for_message(None) is None  # type: ignore[arg-type]
+
+
+def test_registered_patterns_introspection():
+    """Phase 2.3 ships a known set of patterns; lock in that the
+    canonical ones are present so future shrinkage trips a test.
+    """
+    from tdpilot_api_recovery import registered_patterns
+
+    patterns = registered_patterns()
+    assert any("Unknown operator" in p for p in patterns)
+    assert any("THREAD CONFLICT" in p or "thread conflict" in p for p in patterns)
+    assert any("corpus" in p for p in patterns)
+    assert any("recipe" in p for p in patterns)
+    assert any("Permission denied" in p for p in patterns)
+    # Sanity: at least 8 patterns registered.
+    assert len(patterns) >= 8
