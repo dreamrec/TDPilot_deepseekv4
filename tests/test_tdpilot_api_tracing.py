@@ -273,6 +273,47 @@ def test_runtime_writes_trace_for_completed_turn(monkeypatch, tmp_path):
     assert rec["tool_calls"][0]["latency_ms"] >= 0
 
 
+def test_runtime_reset_closes_open_tracer_turn(monkeypatch, tmp_path):
+    """Cold-pass review finding — reset() called mid-turn must
+    finalise the active tracer record with outcome='interrupted',
+    otherwise the in-flight turn vanishes from the trace log.
+    """
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+
+    rt = AgentRuntime(
+        dispatcher=lambda *a: {"ok": True},
+        tools=[],
+        config={
+            "model": "x",
+            "base_url": "http://x",
+            "max_tokens": 10,
+            "turn_budget": 1,
+            "temperature": 0.0,
+            "trace_logging": True,
+            "traces_dir": tmp_path / "traces",
+            "pre_retrieval": False,
+            "compaction_threshold": 0,
+        },
+    )
+
+    # Simulate a turn opening but never naturally completing.
+    rt._trace_start_turn("user msg that gets interrupted")
+    rt._trace_record_tool("td_get_info", {"fps": 60}, is_error=False)
+    # User pulses Reset before the turn ends.
+    rt.reset()
+    rt._tracer.shutdown(timeout=2.0)
+
+    files = list((tmp_path / "traces").glob("*.jsonl"))
+    assert files, "trace file missing — interrupted turn must still write a record"
+    rec = json.loads(files[0].read_text(encoding="utf-8").splitlines()[-1])
+    assert rec["outcome"] == "interrupted", f"wrong outcome: {rec['outcome']}"
+    # Tool record from before the interrupt must still be there.
+    assert any(c["name"] == "td_get_info" for c in rec["tool_calls"])
+
+
 def test_runtime_disabled_tracer_via_config(monkeypatch, tmp_path):
     """``config['trace_logging'] = False`` → tracer.enabled == False."""
     import tdpilot_api_runtime as rt_mod

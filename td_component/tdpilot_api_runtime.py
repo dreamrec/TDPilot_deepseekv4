@@ -1041,6 +1041,11 @@ class AgentRuntime:
             self._agent.reset()
         # Make sure no in-flight tool call is left blocking the worker.
         self._cook_dispatcher.cancel_pending()
+        # Phase 4.1 — close any open tracer turn record so an
+        # interrupted turn (reset() called mid-flight) still gets
+        # written to disk with outcome="interrupted" instead of
+        # vanishing into the next start_turn's overwrite.
+        self._trace_end_turn("interrupted")
         # Phase 3.1 — auto-loaded skills are session-scoped by design.
         # A reset starts a fresh session, so previously-triggered
         # skills should NOT carry over into the new conversation.
