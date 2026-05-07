@@ -340,9 +340,11 @@ def test_runtime_refreshes_dynamic_context_on_start_turn(monkeypatch, tmp_path):
     refresh_calls: list[str] = []
     original = AgentRuntime._refresh_dynamic_context
 
-    def tracking_refresh(self):
+    def tracking_refresh(self, **kwargs):
+        # ``user_text`` was added in Phase 2.2 — accept any kwargs so
+        # this tracker stays compatible with future signature growth.
         refresh_calls.append(threading.current_thread().name)
-        original(self)
+        original(self, **kwargs)
 
     monkeypatch.setattr(AgentRuntime, "_refresh_dynamic_context", tracking_refresh)
 
@@ -832,6 +834,200 @@ def test_runtime_reset_clears_session_skills(monkeypatch):
 
     rt.reset()
     assert rt._session_skills_activated == {}
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.2 — pre-turn retrieval injection.
+#
+# On every start_turn(user_text) the runtime runs cheap local
+# retrieval (memory_recall + recipe_recall + knowledge_search) and
+# prepends the top hits into the dynamic context. Cap: 4 hits, ~800
+# tokens, score threshold to suppress weak matches. Toggleable via
+# config["pre_retrieval"] = False.
+# ---------------------------------------------------------------------------
+
+
+def _stub_retrieval_handlers(monkeypatch, *, memory=None, recipes=None, knowledge=None):
+    """Patch the three retrieval handlers used by _run_pre_turn_retrieval."""
+    import tdpilot_api_knowledge as kb_mod
+    import tdpilot_api_memory as mem_mod
+    import tdpilot_api_recipes as rec_mod
+
+    monkeypatch.setattr(
+        mem_mod,
+        "handle_memory_recall",
+        lambda body: {"ok": True, "matches": memory or []},
+    )
+    monkeypatch.setattr(
+        rec_mod,
+        "handle_recipe_recall",
+        lambda body: {"ok": True, "matches": recipes or []},
+    )
+    monkeypatch.setattr(
+        kb_mod,
+        "handle_knowledge_search",
+        lambda body: {"ok": True, "matches": knowledge or []},
+    )
+
+
+def test_pre_turn_retrieval_aggregates_top_hits(monkeypatch):
+    """Top hits across all three sources are merged + sorted by score."""
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+    _stub_retrieval_handlers(
+        monkeypatch,
+        memory=[
+            {"name": "mem_alpha", "score": 0.6, "snippet": "alpha snippet"},
+        ],
+        recipes=[
+            {"name": "recipe_audio_reactive", "score": 0.9, "snippet": "build audio reactive"},
+        ],
+        knowledge=[
+            {"name": "noiseTOP", "score": 0.7, "snippet": "noiseTOP doc"},
+        ],
+    )
+
+    rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+    block = rt._run_pre_turn_retrieval("how do I do audio reactive")
+    assert block, "block must be non-empty when hits exist"
+    # Header present
+    assert "Pre-turn retrieval" in block
+    # The three names show up — score-sorted order: recipe (0.9), kb (0.7), mem (0.6)
+    recipe_pos = block.find("recipe_audio_reactive")
+    kb_pos = block.find("noiseTOP")
+    mem_pos = block.find("mem_alpha")
+    assert 0 <= recipe_pos < kb_pos < mem_pos
+
+
+def test_pre_turn_retrieval_drops_below_threshold_scores(monkeypatch):
+    """Hits with score < 0.05 are too weak — suppressed entirely."""
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+    _stub_retrieval_handlers(
+        monkeypatch,
+        memory=[{"name": "weak", "score": 0.001, "snippet": "barely matches"}],
+    )
+    rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+    block = rt._run_pre_turn_retrieval("anything")
+    assert block == "", f"weak hits must be suppressed, got: {block!r}"
+
+
+def test_pre_turn_retrieval_empty_query_returns_empty(monkeypatch):
+    """Empty / whitespace user text → no retrieval, no block."""
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+    rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+    assert rt._run_pre_turn_retrieval("") == ""
+    assert rt._run_pre_turn_retrieval("   ") == ""
+
+
+def test_pre_turn_retrieval_handler_failure_is_isolated(monkeypatch):
+    """A crash in one handler must not poison the others."""
+    import tdpilot_api_knowledge as kb_mod
+    import tdpilot_api_memory as mem_mod
+    import tdpilot_api_recipes as rec_mod
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+
+    def boom(_body):
+        raise RuntimeError("memory exploded")
+
+    monkeypatch.setattr(mem_mod, "handle_memory_recall", boom)
+    monkeypatch.setattr(
+        rec_mod,
+        "handle_recipe_recall",
+        lambda body: {"ok": True, "matches": []},
+    )
+    monkeypatch.setattr(
+        kb_mod,
+        "handle_knowledge_search",
+        lambda body: {
+            "ok": True,
+            "matches": [{"name": "good_hit", "score": 0.5, "snippet": "still works"}],
+        },
+    )
+
+    rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+    block = rt._run_pre_turn_retrieval("anything")
+    assert "good_hit" in block, "knowledge hit must survive memory crash"
+
+
+def test_pre_turn_retrieval_respects_char_budget(monkeypatch):
+    """Total block stays under ~_PRE_RETRIEVAL_CHAR_BUDGET so the
+    dynamic context doesn't bloat unbounded.
+    """
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+
+    huge_snippet = "X" * 600
+    _stub_retrieval_handlers(
+        monkeypatch,
+        memory=[{"name": f"mem_{i}", "score": 0.9 - i * 0.01, "snippet": huge_snippet} for i in range(3)],
+        recipes=[{"name": f"rec_{i}", "score": 0.85 - i * 0.01, "snippet": huge_snippet} for i in range(3)],
+        knowledge=[{"name": f"kb_{i}", "score": 0.80 - i * 0.01, "snippet": huge_snippet} for i in range(3)],
+    )
+
+    rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+    block = rt._run_pre_turn_retrieval("query")
+    assert len(block) <= rt._PRE_RETRIEVAL_CHAR_BUDGET + 400  # +header slack
+
+
+def test_pre_turn_retrieval_disabled_via_config(monkeypatch):
+    """``config['pre_retrieval'] = False`` skips the retrieval entirely."""
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+    _stub_retrieval_handlers(
+        monkeypatch,
+        memory=[{"name": "would_match", "score": 0.9, "snippet": "x"}],
+    )
+
+    rt = AgentRuntime(
+        dispatcher=lambda *a: {"ok": True},
+        tools=[],
+        config={
+            "model": "x",
+            "base_url": "http://x",
+            "max_tokens": 100,
+            "turn_budget": 1,
+            "temperature": 0.0,
+            "pre_retrieval": False,
+        },
+    )
+    rt._refresh_dynamic_context(user_text="anything")
+    if rt._dynamic_context_snapshot:
+        text = rt._dynamic_context_snapshot[0]["content"][0]["text"]
+        assert "Pre-turn retrieval" not in text
+
+
+def test_pre_turn_retrieval_ends_up_in_dynamic_context(monkeypatch):
+    """End-to-end: refresh with user_text → block appears in snapshot."""
+    import tdpilot_api_runtime as rt_mod
+    from tdpilot_api_runtime import AgentRuntime
+
+    monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
+    _stub_retrieval_handlers(
+        monkeypatch,
+        knowledge=[{"name": "noiseTOP", "score": 0.7, "snippet": "GPU noise"}],
+    )
+
+    rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
+    rt._refresh_dynamic_context(user_text="how does noiseTOP work?")
+    assert rt._dynamic_context_snapshot
+    text = rt._dynamic_context_snapshot[0]["content"][0]["text"]
+    assert "Pre-turn retrieval" in text
+    assert "noiseTOP" in text
 
 
 def test_build_dynamic_context_extra_sections_listed_first(monkeypatch):

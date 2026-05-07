@@ -517,6 +517,15 @@ class AgentRuntime:
         # from this dict.
         self._session_skills_activated: dict[str, str] = {}
 
+        # Phase 2.2 — pre-turn retrieval. Default on. Disabled via
+        # ``config["pre_retrieval"] = False`` (settable from a COMP
+        # toggle param). When enabled, ``start_turn`` runs cheap
+        # local retrieval (memory_recall + recipe_recall +
+        # knowledge_search) and prepends the top hits to the dynamic
+        # context — the model gets context-aware retrieval without
+        # having to spend a tool round-trip on it.
+        self._pre_retrieval_enabled: bool = bool(self._config.get("pre_retrieval", True))
+
         # Phase 0.1 — dynamic context snapshot. ``build_dynamic_context``
         # touches TD globals (parent().op('kb') for bundled knowledge
         # entries) so it MUST run on the cook thread. We refresh this
@@ -639,7 +648,7 @@ class AgentRuntime:
             },
         )
 
-    def _refresh_dynamic_context(self) -> None:
+    def _refresh_dynamic_context(self, user_text: str | None = None) -> None:
         """Snapshot the per-turn volatile context on the cook thread.
 
         :func:`build_dynamic_context` enumerates the bundled knowledge
@@ -654,15 +663,121 @@ class AgentRuntime:
 
         Phase 3.1 — also includes the triggered skill bodies so
         every turn after activation continues to see them.
+
+        Phase 2.2 — when ``user_text`` is provided AND pre-retrieval
+        is enabled, ALSO runs cheap local retrieval (memory_recall,
+        recipe_recall, knowledge_search) and prepends the top hits.
+        ``user_text=None`` (init/reset path) skips pre-retrieval.
         """
-        extra = self._build_active_skills_section()
+        extras: list[str] = []
+        skills_section = self._build_active_skills_section()
+        if skills_section:
+            extras.append(skills_section)
+        if self._pre_retrieval_enabled and user_text:
+            retr = self._run_pre_turn_retrieval(user_text)
+            if retr:
+                extras.append(retr)
+
         try:
             self._dynamic_context_snapshot = build_dynamic_context(
-                extra_sections=([extra] if extra else None)
+                extra_sections=(extras or None),
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[tdpilot_API/runtime] dynamic context refresh failed: {exc}")
             self._dynamic_context_snapshot = []
+
+    # ------------------------------------------------------------------
+    # Phase 2.2 — pre-turn retrieval
+    # ------------------------------------------------------------------
+
+    # Hard cap so the retrieval block never explodes the dynamic
+    # context. Roughly 800 tokens at ~3 chars/token.
+    _PRE_RETRIEVAL_CHAR_BUDGET = 2400
+    _PRE_RETRIEVAL_TOP_K_PER_SOURCE = 3
+    _PRE_RETRIEVAL_TOP_K_TOTAL = 4
+
+    def _run_pre_turn_retrieval(self, user_text: str) -> str:
+        """Run memory_recall + recipe_recall + knowledge_search against
+        ``user_text`` and return a formatted markdown block of the top
+        hits across all three. Returns ``""`` when nothing relevant
+        comes back.
+
+        Cook-thread only — handlers are pure-Python (BM25 over
+        in-memory indexes / SQLite FTS) so they don't touch the
+        cook-thread dispatcher's marshalling path. Each handler is
+        called directly to avoid the round-trip cost of going
+        through the agent's tool-use loop.
+        """
+        text = (user_text or "").strip()
+        if not text:
+            return ""
+
+        hits: list[dict] = []
+
+        # The three retrieval handlers are pure-Python and safe to
+        # call from any thread. Each guarded so a single failure
+        # doesn't kill the others.
+        sources: list[tuple[str, str, str]] = [
+            ("memory", "tdpilot_api_memory", "handle_memory_recall"),
+            ("recipe", "tdpilot_api_recipes", "handle_recipe_recall"),
+            ("knowledge", "tdpilot_api_knowledge", "handle_knowledge_search"),
+        ]
+        body = {"query": text, "top_k": self._PRE_RETRIEVAL_TOP_K_PER_SOURCE}
+        for label, mod_name, fn_name in sources:
+            try:
+                mod = __import__(mod_name)
+                fn = getattr(mod, fn_name, None)
+                if fn is None:
+                    continue
+                out = fn(dict(body))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[tdpilot_API/runtime] pre-retrieval {label} failed: {exc}")
+                continue
+            if not isinstance(out, dict):
+                continue
+            for m in out.get("matches", []) or []:
+                if not isinstance(m, dict):
+                    continue
+                # Tag the source so the caller-formatted line can
+                # show provenance to the model.
+                hits.append({"_source": label, **m})
+
+        if not hits:
+            return ""
+
+        # Sort by score descending; threshold below which a hit is
+        # too weak to be useful. BM25 over short queries can return
+        # near-zero scores — those would only confuse the model.
+        hits.sort(key=lambda h: float(h.get("score", 0.0) or 0.0), reverse=True)
+        top = [h for h in hits if float(h.get("score", 0.0) or 0.0) >= 0.05]
+        top = top[: self._PRE_RETRIEVAL_TOP_K_TOTAL]
+        if not top:
+            return ""
+
+        lines = [
+            (
+                "## Pre-turn retrieval (top local hits — automatic, model "
+                "decides whether to load full content via memory_get / "
+                "recipe_get / knowledge_get)"
+            )
+        ]
+        used = 0
+        for h in top:
+            src = h.get("_source", "?")
+            name = h.get("name") or h.get("filename") or "?"
+            score = float(h.get("score", 0.0) or 0.0)
+            snippet = (h.get("snippet") or h.get("description") or "").replace("\n", " ").strip()
+            line = f"- [{src}] {name} (score {score:.2f}) — {snippet}"
+            if len(line) > 280:
+                line = line[:277] + "..."
+            if used + len(line) + 1 > self._PRE_RETRIEVAL_CHAR_BUDGET:
+                break
+            lines.append(line)
+            used += len(line) + 1
+
+        if len(lines) == 1:
+            return ""  # only the header survived the budget — drop the block
+        return "\n".join(lines)
 
     def _build_active_skills_section(self) -> str:
         """Render the activated-skills block for the dynamic context.
@@ -741,7 +856,8 @@ class AgentRuntime:
         # _call_api; if we let the worker build it instead, every API
         # call would re-trigger TD's THREAD CONFLICT detector when the
         # bundled-knowledge enumerator hits parent().op('kb').
-        self._refresh_dynamic_context()
+        # Phase 2.2 — pass user_text so pre-turn retrieval can fire.
+        self._refresh_dynamic_context(user_text=user_text)
         # Phase 1.3 — clear the per-turn tool-call ledger so the
         # validation-hint check at turn end only considers THIS turn.
         self._turn_tool_calls = []
