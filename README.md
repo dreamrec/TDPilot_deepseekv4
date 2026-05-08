@@ -7,7 +7,7 @@
    ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝
 ```
 
-# TDPilot — DeepSeek v4 · v2.1.0
+# TDPilot — DeepSeek v4 · v2.1.1
 
 [![CI](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/tdpilot-dpsk4?label=npm)](https://www.npmjs.com/package/tdpilot-dpsk4)
@@ -20,7 +20,7 @@
 
 An AI assistant that lives inside TouchDesigner. It can inspect your network, build new operators, wire them up, debug errors, take screenshots, remember things between sessions, replay successful patterns, surface relevant memories before each turn, batch tool calls, recover from failures with actionable hints, and survive long conversations via context compaction.
 
-> **v2.0.0 just shipped (May 8, 2026)** — new chat font-size toggle (`a` / `A` glyph control with `Cmd/Ctrl + +` / `-` shortcuts), breaking changes to the tool-result classifier (sentinel-only) and removal of the legacy `tdpilot_v1_3.tox` filename shim. See [What's new since v1.5.x](#whats-new-since-v15x) below for the full timeline, or [CHANGELOG](CHANGELOG.md#200---2026-05-08) for the migration recap.
+> **v2.1.1 just shipped (May 9, 2026)** — paused-TD UX trap fix (no more 60s tool-call timeouts when TD is paused), 4 new `recovery_hints` patterns (`td.Par.rawVal`, renderTOP attr typos, `tdu.Matrix.translation`, `ParCollection.children`), high-contrast red mark for user messages in chat, and a parallel CI freshness gate for `tdpilot_API.tox`. See [What's new since v1.5.x](#whats-new-since-v15x) below for the full timeline, or [CHANGELOG](CHANGELOG.md#211---2026-05-08) for the v2.1.1 details.
 
 There are two ways to run it. Pick whichever fits — they coexist in the same TD project if you want both.
 
@@ -195,7 +195,7 @@ Both variants run on the same DeepSeek backend and share the same TD-side handle
 | **Trigger-based skill loading** | A user message containing `popx` / `slow` / `fps` / etc. auto-loads the matching skill body for the rest of the session |
 | **Trust-tier-aware results** | Every search hit carries `trust_tier` (`official` > `bundled` > `personal` > `community` > `transcript` > `experimental`); the agent weights evidence and validates community/transcript hits before claiming behaviour as fact |
 | **Severity-tracked validation hints** | High-severity mutations (create_node, exec_python, …) without a follow-up `td_get_errors` get a soft nudge in the chat — informational, never blocks |
-| **Failure recovery hints** | 10 known error patterns ("Unknown operator type", "THREAD CONFLICT", 401, "corpus not installed", …) attach an actionable `recovery_hint` so the agent doesn't retry the same failed call 3× |
+| **Failure recovery hints** | 14 known error patterns ("Unknown operator type", "THREAD CONFLICT", 401, "corpus not installed", v2.1.1's `td.Par.rawVal` / renderTOP attr typos / `tdu.Matrix.translation` / `ParCollection.children`, …) attach an actionable `recovery_hint` so the agent doesn't retry the same failed call 3× |
 | **`tool_batch`** | Run up to 8 independent tool calls in one round trip instead of N — saves model→server→model latency on chained reads |
 | **Per-turn observability traces** | `~/.tdpilot-api/traces/<YYYY-MM-DD>.jsonl` captures timing + tool calls + outcomes per turn (user text + args hashed for privacy); read via `td_get_recent_traces` |
 | **Conversation compaction** | At 20+ messages the oldest portion summarises into one synthetic assistant message; recent 10 turns kept verbatim with their original thinking-block signatures intact; full history forensically preserved at `~/.tdpilot-api/history/` |
@@ -210,10 +210,12 @@ The standalone has 91 tools that cover the everyday inspect → build → wire �
 
 ## What's new since v1.5.x
 
-The line from v1.5.0 (Apr 25, 2026) to v2.0.0 (May 8, 2026) shipped in tight bursts. Most important updates, newest first:
+The line from v1.5.0 (Apr 25, 2026) to v2.1.1 (May 9, 2026) shipped in tight bursts. Most important updates, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| **v2.1.1** | May 9 | **Paused-TD UX trap + recovery hints + chat red mark.** `start_turn` now warns when `me.time.play=False` so a paused TD doesn't look like the agent is wedged on 60s tool-call timeouts. 4 new `recovery_hints` (`td.Par.rawVal`, renderTOP attr typos, `tdu.Matrix.translation`, `ParCollection.children`) harvested from a 184-message lighting-redesign turn. User messages in the chat now render with a high-contrast white-on-red `[USER]` stamp + thick red rule + red gradient. Parallel CI freshness gate added for `tdpilot_API.tox` so it can no longer silently go stale. |
+| **v2.1.0** | May 8 | **Chat UI rework.** Quiet-mode toggle (`Cmd/Ctrl + .`) hides tool-call surfaces for prompts-only scrollback. Smaller default fonts. Contextual ASCII flourishes appended to assistant turn-ends (9-bucket topic-keyword pool). Plus the v2.0.0 audit fixes (patch session lifecycle, recovery hints, info-textDAT red ❌). |
 | **v2.0.0** | May 8 | **Breaking + chat polish.** `is_tool_error_result()` requires the explicit `_tool_error` sentinel (legacy `"error"`-key fallback removed); `tdpilot_v1_3.tox` filename shim removed. New: small/large chat font-size toggle (`a` / `A`) at the far right of the status bar with `Cmd/Ctrl + +` / `-` shortcuts. Internal handlers unaffected — `recovery.attach_hint()` auto-stamps the sentinel; only external dispatcher integrations need to migrate. |
 | **v1.10.0** | May 8 | `DeprecationWarning` cycle for v2.0's breaking change. One-release window for external dispatchers to migrate to the explicit sentinel before the fallback was removed. |
 | **v1.9.0** | May 8 | **Measurement infrastructure (Phase 4).** Mock-DeepSeek for offline agent evals in regular CI, skill-prompt evals, ruff hardening floor (F841 + SIM118). |
