@@ -95,6 +95,9 @@
   #status-bar .rhs {
     color: var(--muted);
     position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
   #status-bar .rhs::before {
     content: "[";
@@ -104,6 +107,33 @@
     content: "]";
     color: var(--rule);
   }
+  /* Phase 2 (1.8.0) — transport (ws) vs agent state split. The LHS
+     shows `▰▰▰ tdpilot_api · ws <state>`, the RHS shows agent state
+     plus the model badge plus a per-turn token counter. */
+  #ws-state {
+    color: var(--muted);
+    font-weight: normal;
+  }
+  #ws-state.connected { color: var(--accent); }
+  #ws-state.connecting,
+  #ws-state.reconnecting { color: var(--accent-2); }
+  #model-badge {
+    color: var(--muted);
+  }
+  #model-badge.pro { color: var(--accent); }
+  #model-badge.flash { color: var(--accent-2); }
+  #model-badge:empty { display: none; }
+  #token-meter {
+    color: var(--muted);
+  }
+  #token-meter:empty { display: none; }
+  /* Faint divider between state, model, tokens, cursor. */
+  #status-bar .rhs > span + span:not(:empty)::before {
+    content: '·';
+    margin-right: 6px;
+    color: var(--rule);
+  }
+  #status-bar .rhs > .cursor::before { content: ''; margin: 0; }
   /* Blinking cursor block after the status text — classic CRT vibe.
      Visible only while the agent is working; idle hides it. */
   #status-bar .cursor {
@@ -120,6 +150,13 @@
     50%, 100% { opacity: 0; }
   }
 
+  #history-wrap {
+    flex: 1 1 auto;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
   #history {
     flex: 1 1 auto;
     overflow-y: auto;
@@ -129,6 +166,119 @@
     flex-direction: column;
     gap: 10px;
     scroll-behavior: smooth;
+  }
+  /* Phase 2 (1.8.0) — floating "↓ N new" button. Visible only when
+     the user has scrolled up AND new messages have arrived. Click
+     jumps to bottom and resumes autoscroll. */
+  #scroll-jump {
+    position: absolute;
+    right: 22px;
+    bottom: 14px;
+    background: var(--bg-2);
+    color: var(--accent-2);
+    border: 1px solid var(--accent);
+    padding: 4px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    box-shadow: 0 2px 12px -2px rgba(107, 71, 255, 0.5);
+    display: none;
+    z-index: 5;
+  }
+  #scroll-jump.visible { display: inline-block; }
+  #scroll-jump:hover {
+    background: var(--accent);
+    color: var(--bg);
+  }
+  /* Copy-to-clipboard button on assistant messages. Hidden until
+     hover for visual quiet — appears in the upper-right of the
+     message bubble. */
+  .msg.assistant {
+    position: relative;
+  }
+  .msg-copy {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 80ms;
+  }
+  .msg.assistant:hover .msg-copy { opacity: 1; }
+  .msg-copy:hover {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+  .msg-copy.copied { color: var(--accent); border-color: var(--accent); }
+
+  /* Phase 2 (1.8.0) — node-path chips inside tool result bodies.
+     Inline chips for TD paths (`/project1/noise1`) so the user can
+     click to ask about that node. The chip stays inline-flow with
+     the surrounding monospace text, just visually styled. */
+  .node-path-chip {
+    display: inline-block;
+    background: var(--bg-3);
+    border: 1px solid var(--accent-dim);
+    color: var(--accent-2);
+    padding: 0 4px;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    cursor: pointer;
+    border-radius: 0;
+  }
+  .node-path-chip:hover {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+  /* Screenshot thumbnail. Bounded so a 4K capture doesn't blow out
+     the chat layout. Click opens the lightbox overlay. */
+  .tool-screenshot {
+    margin: 4px 0 0;
+    max-width: 320px;
+    max-height: 240px;
+    cursor: zoom-in;
+    border: 1px solid var(--rule);
+    background: var(--bg);
+    image-rendering: pixelated;
+  }
+  .tool-screenshot-meta {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  /* Lightbox overlay — full-size view triggered by clicking a
+     thumbnail. ESC or click-outside closes it. */
+  #lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 6, 18, 0.92);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    cursor: zoom-out;
+  }
+  #lightbox.visible { display: flex; }
+  #lightbox img {
+    max-width: 92%;
+    max-height: 92%;
+    image-rendering: pixelated;
+    box-shadow: 0 0 24px rgba(107, 71, 255, 0.6);
   }
   #history::-webkit-scrollbar { width: 6px; }
   #history::-webkit-scrollbar-track { background: var(--bg); }
@@ -187,6 +337,160 @@
     opacity: 0.85;
   }
   .msg.hint .role { color: #d9a900; }
+
+  /* Phase 2 (1.8.0) — markdown blocks for assistant messages. The
+     parent .msg has white-space: pre-wrap so paragraphs preserve
+     newlines, but block elements rendered by the markdown renderer
+     (.md-pre, .md-ul) override that locally where needed. Inline
+     <strong>, <em>, <code> are unstyled containers that inherit. */
+  .msg.assistant .body {
+    /* Reset pre-wrap so block-level markdown lays out normally. The
+       inline paragraph wrapper (.md-p) re-applies pre-wrap so casual
+       newlines from the model still render. */
+    white-space: normal;
+  }
+  .md-p {
+    white-space: pre-wrap;
+    margin: 0 0 6px;
+  }
+  .md-p:last-child { margin-bottom: 0; }
+  .md-h {
+    margin: 6px 0 4px;
+    color: var(--accent-2);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-weight: bold;
+  }
+  .md-pre {
+    background: var(--bg-2);
+    border: 1px solid var(--rule);
+    padding: 8px 10px;
+    margin: 6px 0;
+    overflow-x: auto;
+    white-space: pre;
+    font-size: 12px;
+  }
+  .md-pre code {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: var(--text);
+  }
+  .md-code {
+    background: var(--bg-2);
+    border: 1px solid var(--rule);
+    padding: 0 4px;
+    font-size: 12px;
+    color: var(--accent-2);
+  }
+  .md-ul, .md-ol {
+    margin: 4px 0;
+    padding-left: 22px;
+    white-space: normal;
+  }
+  .md-ul li, .md-ol li {
+    margin: 2px 0;
+    white-space: pre-wrap;
+  }
+  .msg.assistant a {
+    color: var(--accent-2);
+    text-decoration: underline;
+  }
+  .msg.assistant a:hover { color: var(--accent); }
+
+  /* Phase 2 (1.8.0) — collapsible tool_call / tool_result pairs.
+     Each call/result pair becomes a <details> element with a single
+     summary row "▸ td_create_node(args) → ok (123ms)" and a body that
+     expands to show the full args + result on click. The body is
+     bounded by max-height; long results truncate at 400 chars with
+     an "expand" toggle. */
+  details.tool-pair {
+    /* Inherits .msg padding/border. summary becomes the row content. */
+    cursor: default;
+  }
+  details.tool-pair .tool-pair-summary {
+    cursor: pointer;
+    list-style: none;
+    outline: none;
+    user-select: none;
+    display: block;
+  }
+  details.tool-pair .tool-pair-summary::-webkit-details-marker { display: none; }
+  details.tool-pair .tool-pair-summary::before {
+    content: '▸';
+    display: inline-block;
+    width: 10px;
+    margin-right: 4px;
+    color: var(--tool-fg);
+    transition: transform 80ms;
+  }
+  details.tool-pair[open] > .tool-pair-summary::before {
+    /* Rotate the chevron when open. Bullet stays in flow. */
+    transform: rotate(90deg);
+  }
+  .tool-pair-summary .tool-name {
+    color: var(--accent-2);
+    font-weight: 700;
+  }
+  .tool-pair-summary .tool-args {
+    color: var(--tool-fg);
+    opacity: 0.85;
+  }
+  .tool-pair-summary .tool-status { color: var(--muted); }
+  .tool-pair-summary .tool-status.ok { color: var(--accent); }
+  .tool-pair-summary .tool-status.err { color: var(--error-fg); }
+  .tool-pair-body {
+    margin: 6px 0 0 14px;
+    padding: 6px 10px;
+    background: var(--bg-2);
+    border-left: 1px solid var(--rule);
+    font-size: 11px;
+  }
+  .tool-args-block {
+    margin: 0 0 6px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    white-space: pre-wrap;
+    color: var(--tool-fg);
+    font-size: 11px;
+  }
+  .tool-args-block.empty { display: none; }
+  .tool-result-block { margin-top: 4px; }
+  .tool-result-body {
+    margin: 0;
+    padding: 4px 8px;
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-size: 11px;
+    max-height: 240px;
+    overflow-y: auto;
+    color: var(--text);
+  }
+  .tool-result-body.err { color: var(--error-fg); }
+  .tool-result-truncated {
+    color: var(--muted);
+    font-style: italic;
+  }
+  .tool-expand {
+    margin-top: 4px;
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--accent-2);
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+  .tool-expand:hover {
+    background: var(--accent);
+    color: var(--bg);
+  }
 
   /* Welcome screen: ASCII block logo + minimal instructions. */
   .welcome {
@@ -362,9 +666,9 @@
 </head>
 <body>
   <div id="status-bar">
-    <span class="lhs" data-prefix="▰▰▰">tdpilot_api</span>
+    <span class="lhs" data-prefix="▰▰▰"><span id="ws-label">tdpilot_api</span> · ws <span id="ws-state">connecting</span></span>
     <span class="rhs">
-      <span id="status-text">idle</span><span class="cursor">█</span>
+      <span id="status-text">idle</span><span id="model-badge"></span><span id="token-meter"></span><span class="cursor">█</span>
     </span>
   </div>
   <!--
@@ -373,8 +677,19 @@
     Single source of truth means the wizard DOM survives both the
     initial render AND fullSync([]) — pre-1.7.1 the inline welcome and
     fullSync's rebuild diverged so /reset wiped the wizard forever.
+
+    The history-wrap holds both the scrollable history and the
+    floating "↓ N new" jump button (Phase 2 / 1.8.0). The button is
+    positioned absolutely inside the wrap so it stays anchored when
+    history scrolls.
   -->
-  <div id="history"></div>
+  <div id="history-wrap">
+    <div id="history"></div>
+    <button id="scroll-jump" type="button" title="Jump to bottom (End)"></button>
+  </div>
+  <div id="lightbox" role="dialog" aria-hidden="true">
+    <img id="lightbox-img" alt="screenshot full view" />
+  </div>
   <div id="input-bar">
     <textarea id="input" placeholder="ask touchdesigner to do something…" rows="2" autocomplete="off" spellcheck="false"></textarea>
     <button id="stop" title="Interrupt the agent (POST /stop)">stop</button>
@@ -439,6 +754,10 @@
   const $status = document.getElementById('status-text');
   const $statusBar = document.getElementById('status-bar');
   const $lhs = $statusBar.querySelector('.lhs');
+  const $wsState = document.getElementById('ws-state');
+  const $modelBadge = document.getElementById('model-badge');
+  const $tokenMeter = document.getElementById('token-meter');
+  const $scrollJump = document.getElementById('scroll-jump');
 
   // Render the initial welcome from the same template fullSync uses, so
   // the wizard DOM is guaranteed present.
@@ -461,6 +780,17 @@
   // composed into the displayed text by render().
   let agentState = 'idle';   // idle | thinking | calling | reset | error | <free-form>
   let wsState = 'connecting'; // connecting | connected | reconnecting
+  // Phase 2 (1.8.0) — status-bar split: transport on the LHS, agent
+  // state + model + token meter on the RHS. modelShort is one of
+  // "flash" | "pro" | <model name>; tokenMeter accumulates over the
+  // current turn and resets when the agent transitions out of idle.
+  let modelShort = '';
+  let modelTier = '';
+  let modelFull = '';
+  let turnInputTokens = 0;
+  let turnOutputTokens = 0;
+  let turnCachedTokens = 0;
+  let lastWorking = false;
 
   function isWorkingAgentState(s) {
     const t = String(s || '').toLowerCase();
@@ -559,10 +889,254 @@
   }
   pollFirstRun();
 
-  function autoScroll() {
+  // Phase 2 (1.8.0) — scroll-aware autoscroll. We only auto-snap to
+  // bottom when the user is already at (or very near) the bottom; if
+  // they've scrolled up to read older content, new messages stack
+  // up out of view and the floating "↓ N new" jump button appears.
+  // Threshold matches the 100px buffer in the plan doc.
+  const AUTOSCROLL_THRESHOLD_PX = 100;
+  let autoStickToBottom = true;
+  let unreadCount = 0;
+
+  function isNearBottom() {
+    return $history.scrollTop + $history.clientHeight >= $history.scrollHeight - AUTOSCROLL_THRESHOLD_PX;
+  }
+
+  function refreshScrollJump() {
+    if (autoStickToBottom || unreadCount === 0) {
+      $scrollJump.classList.remove('visible');
+      $scrollJump.textContent = '';
+      return;
+    }
+    $scrollJump.classList.add('visible');
+    $scrollJump.textContent = '↓ ' + unreadCount + ' new';
+  }
+
+  function jumpToBottom() {
+    autoStickToBottom = true;
+    unreadCount = 0;
+    refreshScrollJump();
     requestAnimationFrame(() => {
       $history.scrollTop = $history.scrollHeight;
     });
+  }
+
+  function autoScroll() {
+    if (autoStickToBottom) {
+      requestAnimationFrame(() => {
+        $history.scrollTop = $history.scrollHeight;
+      });
+      return;
+    }
+    // User is reading older content — count the new arrival rather
+    // than yanking the viewport. The floating button lets them catch
+    // up at their own pace.
+    unreadCount++;
+    refreshScrollJump();
+  }
+
+  $history.addEventListener('scroll', () => {
+    const wasSticky = autoStickToBottom;
+    autoStickToBottom = isNearBottom();
+    if (autoStickToBottom && !wasSticky) {
+      // The user manually scrolled back to bottom; clear the unread
+      // counter so the floating button retracts cleanly.
+      unreadCount = 0;
+    }
+    refreshScrollJump();
+  }, { passive: true });
+
+  $scrollJump.addEventListener('click', jumpToBottom);
+
+  // ---- markdown rendering (Phase 2 / 1.8.0) ---------------------------
+  // Inline DOM-builder for assistant messages. Untrusted text always
+  // flows through textContent / createTextNode — never innerHTML. Link
+  // hrefs are filtered through isSafeUrl before assignment, blocking
+  // javascript:, data:, vbscript:, file: and any other non-http(s)
+  // scheme. A static enforcement test in tests/test_chat_markdown.py
+  // checks that every `.innerHTML =` in this IIFE has a string-literal
+  // or WELCOME_HTML right-hand side, never an arbitrary variable.
+  //
+  // Supported features:
+  //   blocks  : paragraphs, code fences (```lang ... ```),
+  //             unordered/ordered lists, headings (rendered as bold
+  //             paragraphs to suit the chat-panel scale).
+  //   inline  : `code`, **bold**, __bold__, *italic*, _italic_,
+  //             [text](url) with URL allowlist.
+  //
+  // Deliberately omitted (deferred to v1.9.0): tables, blockquotes,
+  // images via markdown syntax, autolinks. The model produces these
+  // rarely enough that plaintext fallback is acceptable.
+
+  // Allow http(s) absolute, mailto:, hash anchors, root-relative, and
+  // explicit relative paths. Reject anything that looks like a scheme
+  // we don't trust (javascript:, data:, vbscript:, file:, blob:, etc.).
+  // Also reject any URL containing internal whitespace or control
+  // characters: the browser strips them when assigning to .href, so
+  // "Java\tScript:alert(1)" would normalise to a javascript: scheme
+  // at click time even though the scheme regex thinks otherwise.
+  function isSafeUrl(href) {
+    if (!href) return false;
+    const s = String(href).trim();
+    if (!s) return false;
+    if (/[\x00-\x1f\s]/.test(s)) return false;
+    const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(s);
+    if (schemeMatch) {
+      const scheme = schemeMatch[1].toLowerCase();
+      return scheme === 'http' || scheme === 'https' || scheme === 'mailto';
+    }
+    return s.startsWith('#') || s.startsWith('/') || s.startsWith('?') || s.startsWith('./') || s.startsWith('../') || /^[\w-]/.test(s);
+  }
+
+  // Tokenise one paragraph's worth of text into a flat list of
+  // {type, value | text+href} markers. Priority encoded by alternation
+  // order: code > link > bold > italic. The regex never matches across
+  // newlines (each delimiter excludes \n) so block-level layout stays
+  // intact when this function is fed one paragraph at a time.
+  function tokenizeInline(text) {
+    const out = [];
+    if (!text) return out;
+    const re = /(`[^`\n]+`)|(\[[^\]\n]+\]\([^)\s]+\))|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) out.push({ type: 'text', value: text.slice(last, m.index) });
+      if (m[1]) {
+        out.push({ type: 'code', value: m[1].slice(1, -1) });
+      } else if (m[2]) {
+        const linkM = /^\[([^\]\n]+)\]\(([^)\s]+)\)$/.exec(m[2]);
+        if (linkM) out.push({ type: 'link', text: linkM[1], href: linkM[2] });
+        else out.push({ type: 'text', value: m[2] });
+      } else if (m[3]) {
+        out.push({ type: 'bold', value: m[3].slice(2, -2) });
+      } else if (m[4]) {
+        out.push({ type: 'bold', value: m[4].slice(2, -2) });
+      } else if (m[5]) {
+        out.push({ type: 'italic', value: m[5].slice(1, -1) });
+      } else if (m[6]) {
+        out.push({ type: 'italic', value: m[6].slice(1, -1) });
+      }
+      last = re.lastIndex;
+    }
+    if (last < text.length) out.push({ type: 'text', value: text.slice(last) });
+    return out;
+  }
+
+  function buildInlineNode(tok) {
+    if (tok.type === 'text') return document.createTextNode(tok.value);
+    if (tok.type === 'code') {
+      const el = document.createElement('code');
+      el.className = 'md-code';
+      el.textContent = tok.value;
+      return el;
+    }
+    if (tok.type === 'bold') {
+      const el = document.createElement('strong');
+      el.textContent = tok.value;
+      return el;
+    }
+    if (tok.type === 'italic') {
+      const el = document.createElement('em');
+      el.textContent = tok.value;
+      return el;
+    }
+    if (tok.type === 'link') {
+      if (!isSafeUrl(tok.href)) {
+        // Render the markdown source as literal text — never produce
+        // an <a> with a hostile href. This is the XSS guard.
+        return document.createTextNode('[' + tok.text + '](' + tok.href + ')');
+      }
+      const el = document.createElement('a');
+      el.href = tok.href;
+      el.target = '_blank';
+      el.rel = 'noopener noreferrer';
+      el.textContent = tok.text;
+      return el;
+    }
+    return document.createTextNode('');
+  }
+
+  function renderInline(parent, text) {
+    const tokens = tokenizeInline(text);
+    for (const tok of tokens) parent.appendChild(buildInlineNode(tok));
+  }
+
+  // Block-level renderer. Walks the text line-by-line, emitting
+  // paragraphs, fenced code, lists, and headings into `parent`.
+  function renderMarkdownInto(parent, text) {
+    if (!text) return;
+    const lines = String(text).split('\n');
+    let i = 0;
+    let para = [];
+    function flushPara() {
+      if (!para.length) return;
+      const p = document.createElement('div');
+      p.className = 'md-p';
+      renderInline(p, para.join('\n'));
+      parent.appendChild(p);
+      para = [];
+    }
+    while (i < lines.length) {
+      const line = lines[i];
+      const fenceMatch = /^```([a-zA-Z0-9_+-]*)\s*$/.exec(line);
+      if (fenceMatch) {
+        flushPara();
+        const lang = fenceMatch[1] || '';
+        const codeLines = [];
+        i++;
+        while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+          codeLines.push(lines[i]);
+          i++;
+        }
+        if (i < lines.length) i++; // consume closing fence
+        const pre = document.createElement('pre');
+        pre.className = 'md-pre';
+        const code = document.createElement('code');
+        if (lang) code.className = 'lang-' + lang;
+        code.textContent = codeLines.join('\n');
+        pre.appendChild(code);
+        parent.appendChild(pre);
+        continue;
+      }
+      const ulMatch = /^[-*+]\s+(.*)$/.exec(line);
+      const olMatch = /^\d+\.\s+(.*)$/.exec(line);
+      if (ulMatch || olMatch) {
+        flushPara();
+        const ordered = !!olMatch;
+        const list = document.createElement(ordered ? 'ol' : 'ul');
+        list.className = ordered ? 'md-ol' : 'md-ul';
+        while (i < lines.length) {
+          const m2 = ordered
+            ? /^\d+\.\s+(.*)$/.exec(lines[i])
+            : /^[-*+]\s+(.*)$/.exec(lines[i]);
+          if (!m2) break;
+          const li = document.createElement('li');
+          renderInline(li, m2[1]);
+          list.appendChild(li);
+          i++;
+        }
+        parent.appendChild(list);
+        continue;
+      }
+      const hMatch = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (hMatch) {
+        flushPara();
+        const h = document.createElement('div');
+        h.className = 'md-h';
+        renderInline(h, hMatch[2]);
+        parent.appendChild(h);
+        i++;
+        continue;
+      }
+      if (line === '') {
+        flushPara();
+        i++;
+        continue;
+      }
+      para.push(line);
+      i++;
+    }
+    flushPara();
   }
 
   function appendMessage(role, message) {
@@ -581,26 +1155,445 @@
     r.textContent = role;
     div.appendChild(r);
     const body = document.createElement('div');
-    body.textContent = message == null ? '' : String(message);
+    body.className = 'body';
+    const text = message == null ? '' : String(message);
+    if (role === 'assistant' && text) {
+      // Markdown is assistant-only. user/tool_call/tool_result/error/
+      // hint stay plain — those payloads either come from the user (no
+      // need to render markup) or from tool execution (raw JSON should
+      // not be reinterpreted as markdown).
+      renderMarkdownInto(body, text);
+    } else {
+      body.textContent = text;
+    }
     div.appendChild(body);
+    if (role === 'assistant' && text) {
+      // Phase 2 (1.8.0) — copy-to-clipboard button on assistant
+      // messages. Stores the original markdown source on the button
+      // dataset so the user gets the un-rendered text (preserving
+      // backticks, lists, etc.) instead of stripped innerText.
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'msg-copy';
+      copyBtn.textContent = 'copy';
+      copyBtn.dataset.source = text;
+      copyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        copyToClipboard(text).then((ok) => {
+          copyBtn.textContent = ok ? 'copied' : 'failed';
+          copyBtn.classList.toggle('copied', ok);
+          setTimeout(() => {
+            copyBtn.textContent = 'copy';
+            copyBtn.classList.remove('copied');
+          }, 1200);
+        });
+      });
+      div.appendChild(copyBtn);
+    }
     $history.appendChild(div);
     autoScroll();
   }
 
+  // Best-effort clipboard copy. Modern browsers expose
+  // navigator.clipboard.writeText, but it requires a secure context;
+  // fall back to a synthetic textarea + execCommand for older WebKit
+  // builds (the standalone runs against TouchDesigner's bundled
+  // Chromium which is recent but not always permission-blessed).
+  function copyToClipboard(text) {
+    const t = String(text == null ? '' : text);
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(t).then(() => true, () => false);
+    }
+    return new Promise((resolve) => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = t;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'absolute';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        resolve(!!ok);
+      } catch (_e) {
+        resolve(false);
+      }
+    });
+  }
+
+  // ---- collapsible tool calls (Phase 2 / 1.8.0) -----------------------
+  // The standalone runtime now broadcasts EV_TOOL_CALL/EV_TOOL_RESULT
+  // as structured WS messages of types `tool_call` and `tool_result`.
+  // The browser opens a <details> placeholder per call and the matching
+  // result fills in latency + status. fullSync (history rehydration) is
+  // unaffected — it still goes through appendMessage's plain-text path.
+  let pendingToolCall = null;
+
+  const TOOL_RESULT_TRUNC = 400;
+
+  function formatArgSig(args) {
+    if (!args || typeof args !== 'object') return '';
+    const keys = Object.keys(args);
+    if (!keys.length) return '';
+    const parts = [];
+    const max = Math.min(keys.length, 2);
+    for (let i = 0; i < max; i++) {
+      const k = keys[i];
+      const v = args[k];
+      let s;
+      if (v == null) s = String(v);
+      else if (typeof v === 'string') {
+        s = v.length > 40 ? v.slice(0, 37) + '…' : v;
+      } else if (typeof v === 'number' || typeof v === 'boolean') {
+        s = String(v);
+      } else if (Array.isArray(v)) {
+        s = '[…]';
+      } else if (typeof v === 'object') {
+        s = '{…}';
+      } else {
+        s = '…';
+      }
+      parts.push(k + '=' + s);
+    }
+    if (keys.length > max) parts.push('…');
+    return parts.join(', ');
+  }
+
+  function formatJsonPretty(value) {
+    if (value == null) return String(value);
+    try { return JSON.stringify(value, null, 2); }
+    catch (_e) { return String(value); }
+  }
+
+  function appendToolCall(payload) {
+    clearWelcome();
+    const details = document.createElement('details');
+    details.className = 'msg tool_call tool-pair';
+
+    const summary = document.createElement('summary');
+    summary.className = 'tool-pair-summary';
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'tool-name';
+    nameEl.textContent = (payload && payload.name) || '?';
+    const argEl = document.createElement('span');
+    argEl.className = 'tool-args';
+    const argSig = formatArgSig(payload && payload.args);
+    argEl.textContent = '(' + argSig + ')';
+    const statusEl = document.createElement('span');
+    statusEl.className = 'tool-status';
+    statusEl.textContent = ' · running…';
+
+    summary.appendChild(nameEl);
+    summary.appendChild(argEl);
+    summary.appendChild(statusEl);
+    details.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'tool-pair-body';
+    const argsBlock = document.createElement('pre');
+    argsBlock.className = 'tool-args-block';
+    const argsText = formatJsonPretty(payload && payload.args);
+    if (!argsText || argsText === '{}' || argsText === 'null') {
+      argsBlock.classList.add('empty');
+    } else {
+      argsBlock.textContent = argsText;
+    }
+    body.appendChild(argsBlock);
+    details.appendChild(body);
+
+    $history.appendChild(details);
+    pendingToolCall = {
+      details: details,
+      statusEl: statusEl,
+      body: body,
+      name: (payload && payload.name) || '?',
+    };
+    autoScroll();
+  }
+
+  // Phase 2 (1.8.0) — TD node-path detection. Matches a leading
+  // slash + at least two path segments (single-segment "/foo" too
+  // ambiguous for a chip). Lookbehind avoids matching INSIDE a URL
+  // like http://host/path or a windows-y "C:/foo/bar".
+  const NODE_PATH_RE = /(?<![A-Za-z0-9_:/])(\/[A-Za-z_][A-Za-z0-9_]*(?:\/[A-Za-z_][A-Za-z0-9_]*)+)/g;
+
+  function appendWithNodePathChips(parent, text) {
+    if (!text) return;
+    NODE_PATH_RE.lastIndex = 0;
+    let last = 0;
+    let m;
+    while ((m = NODE_PATH_RE.exec(text)) !== null) {
+      if (m.index > last) {
+        parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+      }
+      const chip = document.createElement('span');
+      chip.className = 'node-path-chip';
+      chip.textContent = m[1];
+      chip.title = 'Click to ask about ' + m[1];
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Populate input — let the user edit / send. Auto-sending
+        // would surprise users mid-conversation.
+        $input.value = 'Inspect ' + m[1] + ' (use td_get_node_detail).';
+        $input.focus();
+        $input.selectionStart = $input.selectionEnd = $input.value.length;
+      });
+      parent.appendChild(chip);
+      last = NODE_PATH_RE.lastIndex;
+    }
+    if (last < text.length) {
+      parent.appendChild(document.createTextNode(text.slice(last)));
+    }
+  }
+
+  // Phase 2 (1.8.0) — screenshot thumbnail. td_screenshot returns a
+  // dict with `data_base64` (jpeg bytes b64-encoded) and `format`.
+  // Render as an <img> bounded to 320×240; click opens the lightbox.
+  // Allowed image mime types for the data: URL — anything else is
+  // treated as untrusted and the frame falls through to the JSON path.
+  const ALLOWED_SCREENSHOT_FORMATS = new Set(['jpeg', 'jpg', 'png', 'webp']);
+
+  function looksLikeScreenshotResult(result) {
+    if (!result || typeof result !== 'object') return false;
+    const fmt = (result.format || '').toLowerCase();
+    const data = result.data_base64;
+    if (typeof data !== 'string' || !data) return false;
+    if (!ALLOWED_SCREENSHOT_FORMATS.has(fmt)) return false;
+    // Sanity: base64 only uses [A-Za-z0-9+/=]. A field that smuggled
+    // a `<script>` literal in won't pass this guard.
+    if (!/^[A-Za-z0-9+/=\s]+$/.test(data)) return false;
+    return true;
+  }
+
+  function renderScreenshotInto(parent, result) {
+    const fmt = (result.format || 'jpeg').toLowerCase();
+    const mime = (fmt === 'jpg') ? 'image/jpeg' : 'image/' + fmt;
+    const img = document.createElement('img');
+    img.className = 'tool-screenshot';
+    img.alt = 'screenshot of ' + (result.path || 'TOP');
+    img.src = 'data:' + mime + ';base64,' + result.data_base64;
+    img.addEventListener('click', () => openLightbox(img.src, img.alt));
+    parent.appendChild(img);
+    const meta = document.createElement('div');
+    meta.className = 'tool-screenshot-meta';
+    const parts = [];
+    if (result.path) parts.push(result.path);
+    if (result.width && result.height) parts.push(result.width + '×' + result.height);
+    if (result.format) parts.push(result.format);
+    if (typeof result.size_bytes === 'number') parts.push(Math.round(result.size_bytes / 1024) + 'kb');
+    meta.textContent = parts.join(' · ');
+    parent.appendChild(meta);
+  }
+
+  // Lightbox controls. Single shared overlay because there's only
+  // ever one fullscreen at a time.
+  const $lightbox = document.getElementById('lightbox');
+  const $lightboxImg = document.getElementById('lightbox-img');
+
+  function openLightbox(src, alt) {
+    $lightboxImg.src = src;
+    $lightboxImg.alt = alt || '';
+    $lightbox.classList.add('visible');
+    $lightbox.setAttribute('aria-hidden', 'false');
+  }
+  function closeLightbox() {
+    $lightbox.classList.remove('visible');
+    $lightbox.setAttribute('aria-hidden', 'true');
+    // Drop the src so a stale screenshot doesn't linger in memory.
+    $lightboxImg.removeAttribute('src');
+  }
+  $lightbox.addEventListener('click', closeLightbox);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $lightbox.classList.contains('visible')) {
+      e.preventDefault();
+      closeLightbox();
+    }
+  });
+
+  function buildResultBlock(text, isError, options) {
+    const opts = options || {};
+    const wrap = document.createElement('div');
+    wrap.className = 'tool-result-block';
+    if (opts.screenshot) {
+      renderScreenshotInto(wrap, opts.screenshot);
+      // Even with a screenshot, expose the JSON metadata in a
+      // truncated <pre> for completeness — drop the giant
+      // data_base64 first so the body stays small.
+      const metaText = formatJsonPretty(stripScreenshotPayload(opts.screenshot));
+      const pre = document.createElement('pre');
+      pre.className = 'tool-result-body' + (isError ? ' err' : '');
+      pre.textContent = metaText;
+      wrap.appendChild(pre);
+      return wrap;
+    }
+    const pre = document.createElement('pre');
+    pre.className = 'tool-result-body' + (isError ? ' err' : '');
+    const truncated = text.length > TOOL_RESULT_TRUNC;
+    const slice = truncated ? text.slice(0, TOOL_RESULT_TRUNC) : text;
+    appendWithNodePathChips(pre, slice);
+    if (truncated) {
+      const moreNode = document.createElement('span');
+      moreNode.className = 'tool-result-truncated';
+      moreNode.textContent = ' …(+' + (text.length - TOOL_RESULT_TRUNC) + ' chars)';
+      pre.appendChild(moreNode);
+      const expand = document.createElement('button');
+      expand.type = 'button';
+      expand.className = 'tool-expand';
+      expand.textContent = 'expand';
+      expand.addEventListener('click', () => {
+        // Replace the pre's content with the full text + chips.
+        // We use innerHTML='' (allowed: empty literal RHS) to clear
+        // before re-appending; never assigning untrusted strings.
+        pre.innerHTML = '';
+        appendWithNodePathChips(pre, text);
+        expand.remove();
+      });
+      wrap.appendChild(pre);
+      wrap.appendChild(expand);
+      return wrap;
+    }
+    wrap.appendChild(pre);
+    return wrap;
+  }
+
+  function stripScreenshotPayload(result) {
+    // Return a shallow clone with the giant base64 field redacted —
+    // keeps the metadata readable without dumping a few hundred KB
+    // of payload into the chat.
+    const out = {};
+    for (const k of Object.keys(result || {})) {
+      if (k === 'data_base64') {
+        out[k] = '<' + (result[k] ? result[k].length : 0) + ' base64 chars>';
+      } else {
+        out[k] = result[k];
+      }
+    }
+    return out;
+  }
+
+  function appendToolResult(payload) {
+    if (!payload) return;
+    const isError = !!payload.is_error;
+    const latency = (typeof payload.latency_ms === 'number') ? payload.latency_ms : null;
+    const resultText = formatJsonPretty(payload.result);
+    // Phase 2 (1.8.0) — render td_screenshot results as inline
+    // thumbnails. Detection is data-driven (presence of a base64
+    // payload + allowed mime), not name-based, so a future
+    // screenshot-returning tool gets the same treatment.
+    const screenshot = looksLikeScreenshotResult(payload.result) ? payload.result : null;
+    const blockOpts = screenshot ? { screenshot: screenshot } : null;
+    if (pendingToolCall && pendingToolCall.name === payload.name) {
+      const status = isError ? 'error' : 'ok';
+      let txt = ' · ' + status;
+      if (latency != null) txt += ' (' + latency + 'ms)';
+      pendingToolCall.statusEl.textContent = txt;
+      pendingToolCall.statusEl.className = 'tool-status ' + (isError ? 'err' : 'ok');
+      const block = buildResultBlock(resultText, isError, blockOpts);
+      pendingToolCall.body.appendChild(block);
+      // Auto-open errors so the user sees them without an extra
+      // click. Auto-open screenshots too so the thumbnail is
+      // immediately visible — the whole point of inlining it.
+      if (isError || screenshot) pendingToolCall.details.open = true;
+      pendingToolCall = null;
+      autoScroll();
+      return;
+    }
+    // Stray tool_result — render as a standalone <details> with the
+    // result already filled in. This is the path for results that
+    // arrive without a matching call (e.g. after a textDAT reload
+    // mid-turn lost the pending pointer).
+    clearWelcome();
+    const details = document.createElement('details');
+    details.className = 'msg tool_result tool-pair';
+    if (isError || screenshot) details.open = true;
+    const summary = document.createElement('summary');
+    summary.className = 'tool-pair-summary';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'tool-name';
+    nameEl.textContent = payload.name || '?';
+    const statusEl = document.createElement('span');
+    statusEl.className = 'tool-status ' + (isError ? 'err' : 'ok');
+    let txt = ' · ' + (isError ? 'error' : 'ok');
+    if (latency != null) txt += ' (' + latency + 'ms)';
+    statusEl.textContent = txt;
+    summary.appendChild(nameEl);
+    summary.appendChild(statusEl);
+    details.appendChild(summary);
+    const body = document.createElement('div');
+    body.className = 'tool-pair-body';
+    body.appendChild(buildResultBlock(resultText, isError, blockOpts));
+    details.appendChild(body);
+    $history.appendChild(details);
+    autoScroll();
+  }
+
+  function formatTokenCount(n) {
+    if (n >= 100000) return (n / 1000).toFixed(0) + 'k';
+    if (n >= 10000) return (n / 1000).toFixed(1) + 'k';
+    if (n >= 1000) return (n / 1000).toFixed(2) + 'k';
+    return String(n);
+  }
+
+  function refreshModelBadge() {
+    if (!modelShort) {
+      $modelBadge.textContent = '';
+      $modelBadge.className = '';
+      $modelBadge.removeAttribute('title');
+      return;
+    }
+    const cls = modelShort === 'flash' ? 'flash' : (modelShort === 'pro' ? 'pro' : '');
+    $modelBadge.textContent = 'model: ' + modelShort;
+    $modelBadge.className = cls;
+    if (modelFull && modelFull !== modelShort) {
+      $modelBadge.title = modelFull + (modelTier ? ' (tier: ' + modelTier + ')' : '');
+    } else {
+      $modelBadge.title = modelTier ? 'tier: ' + modelTier : '';
+    }
+  }
+
+  function refreshTokenMeter() {
+    const total = turnInputTokens + turnOutputTokens;
+    if (!total) {
+      $tokenMeter.textContent = '';
+      $tokenMeter.removeAttribute('title');
+      return;
+    }
+    $tokenMeter.textContent = formatTokenCount(total) + ' tok';
+    const parts = [
+      'input:  ' + turnInputTokens,
+      'output: ' + turnOutputTokens,
+    ];
+    if (turnCachedTokens) parts.push('cached: ' + turnCachedTokens);
+    $tokenMeter.title = parts.join('\n');
+  }
+
   function render() {
-    // Compose the right-hand status text from both states. When the
-    // agent is doing real work that's the headline; otherwise the ws
-    // transport state surfaces (so the user sees "reconnecting" but
-    // doesn't see a phantom Stop button).
     const a = String(agentState || 'idle').toLowerCase();
     const w = String(wsState || 'connected').toLowerCase();
     const working = isWorkingAgentState(a);
+
+    // Status text on the RHS shows agent state only — transport
+    // surfaces on the LHS. Pre-1.8.0 we composed both into one
+    // string; the split lets the user see ws=connected even while
+    // the agent is mid-turn.
+    $status.textContent = a;
+    $wsState.textContent = w;
+    $wsState.className = w === 'connected' ? 'connected'
+      : (w === 'connecting' || w.startsWith('reconnecting')) ? 'connecting'
+      : '';
+
     if (working) {
-      $status.textContent = w === 'connected' ? a : `${a} · ws ${w}`;
-    } else {
-      $status.textContent = w === 'connected' ? a : `ws ${w}`;
-    }
-    if (working) {
+      // A new turn begins when we transition out of a non-working
+      // state. Reset the token meter so the user sees fresh per-turn
+      // counts. Model + tier persist (they belong to the SESSION).
+      if (!lastWorking) {
+        turnInputTokens = 0;
+        turnOutputTokens = 0;
+        turnCachedTokens = 0;
+        refreshTokenMeter();
+      }
       startPulse();
       $stop.classList.add('visible');
       $stop.disabled = false;
@@ -608,6 +1601,25 @@
       stopPulse();
       $stop.classList.remove('visible');
     }
+    lastWorking = working;
+  }
+
+  function setModel(payload) {
+    if (!payload) return;
+    modelShort = String(payload.short || payload.model || '').toLowerCase();
+    modelTier = String(payload.tier || '').toLowerCase();
+    modelFull = String(payload.model || '');
+    refreshModelBadge();
+  }
+
+  function recordUsage(payload) {
+    const u = (payload && payload.usage) || {};
+    // Add this call's tokens to the running per-turn totals. DeepSeek's
+    // compat layer may omit some fields; treat each as optional.
+    if (typeof u.input_tokens === 'number') turnInputTokens += u.input_tokens;
+    if (typeof u.output_tokens === 'number') turnOutputTokens += u.output_tokens;
+    if (typeof u.cache_read_input_tokens === 'number') turnCachedTokens += u.cache_read_input_tokens;
+    refreshTokenMeter();
   }
 
   function setAgentStatus(text) {
@@ -631,6 +1643,25 @@
   function fullSync(rows) {
     $history.innerHTML = '';
     welcomed = false;
+    // A reset / rehydrate wipes the DOM, so any previously-open
+    // tool-call placeholder is no longer in the document. Drop the
+    // pointer so the next tool_result event can't try to fill in a
+    // detached <details>.
+    pendingToolCall = null;
+    // Phase 2 (1.8.0) — same logic for the per-turn token meter.
+    // /reset starts a fresh session; the meter must zero out and
+    // the lastWorking gate must reset so the next "thinking…" tick
+    // re-fires the per-turn reset path.
+    turnInputTokens = 0;
+    turnOutputTokens = 0;
+    turnCachedTokens = 0;
+    lastWorking = false;
+    refreshTokenMeter();
+    // Same for scroll state — the new content starts at zero, so
+    // re-stick to bottom and clear any "unread" badge.
+    autoStickToBottom = true;
+    unreadCount = 0;
+    refreshScrollJump();
     if (!rows || !rows.length) {
       // Re-render from the canonical template so the wizard div
       // is present in the new DOM. Then re-arm pollFirstRun against
@@ -659,6 +1690,7 @@
     $send.disabled = true;
     setAgentStatus('sending…');
     appendMessage('user', trimmed);
+    recordSent(trimmed);
     fetch(SEND_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8', ...AUTH_HEADERS },
@@ -693,22 +1725,109 @@
 
   $send.addEventListener('click', send);
   $stop.addEventListener('click', stopAgent);
+
+  // Phase 2 (1.8.0) — terminal-style ↑ history recall. Pressing ↑
+  // when the input is empty pulls the last user message back; ↑ on a
+  // recalled buffer cycles further back. ↓ moves forward. Reset
+  // when the user starts typing or sends.
+  const sentHistory = [];
+  let recallIndex = -1;
+
+  function recordSent(text) {
+    if (!text) return;
+    if (sentHistory.length && sentHistory[sentHistory.length - 1] === text) return;
+    sentHistory.push(text);
+    if (sentHistory.length > 50) sentHistory.shift();
+    recallIndex = -1;
+  }
+
+  function recallPrev() {
+    if (!sentHistory.length) return;
+    if (recallIndex === -1) recallIndex = sentHistory.length - 1;
+    else if (recallIndex > 0) recallIndex--;
+    $input.value = sentHistory[recallIndex];
+    // Move caret to end so the user can keep typing past the recalled text.
+    requestAnimationFrame(() => {
+      $input.selectionStart = $input.selectionEnd = $input.value.length;
+    });
+  }
+
+  function recallNext() {
+    if (recallIndex === -1) return;
+    if (recallIndex < sentHistory.length - 1) {
+      recallIndex++;
+      $input.value = sentHistory[recallIndex];
+    } else {
+      recallIndex = -1;
+      $input.value = '';
+    }
+  }
+
   $input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
+      return;
     }
     // Esc anywhere in the chat is a quick keyboard shortcut for stop.
     if (e.key === 'Escape' && $stop.classList.contains('visible')) {
       e.preventDefault();
       stopAgent();
+      return;
+    }
+    // ↑ recall previous sent message — only when buffer is empty OR
+    // we're already in recall mode (so a casual ↑ during normal
+    // typing doesn't clobber the in-progress message).
+    if (e.key === 'ArrowUp' && (!$input.value || recallIndex !== -1)) {
+      e.preventDefault();
+      recallPrev();
+      return;
+    }
+    if (e.key === 'ArrowDown' && recallIndex !== -1) {
+      e.preventDefault();
+      recallNext();
+      return;
     }
   });
-  // Esc at document scope too — useful when focus is on the body.
+  $input.addEventListener('input', () => {
+    // Any free-form typing exits recall mode so subsequent ↑ doesn't
+    // surprise the user by overwriting their changes.
+    if ($input.value !== (sentHistory[recallIndex] || '')) {
+      recallIndex = -1;
+    }
+  });
+
+  // Document-scope shortcuts. Skip when focus is in the input so
+  // typing characters never collides — except for Cmd/Ctrl variants
+  // that the input wouldn't consume anyway.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && $stop.classList.contains('visible') && document.activeElement !== $input) {
+    const inInput = document.activeElement === $input;
+    const cmd = e.metaKey || e.ctrlKey;
+
+    if (e.key === 'Escape' && $stop.classList.contains('visible') && !inInput) {
       e.preventDefault();
       stopAgent();
+      return;
+    }
+    // Cmd/Ctrl+K — clear the chat. Mirrors a common terminal binding
+    // (clear screen) and the welcome screen reappears.
+    if (cmd && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      fullSync([]);
+      return;
+    }
+    // Cmd/Ctrl+/ — focus the input (universal "type something" shortcut).
+    if (cmd && e.key === '/') {
+      e.preventDefault();
+      $input.focus();
+      return;
+    }
+    // End — jump to bottom of history. Useful after scrolling up to
+    // read older content.
+    if (e.key === 'End' && !inInput) {
+      e.preventDefault();
+      jumpToBottom();
+      return;
     }
   });
 
@@ -729,10 +1848,14 @@
   function applyMessage(msg) {
     if (!msg || !msg.type) return;
     switch (msg.type) {
-      case 'append':   appendMessage(msg.role, msg.message); break;
-      case 'status':   setStatus(msg.status); break;
-      case 'fullSync': fullSync(msg.rows || []); break;
-      case 'clear':    fullSync([]); break;
+      case 'append':       appendMessage(msg.role, msg.message); break;
+      case 'tool_call':    appendToolCall(msg); break;
+      case 'tool_result':  appendToolResult(msg); break;
+      case 'status':       setStatus(msg.status); break;
+      case 'model':        setModel(msg); break;
+      case 'usage':        recordUsage(msg); break;
+      case 'fullSync':     fullSync(msg.rows || []); break;
+      case 'clear':        fullSync([]); break;
     }
   }
 
