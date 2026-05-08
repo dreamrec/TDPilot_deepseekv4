@@ -2090,10 +2090,52 @@ def handle_python_help(body):
     if not target:
         return {'error': 'Missing required field: target (e.g. "td", "td.OP", "tdu")'}
 
-    # Security: only allow dotted identifiers — no arbitrary expressions
+    # v2.0.1: detect common agent mistakes BEFORE the regex catch-all so
+    # the error message is actionable. Agents kept passing operator paths
+    # or parameter expressions and bouncing off the generic "Invalid
+    # target" error 3+ times per turn.
+    target_stripped = target.strip()
+    if not target_stripped:
+        return {'error': 'Empty target. Pass a class/module name like "td.OP" or "tdu".'}
+
+    # Operator reference — agent confused td_get_node_detail / td_get_params
+    # (operator inspection) with td_python_help (class/module docs).
+    if target_stripped.startswith('op(') or target_stripped.startswith("op[") or '/project1' in target_stripped:
+        return {
+            'error': (
+                'td_python_help expects a CLASS or MODULE name, not an operator '
+                'reference. You passed "{}". Use td_get_node_detail / td_get_params '
+                'for live operator inspection. For class help, pass a type name '
+                '(e.g. "td.geometryCOMP", "td.TOP", "td.CHOP").'
+            ).format(target_stripped[:80]),
+            'hint': 'Try td_get_node_detail({"path": "...your-op-path..."}) instead.',
+        }
+
+    # Parameter expression — agent passed something like `op('x').par.y`
+    if '.par.' in target_stripped or '[' in target_stripped or '(' in target_stripped:
+        return {
+            'error': (
+                'td_python_help expects a CLASS or MODULE name, not an expression. '
+                'You passed "{}". For live parameter values use td_get_params. '
+                'For parameter-class docs try "td.Par" or "td.ParCollection".'
+            ).format(target_stripped[:80]),
+            'hint': 'No parens, brackets, or attribute chains beyond the type name.',
+        }
+
+    # Security: only allow dotted identifiers — no arbitrary expressions.
+    # This catch-all stays as the final guard.
     import re as _re_mod
-    if not _re_mod.match(r'^[A-Za-z_][A-Za-z0-9_.]*$', target):
-        return {'error': 'Invalid target: must be a dotted identifier like "td.OP" or "tdu"'}
+    if not _re_mod.match(r'^[A-Za-z_][A-Za-z0-9_.]*$', target_stripped):
+        return {
+            'error': (
+                'Invalid target: must be a dotted identifier. Got "{}".'
+            ).format(target_stripped[:80]),
+            'hint': (
+                'Examples: "td", "td.OP", "td.geometryCOMP", "tdu", "tdu.Vector". '
+                'No parens, brackets, quotes, or whitespace.'
+            ),
+        }
+    target = target_stripped
 
     import io
     old_stdout = sys.stdout

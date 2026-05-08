@@ -82,7 +82,19 @@ else
             ZIP_PATH="/tmp/td-mcp.zip"
             curl -L -o "$ZIP_PATH" "$ZIP_URL"
             unzip -q "$ZIP_PATH" -d /tmp/td-mcp-extract
-            mv "/tmp/td-mcp-extract/${REPO_DIR_NAME}-main" "$INSTALL_DIR"
+            # v2.0.1 security audit fix: GitHub extracts the archive as
+            # ``<github-repo-name>-<branch>``, i.e. ``TDPilot_deepseekv4-main``.
+            # The previous code looked for ``${REPO_DIR_NAME}-main`` which
+            # interpolates to ``.tdpilot-dpsk4-main`` (the LOCAL install
+            # directory naming, not the GitHub archive convention). Anyone
+            # without git in PATH hit a no-such-file error here. Use the
+            # actual extracted dir name; fall back to a wildcard for forks.
+            EXTRACTED_DIR="/tmp/td-mcp-extract/TDPilot_deepseekv4-main"
+            if [ ! -d "$EXTRACTED_DIR" ]; then
+                # Fork or future archive-naming change — pick the only dir.
+                EXTRACTED_DIR="$(find /tmp/td-mcp-extract -mindepth 1 -maxdepth 1 -type d | head -1)"
+            fi
+            mv "$EXTRACTED_DIR" "$INSTALL_DIR"
             rm -f "$ZIP_PATH"
             rm -rf /tmp/td-mcp-extract
         fi

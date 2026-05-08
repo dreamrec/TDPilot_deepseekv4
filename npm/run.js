@@ -11,7 +11,7 @@
  *   npx tdpilot brains          manage downloaded brain DBs
  */
 
-const { execSync, spawn } = require("child_process");
+const { execSync, spawn, spawnSync } = require("child_process");
 const { existsSync } = require("fs");
 const { join } = require("path");
 const os = require("os");
@@ -33,7 +33,28 @@ function pinToLatestTag(dir) {
   try {
     const latestTag = run("git describe --tags --abbrev=0", { cwd: dir });
     if (latestTag) {
-      run(`git checkout ${latestTag}`, { cwd: dir });
+      // v2.0.1 security audit: the tag value comes from the remote and
+      // could theoretically contain shell metachars if a malicious mirror
+      // landed an exotic tag. (a) Validate the shape before using it.
+      // (b) Switch from execSync(`git checkout ${latestTag}`) — which
+      // goes through a shell — to spawnSync with an array, which never
+      // sees a shell. Belt-and-braces.
+      if (!/^[A-Za-z0-9._/-]+$/.test(latestTag)) {
+        console.warn(
+          `[TDPilot] Skipping pin: tag ${JSON.stringify(latestTag)} has unexpected characters.`
+        );
+        return null;
+      }
+      const r = spawnSync("git", ["checkout", latestTag], {
+        cwd: dir,
+        stdio: "pipe",
+        encoding: "utf-8",
+      });
+      if (r.status !== 0) {
+        throw new Error(
+          `git checkout ${latestTag} failed: ${(r.stderr || r.stdout || "").trim()}`
+        );
+      }
       console.log(`[TDPilot] Pinned to ${latestTag}`);
       return latestTag;
     }
