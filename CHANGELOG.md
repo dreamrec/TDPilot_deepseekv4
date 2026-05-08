@@ -1,5 +1,110 @@
 # Changelog
 
+## 1.8.0 - 2026-05-08
+
+**Visual programming console for the standalone chat.** Phase 2 of
+the post-1.7 audit plan, bundled as one release across PR-8 → PR-12.
+The chat goes from a terminal log to a real visual UI: markdown,
+collapsible tool calls, a token meter, scroll-aware autoscroll +
+keyboard shortcuts, and inline screenshots. Backend changes are
+small and additive — the WS protocol picks up four new structured
+message types (`tool_call`, `tool_result`, `model`, `usage`) but
+every existing flow still works.
+
+CLI bridge (`tdpilot-dpsk4`) is byte-identical at the source level
+except for `API_VERSION`; the standalone variant carries all the
+visible changes.
+
+### [PR-8] Markdown rendering + DOM sanitization
+
+Assistant messages now render through a small block-and-inline
+markdown renderer (paragraphs, code fences, lists, headings, bold,
+italic, links). Every text node flows through `textContent` /
+`createTextNode` — never `innerHTML`. URL hrefs are filtered through
+an `isSafeUrl` allowlist (http/https/mailto only), and the URL
+sanitiser rejects internal whitespace / control chars to defend
+against the `Java\tScript:` mangling attack. A static enforcement
+test in `tests/test_chat_markdown.py` scans the IIFE for any
+`.innerHTML =` assignment with a non-literal RHS — catches future
+regressions where an edit slips an untrusted-string assignment in.
+Adversarial fixtures cover `<script>`, `onerror=`, `data:text/html`,
+`vbscript:`, `file://`, `blob:`, and the tab-mangled
+`Java\tScript:alert(1)` payload.
+
+### [PR-9] Collapsible tool calls + result truncation + latency
+
+Each tool call/result pair is now a `<details>` element with the
+summary `▸ td_create_node(args) · ok (123ms)`. Long results truncate
+at 400 chars with an "expand" button. Errors auto-open. The runtime
+adds a per-tool latency clock (independent of the tracer, so latency
+is captured even when `trace_logging` is disabled), and EV_TOOL_RESULT
+broadcasts now carry `latency_ms`. The extension translates each
+EV_TOOL_CALL / EV_TOOL_RESULT into a structured WS payload; the
+transcript still receives the legacy one-line summary so /history
+rehydration after /reset stays compatible.
+
+### [PR-10] Status bar split: transport / agent / model / tokens
+
+The status bar now has clean lanes:
+- **LHS:** transport (`▰▰▰ tdpilot_api · ws connected`).
+- **RHS:** agent state · model badge · per-turn token meter ·
+  blinking cursor.
+
+A new `EV_USAGE` event carries DeepSeek's per-call `usage` dict
+through the agent → runtime → extension → chat pipeline. Sanitised
+to a four-field allowlist (`input_tokens`, `output_tokens`,
+`cache_creation_input_tokens`, `cache_read_input_tokens`) at the
+runtime boundary so an unfamiliar key from a future model version
+never reaches the WS payload. The token meter accumulates over a
+turn (multiple round-trips during tool-use chains) and resets on
+the transition out of idle. EV_MODEL is now a structured `{type:
+"model"}` WS event instead of being folded into the agent status
+string.
+
+### [PR-11] Scroll-aware autoscroll + keyboard shortcuts
+
+- Autoscroll only sticks to bottom when the user is at the bottom
+  (within 100px). Otherwise new messages stack up out of view and a
+  floating "↓ N new" button appears.
+- ↑ recalls the last sent message into the input (terminal
+  convention); ↓ moves forward; recall mode exits when the user
+  edits the recalled text.
+- Cmd/Ctrl+K wipes the chat (same path as `/reset`).
+- Cmd/Ctrl+/ focuses the input.
+- End jumps to bottom of history.
+- Each assistant message gets a copy-to-clipboard button stamped
+  on hover; preserves the original markdown source via `dataset`.
+
+### [PR-12] Node-path chips + screenshot thumbnails
+
+- Tool result text is scanned for TD node paths (`/project1/foo/bar`)
+  and each match becomes a clickable chip. Click pre-fills the input
+  with `Inspect <path> (use td_get_node_detail).`. The detection
+  regex requires at least two segments and uses a lookbehind to
+  reject paths inside URLs / Windows paths.
+- `td_screenshot` results render inline as 320×240 thumbnails with a
+  metadata line (path · WxH · format · size). Click opens a lightbox
+  overlay (Esc or click-outside closes). Detection is data-driven
+  (presence of `data_base64` + an allowlisted format), so any tool
+  returning the same shape gets the same treatment.
+- The data: URL is permitted ONLY for `<img src>` here. `isSafeUrl`
+  still rejects `data:` in `<a href>` contexts (PR-8 contract).
+
+### Tests + gates
+
+1354 tests pass (was 1208 before this release). 146 new tests across
+five files:
+- `test_chat_markdown.py` (63 tests, includes adversarial fixtures)
+- `test_chat_tool_pairs.py` (24 tests)
+- `test_chat_status_bar.py` (20 tests)
+- `test_chat_scroll_shortcuts.py` (23 tests)
+- `test_chat_node_paths_screenshots.py` (16 tests)
+
+ruff clean. All 12 versioned files synced at 1.8.0.
+`check_tox_freshness.py` will fail until the standalone .tox is
+rebuilt inside TouchDesigner — that's the post-merge step the user
+runs.
+
 ## 1.7.2 - 2026-05-08
 
 **Skills hygiene + content currency.** Closes the audit's three skill-

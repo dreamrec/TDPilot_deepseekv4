@@ -439,6 +439,7 @@ class TDPilotAPIExt:
             EV_TEXT,
             EV_TOOL_CALL,
             EV_TOOL_RESULT,
+            EV_USAGE,
         )
 
         if kind == EV_TEXT:
@@ -446,16 +447,42 @@ class TDPilotAPIExt:
             self._html_append("assistant", str(payload))
         elif kind == EV_TOOL_CALL:
             name = payload.get("name", "?")
+            args = payload.get("args") if isinstance(payload, dict) else None
             self._set_last_tool(name)
-            line = name + "(" + _short_args(payload.get("args")) + ")"
+            line = name + "(" + _short_args(args) + ")"
             self._append_transcript("tool_call", line)
-            self._html_append("tool_call", line)
+            # Phase 2 (1.8.0) — structured payload for the collapsible
+            # chat UI. The browser opens a placeholder <details> entry
+            # and waits for the matching tool_result to fill in the
+            # outcome + latency. The legacy `append` path is preserved
+            # in the transcript so /history rehydration on reload still
+            # shows the same one-line summary.
+            self._broadcast(
+                {
+                    "type": "tool_call",
+                    "name": str(name),
+                    "args": args if isinstance(args, dict) else {},
+                    "summary": line,
+                }
+            )
         elif kind == EV_TOOL_RESULT:
             name = payload.get("name", "?")
-            ok = "ERR" if payload.get("is_error") else "ok"
+            is_error = bool(payload.get("is_error")) if isinstance(payload, dict) else False
+            result = payload.get("result") if isinstance(payload, dict) else None
+            latency_ms = payload.get("latency_ms") if isinstance(payload, dict) else None
+            ok = "ERR" if is_error else "ok"
             line = f"{name} → {ok}"
             self._append_transcript("tool_result", line)
-            self._html_append("tool_result", line)
+            self._broadcast(
+                {
+                    "type": "tool_result",
+                    "name": str(name),
+                    "is_error": is_error,
+                    "result": _coerce_jsonable(result),
+                    "latency_ms": latency_ms if isinstance(latency_ms, int) else None,
+                    "summary": line,
+                }
+            )
         elif kind == EV_DONE:
             self._set_status("idle")
             self._html_status("idle")
@@ -491,8 +518,28 @@ class TDPilotAPIExt:
                 self.owner.par.Activemodel.val = short[:60]
             except Exception:
                 pass
-            # Also tag the chat status so the browser sees the change.
-            self._html_status(f"model:{short} ({tier})")
+            # Phase 2 (1.8.0) — push a structured `model` event to the
+            # chat. The status-bar code uses tier + picked separately
+            # to render a short-form badge ("pro" vs "flash") and a
+            # tooltip with the full model name.
+            self._broadcast(
+                {
+                    "type": "model",
+                    "tier": str(tier),
+                    "model": str(picked),
+                    "short": str(short),
+                }
+            )
+        elif kind == EV_USAGE:
+            # Phase 2 (1.8.0) — token usage from a single API call.
+            # Sanitised in the runtime; we just forward the dict as-is
+            # so the chat can accumulate a per-turn meter.
+            self._broadcast(
+                {
+                    "type": "usage",
+                    "usage": payload if isinstance(payload, dict) else {},
+                }
+            )
         elif kind == EV_SUB_TEXT:
             # Sprint 4.1 — surface subagent text in the chat with a
             # [sub:id] tag so it's distinguishable from parent output.
@@ -788,3 +835,30 @@ def _short_args(args: Any) -> str:
     if len(s) > 80:
         return s[:77] + "..."
     return s
+
+
+def _coerce_jsonable(value: Any, _depth: int = 0) -> Any:
+    """Convert a tool-result value into something ``json.dumps`` will
+    serialise without choking. Tool results travel from worker thread
+    to dispatcher to the WS broadcast layer; an exotic type (custom
+    TD object, set, datetime, etc.) reaching ``json.dumps`` raises
+    and the broadcast helper drops the message — leaving the chat's
+    placeholder tool-call entry stuck on "running…" forever.
+
+    Strategy:
+      - primitives (str, int, float, bool, None) pass through.
+      - dicts have keys stringified and values recursed (cap depth).
+      - lists/tuples/sets recurse (sets become lists).
+      - anything else — repr() it, capped at 4000 chars.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if _depth >= 6:
+        return repr(value)[:4000]
+    if isinstance(value, dict):
+        return {str(k): _coerce_jsonable(v, _depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_coerce_jsonable(v, _depth + 1) for v in value]
+    if isinstance(value, (set, frozenset)):
+        return [_coerce_jsonable(v, _depth + 1) for v in value]
+    return repr(value)[:4000]
