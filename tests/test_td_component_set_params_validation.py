@@ -21,26 +21,21 @@ error that cites TD's warning. Numeric parameters (floats clamped to 0,
 booleans coerced to False, etc.) are unaffected — None after set is
 the discriminator.
 
-This test loads ``td_component/mcp_webserver_callbacks.py`` directly
-via ``importlib`` (same pattern as test_td_component_extensions.py) and
-injects a fake ``op()`` into the module namespace. That lets us drive
-the real handler with real TD-shaped responses without a live TD.
+This test composes the mcp/ split package via
+``_callbacks_loader.load_callbacks_module`` (PR-16 replaced the
+single ``mcp_webserver_callbacks.py`` god module with a split package
+in v1.8.3) and injects a fake ``op()`` into the module namespace. That
+lets us drive the real handler with real TD-shaped responses without a
+live TD.
 """
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
-MODULE_PATH = Path(__file__).resolve().parents[1] / "td_component" / "mcp_webserver_callbacks.py"
+from _callbacks_loader import load_callbacks_module
 
 
 def _load_callbacks_module():
-    spec = importlib.util.spec_from_file_location("td_cb_setparams_test", str(MODULE_PATH))
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    return load_callbacks_module("td_cb_setparams_test")
 
 
 # ---------------------------------------------------------------------------

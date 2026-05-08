@@ -30,8 +30,30 @@ from urllib.parse import urlparse
 # autostart, renderer). They live as Text DATs inside the tdpilot_dpsk4 COMP — the
 # parent COMP that the v1.5.6 .tox now exports. CI hash-tracks them so a
 # committed .tox stays in sync with the source on disk.
+#
+# v1.8.3 (PR-16): the 3149-line ``mcp_webserver_callbacks.py`` god module is
+# replaced by an ``mcp/`` package whose files are concatenated into the
+# baked textDAT body via ``mcp._composer.compose``. The hash now covers the
+# split sources directly so any byte change in any split bumps the hash and
+# forces a .tox rebuild — same semantics as before, finer-grained git diffs.
 _TOX_SOURCE_FILES = (
-    "td_component/mcp_webserver_callbacks.py",
+    # mcp/ split package — replaces the pre-1.8.3 mcp_webserver_callbacks.py.
+    "td_component/callbacks/_composer.py",
+    "td_component/callbacks/__init__.py",
+    "td_component/callbacks/_header.py",
+    "td_component/callbacks/router.py",
+    "td_component/callbacks/auth.py",
+    "td_component/callbacks/serializers.py",
+    "td_component/callbacks/handlers/__init__.py",
+    "td_component/callbacks/handlers/nodes.py",
+    "td_component/callbacks/handlers/exec_and_custom_params.py",
+    "td_component/callbacks/handlers/exec_python.py",
+    "td_component/callbacks/handlers/inspect.py",
+    "td_component/callbacks/handlers/search.py",
+    "td_component/callbacks/handlers/lifecycle.py",
+    "td_component/callbacks/handlers/pulse.py",
+    "td_component/callbacks/handlers/monitor.py",
+    "td_component/callbacks/handlers/analyze_frame.py",
     "td_component/event_emitter.py",
     "td_component/ws_callbacks.py",
     "td_component/tdpilot_dpsk4_startup.py",
@@ -143,6 +165,35 @@ def _read_repo_file(repo_root, relative_path):
         return handle.read()
 
 
+def _read_callbacks_source(repo_root):
+    """Compose the mcp/ split package into a single textDAT body.
+
+    The .tox bakes the result as the ``mcp_webserver_callbacks`` textDAT
+    inside ``mcp_server``. Importing the composer fails inside TD's exec()
+    sandbox (no package machinery), so we read + concatenate the split
+    files directly using the same order ``td_component/callbacks/_composer.py``
+    pins. ``tests/test_composer_byte_equivalence.py`` enforces parity
+    between this concat and the composer's own output, so drift between
+    the two hardcoded orders is caught in CI.
+    """
+    compose_order = (
+        "td_component/callbacks/_header.py",
+        "td_component/callbacks/router.py",
+        "td_component/callbacks/auth.py",
+        "td_component/callbacks/serializers.py",
+        "td_component/callbacks/handlers/nodes.py",
+        "td_component/callbacks/handlers/exec_and_custom_params.py",
+        "td_component/callbacks/handlers/exec_python.py",
+        "td_component/callbacks/handlers/inspect.py",
+        "td_component/callbacks/handlers/search.py",
+        "td_component/callbacks/handlers/lifecycle.py",
+        "td_component/callbacks/handlers/pulse.py",
+        "td_component/callbacks/handlers/monitor.py",
+        "td_component/callbacks/handlers/analyze_frame.py",
+    )
+    return "".join(_read_repo_file(repo_root, rel) for rel in compose_order)
+
+
 def _guess_repo_root():
     def _append_variants(bucket, path):
         if not path:
@@ -155,7 +206,10 @@ def _guess_repo_root():
         bucket.append(os.path.dirname(os.path.dirname(path)))
 
     def _is_repo_root(path):
-        marker = os.path.join(path, "td_component", "mcp_webserver_callbacks.py")
+        # v1.8.3: PR-16 replaced the god module with td_component/callbacks/. Use
+        # the composer as the new marker — it's the load-bearing entry point
+        # for the .tox build.
+        marker = os.path.join(path, "td_component", "mcp", "_composer.py")
         pyproject = os.path.join(path, "pyproject.toml")
         return os.path.isfile(marker) and os.path.isfile(pyproject)
 
@@ -387,7 +441,7 @@ def build_and_export():
             "os.environ['TD_MCP_REPO_ROOT']='/ABS/PATH/TDPilot'"
         )
 
-    callbacks_code = _read_repo_file(repo_root, "td_component/mcp_webserver_callbacks.py")
+    callbacks_code = _read_callbacks_source(repo_root)
     event_emitter_code = _read_repo_file(repo_root, "td_component/event_emitter.py")
     ws_callbacks_code = _read_repo_file(repo_root, "td_component/ws_callbacks.py")
     export_path = _resolve_export_path(repo_root)
