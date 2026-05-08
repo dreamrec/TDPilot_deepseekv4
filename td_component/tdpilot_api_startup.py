@@ -28,10 +28,14 @@ _SCAN_PARENTS = ("/local", "/project1")
 _MARKER_FILES = [
     "pyproject.toml",
     os.path.join("td_component", "tdpilot_api_agent.py"),
-    os.path.join("td_component", "mcp_webserver_callbacks.py"),
+    # PR-16 (v1.8.3): the god module was decomposed; pick the new
+    # load-bearing entry point as the marker.
+    os.path.join("td_component", "callbacks", "_composer.py"),
 ]
 _SOURCE_GLOB = os.path.join("td_component", "tdpilot_api_*.py")
-_HANDLERS_FILE = os.path.join("td_component", "mcp_webserver_callbacks.py")
+# v1.8.3: the staleness check now considers any byte change in the
+# callbacks/ split package (pre-1.8.3 it watched the single god module).
+_HANDLERS_GLOB = os.path.join("td_component", "callbacks", "**", "*.py")
 
 
 def _read_config():
@@ -69,7 +73,8 @@ def _is_tox_stale(repo_root, tox_path):
     except OSError:
         return True
     candidates = list(glob.glob(os.path.join(repo_root, _SOURCE_GLOB)))
-    candidates.append(os.path.join(repo_root, _HANDLERS_FILE))
+    # v1.8.3: callbacks/ split — recursive glob picks up handlers/*.py too.
+    candidates.extend(glob.glob(os.path.join(repo_root, _HANDLERS_GLOB), recursive=True))
     for src in candidates:
         try:
             if os.path.getmtime(src) > tox_mtime:

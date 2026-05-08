@@ -1,18 +1,15 @@
-import importlib.util
 import os
-from pathlib import Path
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "td_component" / "mcp_webserver_callbacks.py"
+from _callbacks_loader import load_callbacks_module
 
 
 def _load_callbacks_module(secret: str, require_auth: str = "1"):
+    # PR-16: callbacks now compose from td_component/callbacks/ at test time. The
+    # env vars must be set BEFORE the source execs, since module-level
+    # SHARED_SECRET / REQUIRE_AUTH aliases are evaluated then.
     os.environ["TD_MCP_SHARED_SECRET"] = secret
     os.environ["TD_MCP_REQUIRE_AUTH"] = require_auth
-    spec = importlib.util.spec_from_file_location("td_cb_test", str(MODULE_PATH))
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    return load_callbacks_module("td_cb_test_auth")
 
 
 def test_check_auth_refuses_when_secret_missing_and_required(monkeypatch):

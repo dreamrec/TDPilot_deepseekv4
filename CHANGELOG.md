@@ -1,5 +1,94 @@
 # Changelog
 
+## 1.8.3 - 2026-05-08
+
+**God-module decompose — Phase 3 PR-16 of the post-1.7 audit plan (F-14).**
+The single 3149-line ``td_component/mcp_webserver_callbacks.py`` is replaced
+by a focused split package at ``td_component/callbacks/`` with a build-time
+composer that reconstitutes the textDAT body baked into the .tox. Closes
+the last MED-severity architectural finding from the v1.7.0 audit.
+
+### What changed
+
+- `td_component/mcp_webserver_callbacks.py` (3149 lines) is **deleted**.
+- `td_component/callbacks/` is the new home (renamed from the audit-doc
+  sketch's `mcp/` to avoid colliding with the PyPI `mcp` package that
+  conftest.py exposes via `td_component/` on `sys.path`):
+  - `_composer.py` — `compose()` / `compose_bytes()` / `source_paths()`
+    + the canonical `COMPOSE_ORDER` tuple.
+  - `_header.py` — module docstring, imports, env-reader helpers,
+    module-level constants (`API_VERSION`, `RESTRICTED_TOKENS`,
+    `STANDARD_BLOCKED_TOKENS`, etc.).
+  - `router.py` — `onHTTPRequest` and the `/api/...` route table.
+  - `auth.py` — `_extract_headers`, `_check_auth_error`,
+    `_constant_time_equals`, `_send_json`.
+  - `serializers.py` — `_serialize_op`, `_serialize_params`.
+  - `handlers/nodes.py`, `handlers/exec_and_custom_params.py`,
+    `handlers/exec_python.py`, `handlers/inspect.py`, `handlers/search.py`,
+    `handlers/lifecycle.py`, `handlers/pulse.py`, `handlers/monitor.py`,
+    `handlers/analyze_frame.py` — handler implementations sliced by
+    domain.
+
+### How the contract is preserved
+
+The split files are CONTIGUOUS slices of the original god module — when
+concatenated in `COMPOSE_ORDER` they reproduce the v1.8.2 file
+**byte-for-byte** (modulo the API_VERSION line, which scripts/check_versions.py
+forces to track __version__). At .tox-build time both
+`build_export_mcp_tox.py` and `build_tdpilot_api_tox.py` call the
+composer (via `_read_callbacks_source` in the legacy script — shared so
+both standalone and CLI builds use the same composed body), and the
+result is set as the `mcp_webserver_callbacks` textDAT's body inside
+`mcp_server`. Runtime behaviour is provably identical to v1.8.2.
+
+### Tests
+
+`tests/test_composer_byte_equivalence.py` adds 68 tests over four levels:
+1. **Byte-equivalence** to the captured baseline (the v1.8.2 god module
+   frozen at `tests/fixtures/mcp_webserver_callbacks_v1.8.2_baseline.py`),
+   patched only on the API_VERSION line.
+2. **Symbol parity** — exec'ing the composed source produces the same
+   module-level names as exec'ing the baseline.
+3. **Module-constant value parity** for `RESTRICTED_TOKENS`,
+   `STANDARD_BLOCKED_TOKENS`, `RESTRICTED_IMPORT_RE`,
+   `STANDARD_ALLOWED_IMPORTS`, `MONITOR_SUBSCRIPTIONS`.
+4. **COMPOSE_ORDER stability** — pinned to detect accidental reorder.
+
+The pre-existing tests that loaded the god module directly
+(`test_td_component_auth.py`, `test_td_component_extensions.py`,
+`test_td_component_set_params_validation.py`,
+`test_td_component_exec_safety.py`, `test_startup_sweep.py`) now load
+via the new `tests/_callbacks_loader.py` helper, which composes the
+splits at test time. 1518 tests pass; the v1.8.2 baseline of 1450 +
+68 new composer tests.
+
+### Build / freshness gate
+
+Both `_TOX_SOURCE_FILES` (in `build_export_mcp_tox.py`) and `SOURCE_FILES`
+(in `scripts/check_tox_freshness.py`) now hash the splits + composer
+instead of the deleted god module. Any byte change in any split file
+bumps the staleness hash exactly like a god-module edit did before. The
+ruff exclusion in `pyproject.toml` widens from the single deleted file
+to `td_component/callbacks/` plus the baseline fixture.
+
+### Notes
+
+- The standalone `tdpilot_api_startup.py` and CLI `tdpilot_dpsk4_startup.py`
+  startup helpers were updated to read API_VERSION from
+  `callbacks/_header.py` and look for the composer as the new repo-root
+  marker. The DPSK4 startup keeps a fallback for the deleted god-module
+  path so users on a pre-1.8.3 checkout still see a banner.
+- `scripts/full_td_mcp_e2e.py` syncs the composed body via the composer
+  (used by the e2e harness when it hot-syncs the `callbacks` textDAT).
+
+### Distribution
+
+The split files change source layout but the .tox-baked textDAT body
+is byte-identical (modulo API_VERSION). Both .tox files MUST be
+rebuilt inside TouchDesigner before merge — the freshness gate fails
+otherwise. The composed body matches the v1.8.2 runtime contract, so
+no client-visible behavior changes.
+
 ## 1.8.2 - 2026-05-08
 
 **Hotfix: chat HTML token substitution rewrites the JS sentinel.**

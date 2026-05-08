@@ -389,9 +389,12 @@ class TestAPIVersionLockstep:
     def test_api_version_matches_package_version(self):
         import re
 
-        callbacks = (REPO_ROOT / "td_component" / "mcp_webserver_callbacks.py").read_text(encoding="utf-8")
+        # PR-16 (v1.8.3): API_VERSION lives in the callbacks/_header.py split. The
+        # path here MUST match scripts/check_versions.py — both look for the
+        # same constant in the same file so version drift surfaces in CI.
+        callbacks = (REPO_ROOT / "td_component" / "callbacks" / "_header.py").read_text(encoding="utf-8")
         api_match = re.search(r'API_VERSION\s*=\s*"([^"]+)"', callbacks)
-        assert api_match is not None, "API_VERSION not found in callbacks"
+        assert api_match is not None, "API_VERSION not found in callbacks/_header.py"
         api_version = api_match.group(1)
 
         init = (REPO_ROOT / "src" / "td_mcp" / "__init__.py").read_text(encoding="utf-8")
