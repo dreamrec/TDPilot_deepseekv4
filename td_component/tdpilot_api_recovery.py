@@ -124,6 +124,63 @@ _RECOVERY_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
             "query or check Cooking Info for stuck operators."
         ),
     ),
+    # ------------------------------------------------------------------
+    # v2.0.1 — common AttributeError patterns the agent kept hitting in
+    # the v2.0 audit. Each one is the wrong-API guess for a real concept;
+    # the hint points at the right way to do what the agent actually
+    # wanted.
+    # ------------------------------------------------------------------
+    (
+        re.compile(
+            r"'td\.\w*[Cc][Hh][Oo][Pp]' object has no attribute 'channels'",
+            re.IGNORECASE,
+        ),
+        (
+            "CHOPs don't expose `.channels` directly. Use chop.chans() to get "
+            "a list of Channel objects, or chop['channel_name'] / chop[index] "
+            "for direct access. Each Channel supports .eval() to read the "
+            "current sample value."
+        ),
+    ),
+    (
+        re.compile(
+            r"'td\.\w*[Cc][Hh][Oo][Pp]' object has no attribute 'text'",
+            re.IGNORECASE,
+        ),
+        (
+            "DAT.text exists but CHOP.text does not. For a CHOP's data use "
+            "chop.chans() / chop[i] / chop['name']; for its config use "
+            "chop.par.<param-name>. If you wanted DAT-style text content, "
+            "the operator type may be wrong."
+        ),
+    ),
+    (
+        re.compile(r"'td\.Page' object has no attribute 'label'"),
+        (
+            "There's no .label on a Page. Use page.name (the page's display "
+            "name and identifier in the same string). Per-parameter labels "
+            "live on Par objects: par.label."
+        ),
+    ),
+    (
+        re.compile(r"'td\.Project' object has no attribute 'undo'"),
+        (
+            "TD's undo machinery is on ui.undo, not project. Use ui.undo.undo() "
+            "for one step, ui.undo.redo() to redo, ui.undo.startBlock(name) / "
+            "ui.undo.endBlock() to group multiple operations into a single "
+            "undo step. The patch_begin/patch_commit/patch_rollback tools "
+            "wrap this."
+        ),
+    ),
+    (
+        re.compile(r"Invalid target: must be a dotted identifier"),
+        (
+            "td_python_help expects a CLASS or MODULE name (e.g. 'td.OP', "
+            "'td.geometryCOMP', 'tdu', 'tdu.Vector'). For a live operator's "
+            "details use td_get_node_detail. For parameter values use "
+            "td_get_params. td_python_help is for type-level docs only."
+        ),
+    ),
 )
 
 
