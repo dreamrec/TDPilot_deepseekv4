@@ -87,16 +87,27 @@ ignore = [
     "B007",    # unused loop variable — deliberate in some iteration stubs
     "B008",    # function-call-in-default (pydantic Field)
     "B905",    # zip without strict= — not worth churning legacy tools
-    "F401",    # unused imports — mostly re-exports + TD-only try-imports
-    "F841",    # unused local vars — scratch scripts, fine
+    "F401",    # unused imports — mostly re-exports + TD-only try-imports;
+               # 252 violations in the tree as of v1.9.0; revisit when the
+               # callbacks/ split (PR-16) settles so per-file ignores can
+               # narrow the scope rather than the whole codebase staying off
     "SIM102",  # collapsible-if — loses readability often
     "SIM103",  # needless bool — same
     "SIM105",  # use-contextlib-suppress — prefer explicit try/except here
     "SIM108",  # ternary — not always clearer
-    "SIM110",  # reimplemented-builtin — one-off
+    "SIM110",  # reimplemented-builtin — only known violation is the marker-file
+               # validator in tdpilot_dpsk4_startup.py:_validate_repo, where
+               # PR-16 marker-path drift cost three debug iterations; the
+               # explicit loop preserves the per-marker callsite for adding a
+               # `print(missing)` during incident response. Touching that file
+               # also bumps the .tox source hash, so the rule is kept ignored
+               # rather than enable-with-noqa
     "SIM117",  # nested with-blocks — fine, especially in tests
-    "SIM118",  # in dict.keys() — harmless over-explicitness
 ]
+# Re-enabled in v1.9.0 (PR-23, F-16):
+#   F841   — unused locals (was: scratch scripts, fine; reality: 7 real bugs)
+#   SIM118 — `in dict.keys()` (was: harmless over-explicitness; reality: 5
+#            sites, all `for x in d.keys():` style — clearer as `for x in d`)
 per-file-ignores = { "tests/*" = ["E741", "B011"], "td_component/*" = ["F821"] }
 
 [tool.pytest.ini_options]

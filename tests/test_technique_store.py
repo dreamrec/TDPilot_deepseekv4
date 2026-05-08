@@ -142,7 +142,7 @@ class TestPersistence:
 class TestListTechniques:
     def test_list_favorites_only(self, store, sample_technique):
         t1 = store.add(sample_technique, name="fav")
-        t2 = store.add(sample_technique, name="not fav")
+        store.add(sample_technique, name="not fav")
         store.set_favorite(t1, True)
         results = store.list_techniques(scope="project", favorites_only=True)
         assert len(results) == 1
