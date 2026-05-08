@@ -15,7 +15,11 @@ Handler resolution:
     from the schema we sent the model.
 
 Errors are returned as dicts (not raised) so the agent loop can pass
-them back to the model as tool_result with is_error=True.
+them back to the model as tool_result with is_error=True. Error
+strings + tracebacks are redacted (API key + home/config paths
+stripped) before being surfaced — the model doesn't need to know the
+user's filesystem layout, and leaking it into the DeepSeek logs is a
+soft information leak.
 """
 
 from __future__ import annotations
@@ -25,6 +29,27 @@ from collections.abc import Callable
 from typing import Any
 
 from tdpilot_api_schema import TOOL_TO_HANDLER  # type: ignore[import-not-found]
+
+# Soft-import the redaction helpers — config module may be missing in
+# stripped-down test embeds, in which case we degrade to identity.
+try:
+    from tdpilot_api_config import redact, redact_paths  # type: ignore[import-not-found]
+except ImportError:
+
+    def redact(s: str) -> str:  # noqa: D401
+        return s
+
+    def redact_paths(s: str) -> str:  # noqa: D401
+        return s
+
+
+def _scrub(s: str) -> str:
+    """Run both API-key redaction and path redaction. Order doesn't
+    matter — they're idempotent and operate on different substrings."""
+    if not isinstance(s, str):
+        return s
+    return redact_paths(redact(s))
+
 
 # Phase 2.3 — failure recovery hints. ``attach_hint`` is best-effort:
 # the registry module may be missing in stripped-down test embeds,
@@ -99,8 +124,8 @@ def make_dispatcher(handlers_modules: Any, extra_mappings: dict | None = None) -
         except Exception as exc:  # noqa: BLE001 — return as tool error
             return _attach_hint(
                 {
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "traceback": traceback.format_exc(limit=5),
+                    "error": _scrub(f"{type(exc).__name__}: {exc}"),
+                    "traceback": _scrub(traceback.format_exc(limit=5)),
                 }
             )
         # mcp_webserver_callbacks handlers may return a plain dict OR a

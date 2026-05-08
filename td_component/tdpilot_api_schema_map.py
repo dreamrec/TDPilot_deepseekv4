@@ -150,9 +150,12 @@ TOOL_TO_HANDLER: dict[str, tuple[str, Callable[[dict], dict]]] = {
     "recipe_recall": ("handle_recipe_recall", _id),
     "recipe_replay": ("handle_recipe_replay", _id),
     # ---- Skills tools (Sprint 3.2 — handlers in tdpilot_api_skills.py) ----
+    # 1.7.2 added skill_validate for surfacing frontmatter errors that
+    # used to be silently swallowed.
     "skill_list": ("handle_skill_list", _id),
     "skill_get": ("handle_skill_get", _id),
     "skill_load": ("handle_skill_load", _id),
+    "skill_validate": ("handle_skill_validate", _id),
     # ---- Snapshot + Patch tools (Sprint 3.3 — handlers in tdpilot_api_patches.py) ----
     "snapshot_save": ("handle_snapshot_save", _id),
     "snapshot_list": ("handle_snapshot_list", _id),

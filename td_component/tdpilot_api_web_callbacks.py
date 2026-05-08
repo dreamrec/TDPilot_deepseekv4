@@ -5,21 +5,54 @@ Lives at .../tdpilot_API/chat_web_server (textDAT used as the WebServer
 DAT's Callbacks). Receives HTTP requests from the HTML chat (running in
 the sibling webRenderTOP) and routes them to the TDPilotAPIExt singleton.
 
-Routes (the HTML page only uses /send today, but the others are wired so
-the web UI can grow):
+Routes:
 
-  POST /send       body=<utf-8 user message>     → ext.OnSendPulse(msg)
-  POST /stop                                      → ext.OnStopPulse()
-  POST /reset                                     → ext.OnResetPulse()
-  GET  /history                                   → JSON of chat_transcript
-  GET  /health                                    → {"ok": true}
+  GET  /                or /index.html → served HTML chat UI (token-injected)
+  GET  /health                          → {"ok": true}
+  GET  /firstrun                        → first-run wizard state (token-gated)
+  GET  /history                         → JSON of chat_transcript (token-gated)
+  POST /send       body=<utf-8 message> → ext.OnSendPulse(msg) (token-gated)
+  POST /stop                            → ext.OnStopPulse()    (token-gated)
+  POST /reset                           → ext.OnResetPulse()   (token-gated)
 
-CORS is enabled wide open because the HTML is loaded from a file:// URL
-(or http://localhost) and browsers refuse cross-origin POSTs without it.
-The webRenderTOP is sandboxed inside TD so there's no real attack surface.
+Security model (1.7.1+)
+-----------------------
+
+Pre-1.7.1 the standalone shipped with ``Access-Control-Allow-Origin: *``
+and no auth. Any local webpage could POST /send and drive the agent —
+end-to-end CSRF that was reproducible from a cross-origin probe.
+
+1.7.1 closes that gap with three layers:
+
+  1. Origin allowlist — only ``http://127.0.0.1:<port>`` /
+     ``http://localhost:<port>`` / ``http://[::1]:<port>`` and the empty/
+     ``null`` origin (file://, same-origin) pass.
+  2. Per-launch session token — generated on COMP load, stored in
+     ``comp.storage`` (so reloads see the same value), required as
+     ``X-TDPilot-Token`` header on every non-bootstrap HTTP route and
+     as ``?t=<token>`` on the WebSocket handshake URL. The token is
+     injected into the served HTML at GET / time so the same-origin
+     chat already has it; browsers can't read it cross-origin even if
+     they're loaded with a permissive iframe policy because we never
+     emit ``Access-Control-Allow-Origin: *`` and the token never leaves
+     the served HTML body.
+  3. Sec-Fetch-Site rejection — modern browsers send
+     ``Sec-Fetch-Site: cross-site`` on cross-origin fetches; we 403
+     anything that isn't ``same-origin`` or ``none``.
+
+The bootstrap path (GET /, GET /index.html, OPTIONS preflight) is
+intentionally unauthenticated — the chat HTML must load before the JS
+can read the token. Those routes don't expose any agent state.
+
+For users who script the chat from an external tool (curl, a custom
+panel), set the env var ``TDPILOT_API_INSECURE=1`` to bypass token +
+origin checks. Default is secure.
 """
 
+import hmac
 import json
+import os
+import secrets
 
 
 def _comp():
@@ -62,22 +95,142 @@ def _route(request):
     return method, path
 
 
-def _cors(response):
-    response["Access-Control-Allow-Origin"] = "*"
-    response["Access-Control-Allow-Headers"] = "Content-Type, *"
+def _headers(request):
+    """Return a lower-cased dict of request headers. WebServer DAT
+    keys vary across TD builds — some use ``request['headers']``, some
+    flatten them into the request dict itself. Tolerate both."""
+    raw = request.get("headers") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    out = {str(k).lower(): str(v) for k, v in raw.items()}
+    # Some builds put 'origin' / 'sec-fetch-site' on the request dict
+    # directly. Only adopt them when not already in the headers map.
+    for k in ("origin", "sec-fetch-site", "x-tdpilot-token", "authorization"):
+        if k not in out and k in request:
+            out[k] = str(request.get(k) or "")
+    return out
+
+
+# --- security: per-launch token + origin allowlist (1.7.1) ------------
+
+_STORAGE_KEY_TOKEN = "tdpilot_api_session_token"
+_TOKEN_TEMPLATE_MARKER = "__TDPILOT_TOKEN__"
+_SAFE_HOSTS = ("127.0.0.1", "localhost", "[::1]", "::1")
+_INSECURE_ENV = "TDPILOT_API_INSECURE"
+
+
+def _insecure_mode() -> bool:
+    """Off-switch for users who drive the chat from external tooling.
+    Set ``TDPILOT_API_INSECURE=1`` in the environment to disable the
+    token + origin checks entirely. Default is secure."""
+    return os.environ.get(_INSECURE_ENV, "").strip() in ("1", "true", "yes")
+
+
+def _session_token() -> str:
+    """Per-launch random token. Stored in comp.storage so a textDAT
+    reload doesn't rotate it mid-session — same comp.storage pattern
+    used by ``_ws_clients`` for the same reason."""
+    comp = _comp()
+    if comp is None:
+        return ""
+    t = comp.fetch(_STORAGE_KEY_TOKEN, None)
+    if not isinstance(t, str) or not t:
+        t = secrets.token_urlsafe(24)
+        comp.store(_STORAGE_KEY_TOKEN, t)
+    return t
+
+
+def _server_port() -> int:
+    """Best-effort lookup of the webserverDAT port for origin matching.
+    Falls back to 9987 (the documented default) if the COMP isn't
+    reachable yet."""
+    try:
+        comp = _comp()
+        if comp is not None:
+            srv = comp.op("chat_web_server")
+            if srv is not None and hasattr(srv.par, "port"):
+                return int(srv.par.port.eval())
+    except Exception:
+        pass
+    return 9987
+
+
+def _allowed_origin(origin: str) -> bool:
+    """Empty / 'null' origin → same-origin or file://. Otherwise must
+    be ``http://<safe-host>:<our-port>`` exactly."""
+    o = (origin or "").strip().lower()
+    if not o or o == "null":
+        return True
+    port = _server_port()
+    accepted = {f"http://{h}:{port}" for h in _SAFE_HOSTS}
+    return o in accepted
+
+
+def _check_auth(method: str, path: str, headers: dict) -> tuple[int, str] | None:
+    """Return (status, message) on rejection, ``None`` on accept.
+
+    Bootstrap routes (GET /, /index.html, OPTIONS) skip the gate so
+    the browser can fetch the HTML before it has the token. Every
+    other route requires:
+
+      * Origin in the allowlist (or empty/null for same-origin).
+      * Sec-Fetch-Site of 'same-origin' / 'none' (when the header is
+        present — older browsers / non-browser clients omit it, which
+        is fine because they're already filtered by the token check).
+      * X-TDPilot-Token header matches the session token.
+    """
+    if _insecure_mode():
+        return None
+    if method == "OPTIONS":
+        return None
+    if method == "GET" and path in ("/", "/index.html", "/health"):
+        return None
+    if not _allowed_origin(headers.get("origin", "")):
+        return (403, "cross-origin request blocked")
+    sec_fetch = headers.get("sec-fetch-site", "").strip().lower()
+    if sec_fetch and sec_fetch not in ("same-origin", "none"):
+        return (403, f"cross-site fetch blocked (Sec-Fetch-Site={sec_fetch})")
+    expected = _session_token()
+    got = headers.get("x-tdpilot-token", "").strip()
+    if not expected:
+        return (503, "session token not initialised")
+    if not got:
+        # Authorization: Bearer <token> as a fallback for non-browser tooling.
+        auth = headers.get("authorization", "").strip()
+        if auth.lower().startswith("bearer "):
+            got = auth[7:].strip()
+    if not got or not hmac.compare_digest(got, expected):
+        return (401, "missing or invalid X-TDPilot-Token")
+    return None
+
+
+def _cors(response, request_origin: str = ""):
+    """Reflect a known-good origin instead of ``*``. Same-origin
+    requests don't need this at all — but the cors header is harmless
+    when echoed back to a same-origin caller."""
+    if _insecure_mode():
+        # Insecure mode trades safety for tooling compat; widen CORS
+        # accordingly so curl / external panels keep working.
+        response["Access-Control-Allow-Origin"] = "*"
+    elif request_origin and _allowed_origin(request_origin):
+        response["Access-Control-Allow-Origin"] = request_origin
+    else:
+        response["Access-Control-Allow-Origin"] = "null"
+    response["Access-Control-Allow-Headers"] = "Content-Type, X-TDPilot-Token, Authorization"
     response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response["Vary"] = "Origin"
 
 
-def _json(response, status, payload):
-    _cors(response)
+def _json(response, status, payload, request_origin: str = ""):
+    _cors(response, request_origin)
     response["statusCode"] = status
     response["statusReason"] = "OK" if status == 200 else "Error"
     response["data"] = json.dumps(payload).encode("utf-8")
     response["Content-Type"] = "application/json; charset=utf-8"
 
 
-def _text(response, status, body):
-    _cors(response)
+def _text(response, status, body, request_origin: str = ""):
+    _cors(response, request_origin)
     response["statusCode"] = status
     response["statusReason"] = "OK" if status == 200 else "Error"
     response["data"] = (body or "").encode("utf-8")
@@ -86,16 +239,28 @@ def _text(response, status, body):
 
 def onHTTPRequest(webServerDAT, request, response):
     method, path = _route(request)
+    headers = _headers(request)
+    request_origin = headers.get("origin", "")
+
+    auth_err = _check_auth(method, path, headers)
+    if auth_err is not None:
+        status, msg = auth_err
+        _text(response, status, msg, request_origin=request_origin)
+        return response
+
     if method == "OPTIONS":
-        _text(response, 200, "")
+        _text(response, 200, "", request_origin=request_origin)
         return response
 
     if method == "GET" and path in ("/", "/index.html"):
         # Serve the chat HTML so the page + WebSocket share http://host:port
         # origin. Required because Chrome blocks ws:// from file:// origins.
+        # Inject the per-launch session token so the same-origin chat can
+        # authenticate subsequent fetches + the WS handshake.
         html_dat = _comp().op("tdpilot_api_chat_html")
         body = html_dat.text if html_dat is not None else "<h1>chat html DAT missing</h1>"
-        _cors(response)
+        body = body.replace(_TOKEN_TEMPLATE_MARKER, _session_token())
+        _cors(response, request_origin)
         response["statusCode"] = 200
         response["statusReason"] = "OK"
         response["data"] = body.encode("utf-8")
@@ -103,7 +268,7 @@ def onHTTPRequest(webServerDAT, request, response):
         return response
 
     if method == "GET" and path == "/health":
-        _json(response, 200, {"ok": True})
+        _json(response, 200, {"ok": True}, request_origin=request_origin)
         return response
 
     if method == "GET" and path == "/history":
@@ -116,7 +281,7 @@ def onHTTPRequest(webServerDAT, request, response):
                     rows.append({"role": t[r, 0].val, "message": t[r, 1].val})
             except Exception as exc:
                 debug(f"[tdpilot_API/web] history scan error: {exc}")
-        _json(response, 200, {"rows": rows})
+        _json(response, 200, {"rows": rows}, request_origin=request_origin)
         return response
 
     if method == "GET" and path == "/firstrun":
@@ -126,21 +291,21 @@ def onHTTPRequest(webServerDAT, request, response):
         try:
             from tdpilot_api_introspect import firstrun_status  # type: ignore[import-not-found]
 
-            _json(response, 200, firstrun_status())
+            _json(response, 200, firstrun_status(), request_origin=request_origin)
         except Exception as exc:
             debug(f"[tdpilot_API/web] /firstrun failed: {exc}")
-            _json(response, 500, {"ok": False, "error": str(exc)})
+            _json(response, 500, {"ok": False, "error": str(exc)}, request_origin=request_origin)
         return response
 
     ext = _ext()
     if ext is None:
-        _text(response, 503, "extension not ready")
+        _text(response, 503, "extension not ready", request_origin=request_origin)
         return response
 
     if method == "POST" and path == "/send":
         body = _read_body(request).strip()
         if not body:
-            _text(response, 400, "empty message")
+            _text(response, 400, "empty message", request_origin=request_origin)
             return response
         try:
             comp = _comp()
@@ -149,29 +314,29 @@ def onHTTPRequest(webServerDAT, request, response):
             # local appendMessage('user', ...) — we don't want to double-
             # render the user's bubble via the WebSocket broadcast.
             ext.OnSendPulse(skip_html_echo=True)
-            _text(response, 200, "queued")
+            _text(response, 200, "queued", request_origin=request_origin)
         except Exception as exc:
             debug(f"[tdpilot_API/web] /send failed: {exc}")
-            _text(response, 500, str(exc))
+            _text(response, 500, str(exc), request_origin=request_origin)
         return response
 
     if method == "POST" and path == "/stop":
         try:
             ext.OnStopPulse()
-            _text(response, 200, "stopped")
+            _text(response, 200, "stopped", request_origin=request_origin)
         except Exception as exc:
-            _text(response, 500, str(exc))
+            _text(response, 500, str(exc), request_origin=request_origin)
         return response
 
     if method == "POST" and path == "/reset":
         try:
             ext.OnResetPulse()
-            _text(response, 200, "reset")
+            _text(response, 200, "reset", request_origin=request_origin)
         except Exception as exc:
-            _text(response, 500, str(exc))
+            _text(response, 500, str(exc), request_origin=request_origin)
         return response
 
-    _text(response, 404, f"unknown route: {method} {path}")
+    _text(response, 404, f"unknown route: {method} {path}", request_origin=request_origin)
     return response
 
 
@@ -274,7 +439,36 @@ def broadcast(webServerDAT, payload: dict) -> None:
         clients.discard(d)
 
 
+def _ws_token_from_uri(uri: str) -> str:
+    """Pull the ``?t=<token>`` from the WS handshake URI. Browsers
+    don't permit custom WebSocket headers, so the token rides on the
+    query string instead."""
+    if "?" not in (uri or ""):
+        return ""
+    qs = uri.split("?", 1)[1]
+    for kv in qs.split("&"):
+        if not kv.startswith("t="):
+            continue
+        # urldecode minimum — tokens are URL-safe base64 already so
+        # %xx escapes are exotic here. Stay stdlib-free for TD compat.
+        return kv[2:].replace("%3D", "=").replace("%2F", "/").replace("%2B", "+")
+    return ""
+
+
 def onWebSocketOpen(webServerDAT, client, uri):
+    if not _insecure_mode():
+        expected = _session_token()
+        got = _ws_token_from_uri(uri)
+        if not expected or not got or not hmac.compare_digest(got, expected):
+            print(f"[tdpilot_API/web] WS open REJECTED (bad/missing token) uri={uri!r}")
+            try:
+                webServerDAT.webSocketSendText(
+                    client,
+                    json.dumps({"type": "error", "message": "unauthorized"}),
+                )
+            except Exception:
+                pass
+            return
     clients = _ws_clients()
     clients.add(client)
     print(f"[tdpilot_API/web] WS open uri={uri!r} total={len(clients)}")
