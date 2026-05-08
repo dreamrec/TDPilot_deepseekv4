@@ -75,6 +75,39 @@ def needs_compaction(messages: list[dict], threshold: int = DEFAULT_THRESHOLD) -
     return len(messages) >= threshold
 
 
+def _resolve_cut(messages: list[dict], keep_recent: int) -> int:
+    """Return the index where the archived slice ends and the retained
+    slice begins — i.e. ``older = messages[:cut]`` and
+    ``retained = messages[cut:]``. Single source of truth for the
+    naive-then-advanced cut so callers that need to inspect the
+    discard (notably ``Compactor.maybe_compact`` for forensic
+    persistence) see the **same** cut ``compact()`` will use.
+
+    Returns:
+      0    — no compaction needed (trivial size or keep_recent >= len).
+      >0   — normal cut. Discard ``messages[:cut]``, retain the rest.
+      len(messages) — pathological case where every retained message
+                       was a leading ``tool_result`` tail. The caller
+                       should archive ALL messages; ``compact()`` will
+                       return just the synthetic summary.
+
+    The advancement past leading ``tool_result`` blocks fixes the
+    Phase 1.6.13 bug: without it, a cut that lands mid tool-chain
+    leaves the retained slice starting with a ``tool_result`` whose
+    matching ``tool_use`` was archived, and the next API call 400s.
+    """
+    if keep_recent < 0:
+        keep_recent = 0
+    if len(messages) <= max(1, keep_recent):
+        return 0
+    cut = len(messages) - keep_recent
+    while cut < len(messages) and _starts_with_tool_result(messages[cut]):
+        cut += 1
+    if cut >= len(messages):
+        return len(messages)
+    return cut
+
+
 def compact(
     messages: list[dict],
     *,
@@ -86,41 +119,21 @@ def compact(
     filesystem (forensic persistence is the caller's job; see
     ``persist_history_chunk`` below). Always preserves the most-recent
     ``keep_recent`` messages verbatim, including any original
-    ``thinking`` content blocks they carry.
+    ``thinking`` content blocks they carry. The cut point is computed
+    by ``_resolve_cut`` so ``Compactor.maybe_compact`` can persist the
+    exact same slice this function discards.
 
     Edge cases:
       - ``keep_recent`` >= ``len(messages)``: return a copy of
         ``messages`` unchanged (nothing to compact away).
       - ``len(messages) <= 1``: return a copy unchanged (degenerate).
-      - The slice point lands mid tool-chain — i.e. the retained
-        slice would START with a user ``tool_result`` block whose
-        matching assistant ``tool_use`` was archived. The Anthropic
-        API rejects that with ``messages.0: tool_result block
-        without matching tool_use``. We advance the cut FORWARD
-        past every leading tool_result so the retained slice starts
-        on a clean boundary (typically the next user text message
-        or the next assistant turn). This eats into ``keep_recent``
-        — by design; an unsendable history is worse than a slightly
-        smaller one. Phase 1.6.13 fix.
+      - The cut lands mid tool-chain (leading ``tool_result`` blocks):
+        ``_resolve_cut`` advances past them so the retained slice starts
+        on a clean assistant/user-text boundary. Phase 1.6.13 fix.
     """
-    if keep_recent < 0:
-        keep_recent = 0
-    if len(messages) <= max(1, keep_recent):
+    cut = _resolve_cut(messages, keep_recent)
+    if cut == 0:
         return list(messages)
-    cut = len(messages) - keep_recent
-
-    # Advance ``cut`` forward while the FIRST retained message is a
-    # user message that contains ANY tool_result block. Without
-    # repair, that tool_result references a tool_use_id from an
-    # archived assistant turn and the API 400s on the next call.
-    while cut < len(messages) and _starts_with_tool_result(messages[cut]):
-        cut += 1
-    if cut >= len(messages):
-        # Pathological — every "recent" message was a tool_result
-        # tail. Fall back to keeping nothing recent; the synthetic
-        # summary stands alone.
-        cut = len(messages)
-
     older = messages[:cut]
     recent = messages[cut:]
     summary_text = _summarise_old_turns(older)
@@ -341,12 +354,22 @@ class Compactor:
         """Return a possibly-compacted copy of ``messages``. If no
         compaction was needed, returns the input unchanged
         (same-object identity preserved for caller-friendliness).
+
+        Forensic-archive correctness (F-09 fix):
+          The cut used here MUST match the cut ``compact()`` uses.
+          Pre-fix, this method computed the naive
+          ``len - keep_recent`` and persisted that slice, but
+          ``compact()`` may then advance the cut FORWARD past leading
+          ``tool_result`` blocks — leaving the advanced-past messages
+          dropped from history but absent from the persisted archive.
+          ``_resolve_cut`` is the shared cut-resolution function so
+          there's exactly one source of truth.
         """
         if not self.enabled:
             return messages
         if not needs_compaction(messages, self.threshold):
             return messages
-        cut = len(messages) - self.keep_recent
+        cut = _resolve_cut(messages, self.keep_recent)
         if cut <= 0:
             return messages
         older = messages[:cut]
