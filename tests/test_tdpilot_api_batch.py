@@ -243,3 +243,162 @@ def test_tool_batch_present_in_schemas_and_handlers():
     assert handler_fn_name == "handle_tool_batch"
     # And the parity invariant the rest of the project relies on.
     assert schema_names == set(TOOL_TO_HANDLER.keys())
+
+
+# ---------------------------------------------------------------------------
+# F-10 — public dispatcher accessor (PR-14)
+# ---------------------------------------------------------------------------
+#
+# Pre-PR-14 the resolver reached in via
+# ``ext._runtime._raw_dispatcher`` — two private attrs in a row.
+# Renaming either field broke this caller silently. PR-14 introduces
+# ``ext.runtime.raw_dispatcher`` as the supported access path.
+
+
+def _strip_python_comments_and_docstrings(src: str) -> str:
+    """Drop ``#`` line comments and triple-quoted blocks. The static
+    F-10 checks must not false-positive on docstrings or comments
+    that legitimately mention the old private-attr access pattern."""
+    import re
+
+    src = re.sub(r'"""[\s\S]*?"""', "", src)
+    src = re.sub(r"'''[\s\S]*?'''", "", src)
+    src = re.sub(r"#[^\n]*", "", src)
+    return src
+
+
+def test_resolve_raw_dispatcher_uses_public_accessors():
+    """Source-level pin: the resolver in tdpilot_api_batch must NOT
+    reach in via private attrs. Either direct access via the public
+    ``ext.runtime.raw_dispatcher`` chain (PR-14) OR delegation to
+    ``tdpilot_api_lookup.get_raw_dispatcher`` (PR-19) is fine — both
+    bypass the legacy private form."""
+    src = (REPO_ROOT / "td_component" / "tdpilot_api_batch.py").read_text()
+    code = _strip_python_comments_and_docstrings(src)
+    public_chain = "ext.runtime.raw_dispatcher" in code
+    via_helper = "get_raw_dispatcher" in code
+    assert public_chain or via_helper, (
+        "tool_batch resolver should use the public accessor chain "
+        "or delegate to tdpilot_api_lookup.get_raw_dispatcher"
+    )
+    assert "ext._runtime._raw_dispatcher" not in code, (
+        "tool_batch resolver still hits the private dispatcher attr"
+    )
+
+
+def test_runtime_exposes_raw_dispatcher_property():
+    """The AgentRuntime should expose ``raw_dispatcher`` as a property
+    so callers in tool_batch / recipes / patches / macros can avoid
+    private-attribute access. Source-level check; the property is
+    instantiated against TD's parent() so we can't construct it
+    standalone."""
+    src = (REPO_ROOT / "td_component" / "tdpilot_api_runtime.py").read_text()
+    assert "@property\n    def raw_dispatcher" in src, "AgentRuntime.raw_dispatcher property missing"
+    # The body returns the underlying _raw_dispatcher field.
+    assert "return self._raw_dispatcher" in src
+
+
+def test_extension_exposes_runtime_property():
+    """Same hardening for ``ext.runtime`` — handlers can no longer
+    rely on the leading-underscore private form."""
+    src = (REPO_ROOT / "td_component" / "tdpilot_api_extension.py").read_text()
+    assert "@property\n    def runtime" in src, "TDPilotAPIExt.runtime property missing"
+    assert "return self._runtime" in src
+
+
+def _accessor_or_helper(code: str) -> bool:
+    """Return True if the code reaches the dispatcher via either the
+    public accessor chain (PR-14) or the lookup helper (PR-19) — both
+    are acceptable. Private-attribute access is not."""
+    return "ext.runtime.raw_dispatcher" in code or "get_raw_dispatcher" in code
+
+
+def test_recipes_uses_public_accessor():
+    code = _strip_python_comments_and_docstrings(
+        (REPO_ROOT / "td_component" / "tdpilot_api_recipes.py").read_text()
+    )
+    assert _accessor_or_helper(code)
+    assert "ext._runtime._raw_dispatcher" not in code
+
+
+def test_patches_uses_public_accessor():
+    code = _strip_python_comments_and_docstrings(
+        (REPO_ROOT / "td_component" / "tdpilot_api_patches.py").read_text()
+    )
+    assert _accessor_or_helper(code)
+    assert "ext._runtime._raw_dispatcher" not in code
+
+
+def test_macros_uses_public_accessor():
+    code = _strip_python_comments_and_docstrings(
+        (REPO_ROOT / "td_component" / "tdpilot_api_macros.py").read_text()
+    )
+    assert _accessor_or_helper(code)
+    assert "ext._runtime._raw_dispatcher" not in code
+
+
+def test_no_more_private_runtime_dispatcher_access_anywhere():
+    """Strict gate against future regressions — no `_runtime._raw_dispatcher`
+    anywhere in td_component/. The runtime module itself uses
+    ``self._raw_dispatcher`` internally, which is fine; this test
+    looks for the EXTERNAL access pattern. Comments and docstrings
+    that mention the old pattern are stripped first so historical
+    notes don't trigger the gate."""
+    import re
+
+    td_dir = REPO_ROOT / "td_component"
+    pat = re.compile(r"\b\w+\._runtime\._raw_dispatcher\b")
+    for py in td_dir.glob("*.py"):
+        text = py.read_text(encoding="utf-8")
+        code = _strip_python_comments_and_docstrings(text)
+        match = pat.search(code)
+        assert match is None, (
+            f"{py.name} still reaches in via private _runtime._raw_dispatcher: {match.group(0)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# F-10 — additional batch coverage to cement Phase 1.6.13 fix paths
+# ---------------------------------------------------------------------------
+
+
+def test_batch_rejects_when_runtime_missing(monkeypatch):
+    """When the resolver returns None (no COMP / no extension /
+    runtime not built), the handler returns a clean error string
+    rather than raising. Pre-PR-14 this branch was uncovered."""
+    monkeypatch.setattr(tb, "_resolve_raw_dispatcher", lambda: None)
+    out = tb.handle_tool_batch({"calls": [{"tool": "td_get_info", "args": {}}]})
+    assert isinstance(out, dict)
+    assert "error" in out
+    assert "dispatcher" in out["error"].lower()
+
+
+def test_batch_severity_flattening_visible_per_call(monkeypatch):
+    """The Phase 1.6.13 severity-flattening fix lives in the runtime,
+    but tool_batch's per-call result entries are what the runtime
+    inspects to flatten. Pin the result shape so a future refactor
+    of handle_tool_batch can't accidentally drop the per-call
+    `tool` / `ok` / `result` / `error` keys the runtime relies on."""
+    dispatcher = _stub_dispatcher(
+        {
+            "td_create_node": {"path": "/project1/n1"},
+            "td_get_errors": {"errors": []},
+        }
+    )
+    _patch_dispatcher(monkeypatch, dispatcher)
+    out = tb.handle_tool_batch(
+        {
+            "calls": [
+                {"tool": "td_create_node", "args": {"type": "noiseTOP"}},
+                {"tool": "td_get_errors", "args": {}},
+            ]
+        }
+    )
+    assert out["ok"] is True
+    assert out["count"] == 2
+    for entry in out["results"]:
+        assert "tool" in entry
+        assert "ok" in entry
+        assert "result" in entry
+        assert "error" in entry
+        assert "elapsed_ms" in entry

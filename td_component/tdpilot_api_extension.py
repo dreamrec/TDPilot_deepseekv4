@@ -69,6 +69,16 @@ class TDPilotAPIExt:
         self._ensure_module_path()
         self._build_runtime()
 
+    # Phase 3 (F-10) — public accessor for the runtime. Handlers that
+    # need the cook-thread-bypass dispatcher (handle_recipe_replay,
+    # handle_tool_batch, etc.) previously reached in via
+    # ``ext._runtime._raw_dispatcher`` — a chain of private attrs that
+    # broke any time either field was renamed. Calling through these
+    # properties keeps internal field names free to evolve.
+    @property
+    def runtime(self):
+        return self._runtime
+
     # ------------------------------------------------------------------
     # Setup
     # ------------------------------------------------------------------
@@ -88,6 +98,11 @@ class TDPilotAPIExt:
         """
         for name in (
             "tdpilot_api_config",
+            # PR-19 (F-18) — tdpilot_api_lookup is a pure module
+            # (no TD globals at import time) and is imported by the
+            # batch / recipes / patches / macros handlers. Bind early
+            # so those modules' top-level imports resolve.
+            "tdpilot_api_lookup",
             # schema_defs + schema_map MUST come before tdpilot_api_schema:
             # the shim's `from tdpilot_api_schema_defs import ...` resolves
             # via sys.modules, so the underlying modules need to be

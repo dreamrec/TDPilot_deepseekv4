@@ -598,3 +598,160 @@ def test_starts_with_tool_result_helper():
     assert compaction._starts_with_tool_result(None) is False  # type: ignore[arg-type]
     assert compaction._starts_with_tool_result({"role": "user"}) is False  # missing content
     assert compaction._starts_with_tool_result({"role": "user", "content": []}) is False
+
+
+# ---------------------------------------------------------------------------
+# F-09 — _resolve_cut + forensic preservation
+# ---------------------------------------------------------------------------
+#
+# Pre-PR-13 the bug was: Compactor.maybe_compact computed the cut as
+# ``len(messages) - keep_recent`` and persisted that slice, but
+# ``compact()`` then advanced the cut FORWARD past leading
+# tool_result blocks. The advanced-past messages were dropped from
+# history but absent from the persisted archive — silent forensic
+# loss exactly when the boundary repair fired.
+#
+# These tests pin:
+#   * `_resolve_cut` is the shared cut-resolution function.
+#   * compact() and maybe_compact() see the SAME cut for the same input.
+#   * The forensic JSONL archive contains EVERY message that compact()
+#     discards, including ones repair-advanced past.
+
+
+def test_resolve_cut_matches_naive_when_no_repair_needed():
+    msgs = _build_long_history(8)  # 32 messages, no leading tool_results at the natural cut
+    cut = compaction._resolve_cut(msgs, keep_recent=4)
+    # Natural cut at index 28 (32 - 4). The slice point lands on a user
+    # message (turn-start), not a tool_result, so no repair fires.
+    assert cut == 28
+
+
+def test_resolve_cut_advances_past_tool_results():
+    """When the natural cut lands on an orphan tool_result, the
+    advanced cut must skip it. Same logic compact() uses, factored
+    into _resolve_cut so maybe_compact gets the same answer."""
+    msgs = _build_long_history(8)  # 32 messages
+    # keep_recent=10 → natural cut at index 22 (a tool_result, since
+    # the build_long_history pattern is user/tool_use/tool_result/reply).
+    cut = compaction._resolve_cut(msgs, keep_recent=10)
+    assert cut == 23, "expected advancement past index-22 tool_result"
+    assert compaction._starts_with_tool_result(msgs[cut]) is False
+
+
+def test_resolve_cut_returns_zero_when_below_keep_recent():
+    msgs = [_user("a"), _assistant_text("b"), _user("c")]
+    cut = compaction._resolve_cut(msgs, keep_recent=10)
+    assert cut == 0
+
+
+def test_resolve_cut_pathological_all_tool_results():
+    """When every message past the natural cut is a tool_result tail,
+    _resolve_cut returns len(messages) so the caller knows to archive
+    EVERYTHING. compact() handles this by returning just the synthetic."""
+    msgs = [_user_tool_result(f"tu_{i}") for i in range(20)]
+    cut = compaction._resolve_cut(msgs, keep_recent=5)
+    assert cut == len(msgs)
+
+
+def _archived_messages(session_id: str, history_dir: Path) -> list[dict]:
+    """Flatten read_history's record list into the raw messages
+    sequence, so tests can compare directly against
+    ``messages[:cut]``."""
+    records = compaction.read_history(session_id, history_dir=history_dir)
+    out: list[dict] = []
+    for rec in records:
+        msgs = rec.get("messages")
+        if isinstance(msgs, list):
+            out.extend(msgs)
+    return out
+
+
+def test_compactor_persists_advanced_slice_not_naive_slice(tmp_path):
+    """The bug fix in one assertion: with a tool-chain history that
+    triggers boundary repair, the on-disk archive must contain ALL
+    messages compact() discards — including the ones repair advanced
+    past. Pre-fix this archive was short by N messages where N is
+    the number of leading tool_results the repair skipped."""
+    msgs = _build_long_history(8)  # 32 messages
+    c = compaction.Compactor(session_id="forensic", threshold=20, keep_recent=10, history_dir=tmp_path)
+    out = c.maybe_compact(msgs)
+    # Compaction fired (not the same object back).
+    assert out is not msgs
+
+    archive = _archived_messages("forensic", tmp_path)
+    cut_used = compaction._resolve_cut(msgs, keep_recent=10)
+    expected_archive = msgs[:cut_used]
+    assert len(archive) == len(expected_archive), (
+        f"archive missing {len(expected_archive) - len(archive)} messages — "
+        f"the boundary repair advanced the cut but persistence used the naive cut"
+    )
+    assert archive == expected_archive
+
+
+def test_compactor_archive_matches_compact_discard(tmp_path):
+    """Cross-check across multiple keep_recent values: regardless of
+    where the cut lands, the persisted slice == messages[:cut] where
+    cut is exactly compact()'s cut."""
+    msgs = _build_long_history(10)  # 40 messages
+    for kr in (4, 6, 8, 10, 12):
+        sub = tmp_path / f"kr_{kr}"
+        sub.mkdir()
+        c = compaction.Compactor(session_id=f"k{kr}", threshold=20, keep_recent=kr, history_dir=sub)
+        c.maybe_compact(msgs)
+        archive = _archived_messages(f"k{kr}", sub)
+        cut_used = compaction._resolve_cut(msgs, keep_recent=kr)
+        if cut_used == 0:
+            assert archive == [], f"keep_recent={kr}: no compaction fired, archive should be empty"
+        else:
+            assert archive == msgs[:cut_used], (
+                f"keep_recent={kr}: archive does not match compact() discard slice"
+            )
+
+
+def test_compactor_does_not_persist_when_threshold_disabled(tmp_path):
+    """threshold=0 disables compaction entirely — even with a huge
+    message list, no archive is written."""
+    msgs = _build_long_history(20)
+    c = compaction.Compactor(session_id="disabled", threshold=0, keep_recent=10, history_dir=tmp_path)
+    out = c.maybe_compact(msgs)
+    assert out is msgs  # same-object identity preserved
+    assert _archived_messages("disabled", tmp_path) == []
+
+
+def test_compactor_with_persist_false_archives_nothing(tmp_path):
+    msgs = _build_long_history(15)
+    c = compaction.Compactor(
+        session_id="nopersist",
+        threshold=10,
+        keep_recent=4,
+        history_dir=tmp_path,
+        persist=False,
+    )
+    out = c.maybe_compact(msgs)
+    assert out is not msgs  # compaction did fire
+    assert _archived_messages("nopersist", tmp_path) == []
+
+
+def test_compactor_round_trip_archive_messages(tmp_path):
+    """Persisted JSONL must round-trip — re-reading the file produces
+    the same dict structure compact() discarded. Defends the forensic
+    contract: archived messages are inspectable later, not just
+    write-only ballast."""
+    msgs = _build_long_history(8)
+    c = compaction.Compactor(session_id="rt", threshold=20, keep_recent=10, history_dir=tmp_path)
+    c.maybe_compact(msgs)
+    archive = _archived_messages("rt", tmp_path)
+    cut_used = compaction._resolve_cut(msgs, keep_recent=10)
+    assert archive == msgs[:cut_used]
+    # Spot-check a thinking block survives the round trip.
+    thinking_blocks = [
+        b
+        for m in archive
+        if isinstance(m.get("content"), list)
+        for b in m["content"]
+        if isinstance(b, dict) and b.get("type") == "thinking"
+    ]
+    assert thinking_blocks, "expected at least one thinking block in archive"
+    for b in thinking_blocks:
+        assert "thinking" in b
+        assert "signature" in b

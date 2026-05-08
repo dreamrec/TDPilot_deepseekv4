@@ -29,6 +29,21 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+# Phase 3 (F-12) — soft-import the tool-error sentinel helper. The
+# dispatcher module owns the canonical predicate; the agent loop just
+# calls it. Soft-import so a stripped-down test embed without the
+# dispatcher module still loads.
+try:
+    from tdpilot_api_dispatcher import is_tool_error_result  # type: ignore[import-not-found]
+except ImportError:
+
+    def is_tool_error_result(result):  # type: ignore[misc]
+        if not isinstance(result, dict):
+            return False
+        if "_tool_error" in result:
+            return bool(result["_tool_error"])
+        return "error" in result
+
 # ---------------------------------------------------------------------------
 # SSL setup — TouchDesigner's bundled Python varies by platform on whether it
 # can locate a default CA bundle. On Windows there is no file-based CA bundle
@@ -270,6 +285,33 @@ class Agent:
     # ------------------------------------------------------------------
 
     def add_user_message(self, text: str) -> None:
+        """Append a user message, idempotent against accidental double
+        sends (PR-18 / F-13).
+
+        Pre-1.8.1 a UI double-click or a transient retry could append
+        the same user text twice in a row. The duplicate then turned
+        into two consecutive ``user`` blocks, which DeepSeek's compat
+        layer rejects with ``messages: roles must alternate``. The
+        guard checks the most recent message and no-ops if it's an
+        identical user/text duplicate.
+
+        Invariant: only blocks an EXACT-text repeat of the immediately
+        preceding user message. Different text, or any non-user
+        message in between, allows the append normally — so legitimate
+        same-text re-sends after an assistant turn still go through.
+        """
+        if self.messages:
+            last = self.messages[-1]
+            if isinstance(last, dict) and last.get("role") == "user":
+                last_content = last.get("content")
+                if isinstance(last_content, list) and last_content:
+                    first_block = last_content[0]
+                    if (
+                        isinstance(first_block, dict)
+                        and first_block.get("type") == "text"
+                        and first_block.get("text") == text
+                    ):
+                        return
         self.messages.append({"role": "user", "content": [{"type": "text", "text": text}]})
 
     def reset(self) -> None:
@@ -448,9 +490,12 @@ class Agent:
                 self.on_tool_call(tool_name, tool_args)
                 try:
                     result = self.dispatcher(tool_name, tool_args)
-                    is_error = isinstance(result, dict) and "error" in result
+                    # F-12: prefer the explicit `_tool_error` sentinel,
+                    # fall back to the legacy `error`-key heuristic for
+                    # one release.
+                    is_error = is_tool_error_result(result)
                 except Exception as exc:  # noqa: BLE001
-                    result = {"error": f"{type(exc).__name__}: {exc}"}
+                    result = {"_tool_error": True, "error": f"{type(exc).__name__}: {exc}"}
                     is_error = True
                 self.on_tool_result(tool_name, result, is_error)
                 results_block.append(
