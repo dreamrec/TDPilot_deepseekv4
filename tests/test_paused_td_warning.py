@@ -64,9 +64,15 @@ def _stub_thread_spawn(monkeypatch):
 class _FakeAgent:
     """Stand-in for the real Agent — only ``add_user_message`` is needed
     by ``start_turn``.
+
+    ``messages`` is initialised per-instance (NOT as a class-level
+    mutable default) so tests can't accidentally share state through
+    a single shared list — a hazard that would only manifest if
+    ``add_user_message`` were ever extended to mutate it.
     """
 
-    messages: list = []
+    def __init__(self) -> None:
+        self.messages: list = []
 
     def add_user_message(self, _text: str) -> None:
         pass
