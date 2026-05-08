@@ -175,6 +175,23 @@
     border-color: var(--accent);
     background: var(--bg-3);
   }
+  /* Keyboard focus matches the project's existing focus pattern
+     (#input:focus uses the same accent ring + glow). Browsers
+     default focus ring would clash with the chat aesthetic. */
+  #font-toggle:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 0 8px -2px rgba(107, 71, 255, 0.4);
+  }
+  #font-toggle:focus:not(:focus-visible) {
+    box-shadow: none;
+    border-color: var(--rule);
+  }
+  #font-toggle:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 0 8px -2px rgba(107, 71, 255, 0.4);
+  }
   #font-toggle .fs-a { font-size: 9px;  color: var(--muted); }
   #font-toggle .fs-A { font-size: 13px; color: var(--muted); }
   :root.fs-small #font-toggle .fs-a { color: var(--accent); }
@@ -712,7 +729,8 @@
     </span>
     <button id="font-toggle" type="button"
             title="Toggle chat font size (small / large)"
-            aria-label="Toggle chat font size">
+            aria-label="Toggle chat font size"
+            aria-pressed="false">
       <span class="fs-a">a</span><span class="fs-A">A</span>
     </button>
   </div>
@@ -815,6 +833,10 @@
     if (mode !== 'small' && mode !== 'large') mode = 'small';
     document.documentElement.classList.remove('fs-small', 'fs-large');
     document.documentElement.classList.add('fs-' + mode);
+    // aria-pressed reflects "non-default state" — large = pressed,
+    // small = not pressed. Lets screen readers announce the toggle
+    // state ("toggle button, pressed" / "not pressed") on focus.
+    $fontToggle.setAttribute('aria-pressed', mode === 'large' ? 'true' : 'false');
     try { localStorage.setItem(FONT_KEY, mode); } catch (_) { /* private mode */ }
   }
   let _savedFontMode = 'small';

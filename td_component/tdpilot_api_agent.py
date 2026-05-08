@@ -491,9 +491,11 @@ class Agent:
                 self.on_tool_call(tool_name, tool_args)
                 try:
                     result = self.dispatcher(tool_name, tool_args)
-                    # F-12: prefer the explicit `_tool_error` sentinel,
-                    # fall back to the legacy `error`-key heuristic for
-                    # one release.
+                    # F-12: the explicit `_tool_error` sentinel is the
+                    # only failure signal post-v2.0. Internal handlers
+                    # that emit `{"error": "..."}` get auto-stamped
+                    # with `_tool_error: True` by `recovery.attach_hint()`
+                    # inside the dispatcher pipeline.
                     is_error = is_tool_error_result(result)
                 except Exception as exc:  # noqa: BLE001
                     result = {"_tool_error": True, "error": f"{type(exc).__name__}: {exc}"}
