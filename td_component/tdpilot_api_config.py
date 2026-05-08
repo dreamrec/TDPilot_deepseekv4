@@ -110,6 +110,32 @@ def redact(s: str) -> str:
     return s
 
 
+def redact_paths(s: str) -> str:
+    """Strip home-directory and config-dir paths from a string. Used on
+    tracebacks before they're returned to the model — the model doesn't
+    need to know the user's home path, and leaking it into the chat
+    transcript / DeepSeek logs is a soft information leak.
+
+    Replaces (in order):
+      * The session-token file path (if present in the message body).
+      * The TDPilot config dir (``~/.tdpilot-api``).
+      * The user's home dir (``$HOME``).
+
+    Each replacement uses a stable token (``~/.tdpilot-api``, ``~``)
+    so the redacted message is still useful for debugging.
+    """
+    if not isinstance(s, str) or not s:
+        return s
+    out = s
+    home = str(Path.home()) if Path else ""
+    config_dir = str(CONFIG_DIR)
+    if config_dir and config_dir in out:
+        out = out.replace(config_dir, "~/.tdpilot-api")
+    if home and home in out:
+        out = out.replace(home, "~")
+    return out
+
+
 def resolved_config() -> dict:
     """Bundle for the agent. Never includes the api_key — caller fetches that separately."""
     return {

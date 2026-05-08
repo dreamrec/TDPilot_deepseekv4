@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "TDPilot DPSK4",
   "slug": "tdpilot-dpsk4",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "repository": "https://github.com/dreamrec/TDPilot_deepseekv4",
   "description": "MCP server for TouchDesigner (DeepSeek v4 optimized) with live graph control, diagnostics, safety, streaming, knowledge corpus, technique memory, and typed patch sessions.",
   "entrypoints": {
