@@ -1,9 +1,10 @@
 ---
 name: popx-mode
-description: POPx (Lucas Morgan's popsextension library) workflow — detect first, fall back to TD 2025 native POPs if not installed
+description: POPx (Lucas Morgan's popsextension library) workflow — detect first, fall back to TD 2025 native POPs (build 2025.32820) if not installed
 auto_load: false
 priority: 5
 triggers: [popx, popsextension, pop, particles, gpu]
+surface: standalone
 ---
 
 # POPx Mode
@@ -117,11 +118,29 @@ specific operator names if needed.
 ## TD 2025 native POPs (fallback when POPx is NOT installed)
 
 TouchDesigner 2025 ships its own POP operators — a smaller, simpler set
-than POPx. **Confirmed available in TD 2025.32460** (verified by trial
-creation, May 2026):
+than POPx but growing fast. **Confirmed available in TD 2025.32820**
+(May 2026 build, the largest native-POP expansion to date):
 
-`particlePOP`, `noisePOP`, `nullPOP`, `mergePOP`, `transformPOP`,
-`gridPOP`, `sortPOP`, `attributePOP`, `limitPOP`.
+**Core**: `particlePOP`, `noisePOP`, `nullPOP`, `mergePOP`,
+`transformPOP`, `gridPOP`, `sortPOP`, `attributePOP`, `limitPOP`.
+
+**1.7.0 additions (build 2025.32820)**:
+- **`tracePOP`** — turns a 2D image (TOP input) into closed 2D line
+  strips. **Migration trap: Polygonize POP is now 3D-only — if you
+  used Polygonize on 2D input, switch to Trace POP.**
+- **`triangulatePOP`** — fills closed line strips (e.g. from `tracePOP`)
+  with triangles. `Convex` mode is fast; `Concave` mode handles
+  complex silhouettes.
+- **`alembicOutPOP`**, **`fileOutPOP`**, **`pointFileInPOP`** — POP-side
+  import/export pipeline.
+- **`dmxFixturePOP`** + **`dmxOutPOP`** — paired with the new
+  `panTiltCHOP` and `dmxMapDAT`, this is the new lighting/rig
+  workflow. Each input point becomes one fixture instance; DMX Out
+  sends Art-Net / sACN / KiNET / FTDI.
+
+When in doubt about whether a POP type exists in the user's build, call
+`td_get_release_delta` (defaults to current build) or
+`td_get_build_compatibility` for a specific operator.
 
 **Key API differences vs POPx** — knowing these prevents the "translate
 POPx tutorial to TD 2025 native" mistake:
@@ -136,6 +155,8 @@ POPx tutorial to TD 2025 native" mistake:
   rendering side via `pointspriteMAT` (note: lowercase 's' in 'sprite').
 - **POPs wire via standard inputs**, not via a `targetpop` feedback
   parameter.
+- **2D → 3D conversion is `tracePOP` + `triangulatePOP`** in 2025.32820+,
+  not `polygonizePOP` (which became 3D-only in this build).
 
 ### Canonical TD 2025 native particle field
 
