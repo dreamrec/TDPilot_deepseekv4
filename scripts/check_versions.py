@@ -97,10 +97,13 @@ def main() -> int:
         # from the package version, introduce a separate TD_PROTOCOL_VERSION
         # constant rather than re-decoupling this one.
         check_line(
-            ROOT / "td_component" / "mcp_webserver_callbacks.py",
+            # PR-16 (v1.8.3): API_VERSION moved from the deleted god module
+            # into the callbacks/_header.py split. tests/test_startup_sweep.py
+            # reads the same path; keep them in sync.
+            ROOT / "td_component" / "callbacks" / "_header.py",
             r'API_VERSION\s*=\s*"([^"]+)"',
             expected,
-            "td_component/mcp_webserver_callbacks.py API_VERSION",
+            "td_component/callbacks/_header.py API_VERSION",
         ),
         check_line(
             ROOT / "plugin_README.md",

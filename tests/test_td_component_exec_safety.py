@@ -1,19 +1,25 @@
-"""Tests for TD-side standard exec mode in mcp_webserver_callbacks.py.
+"""Tests for TD-side standard exec mode in the composed callbacks module.
 
-Since the callbacks file depends on TouchDesigner runtime globals (op, me, etc.)
-we cannot import it directly.  Instead we parse the source file and verify the
+Since the callbacks code depends on TouchDesigner runtime globals (op, me, etc.)
+we cannot import it directly.  Instead we parse the source and verify the
 expected constants, functions, and control-flow structures are present.
+
+PR-16 (v1.8.3) decomposed ``mcp_webserver_callbacks.py`` into
+``td_component/callbacks/``. This test now reads the composed source via
+``_callbacks_loader.callbacks_source`` so existing assertions on
+constants and tokens continue to apply against the runtime artefact, not
+against any single split file.
 """
 
-import pathlib
 import re
 
+from _callbacks_loader import callbacks_source
+
 # ---------------------------------------------------------------------------
-# Locate the source file
+# Locate the source
 # ---------------------------------------------------------------------------
 
-_CB_PATH = pathlib.Path(__file__).resolve().parent.parent / "td_component" / "mcp_webserver_callbacks.py"
-_SOURCE = _CB_PATH.read_text()
+_SOURCE = callbacks_source()
 
 
 # ---------------------------------------------------------------------------

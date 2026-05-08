@@ -1,6 +1,6 @@
 [project]
 name = "tdpilot-dpsk4"
-version = "1.8.2"
+version = "1.8.3"
 description = "MCP server for live control of TouchDesigner — create, inspect, connect, and manipulate nodes via AI agents"
 readme = "README.md"
 license = "MIT"
@@ -63,14 +63,22 @@ exclude = [
     "dist",
     "data/normalized",
     "td_component/build_export_mcp_tox.py",  # contains TD-API-only references
-    # td_component/mcp_webserver_callbacks.py is baked into tdpilot-dpsk4.tox —
-    # reformatting it changes the source hash and staleness-checks the .tox
-    # (which can only be rebuilt inside a running TouchDesigner session).
-    # Exclude from ruff format to keep format-only releases from invalidating
-    # the .tox. Changes to the TD-side endpoint contract should still be
-    # made and the .tox rebuilt explicitly — this exclusion is just about
-    # cosmetic reformatting.
-    "td_component/mcp_webserver_callbacks.py",
+    # td_component/callbacks/ is the split package whose contents get
+    # concatenated into the mcp_webserver_callbacks textDAT baked into
+    # tdpilot-dpsk4.tox (PR-16, v1.8.3 — was a single 3149-line file
+    # mcp_webserver_callbacks.py before that). Reformatting any of the
+    # splits changes the composed-bytes hash, which then staleness-checks
+    # the .tox (rebuildable only inside a running TouchDesigner). The
+    # splits also reference TD globals (`op`, `parent`, `me`, etc.)
+    # that don't exist in standalone Python, so they would F821 anyway.
+    # Exclude the whole subtree from ruff for the same reason the god
+    # module was excluded pre-1.8.3: keep cosmetic reformatting out of
+    # release flows that need TD to validate.
+    "td_component/callbacks/",
+    # PR-16 baseline fixture: a frozen v1.8.2 snapshot of the god module,
+    # used by tests/test_composer_byte_equivalence.py. References TD globals
+    # for the same reason as the splits above.
+    "tests/fixtures/mcp_webserver_callbacks_v1.8.2_baseline.py",
     "setup_mcp_in_td.py",  # TD-runtime DAT script: references `me`, `project` globals
 ]
 

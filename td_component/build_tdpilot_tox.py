@@ -506,7 +506,10 @@ def _populate_tdpilot_comp(comp, repo_root, info_text):
 
     # Nested mcp_server child (built by the legacy populator)
     mcp_comp = _legacy._reset_or_create_comp(comp, "mcp_server")
-    callbacks_code = _legacy._read_repo_file(repo_root, "td_component/mcp_webserver_callbacks.py")
+    # v1.8.3: callbacks now compose the mcp/ split package via the legacy
+    # helper that knows the canonical concat order — see
+    # build_export_mcp_tox.py:_read_callbacks_source for details.
+    callbacks_code = _legacy._read_callbacks_source(repo_root)
     event_emitter_code = _legacy._read_repo_file(repo_root, "td_component/event_emitter.py")
     ws_callbacks_code = _legacy._read_repo_file(repo_root, "td_component/ws_callbacks.py")
     # v1.6.7: state_cache module text — bakes into the state_cache textDAT

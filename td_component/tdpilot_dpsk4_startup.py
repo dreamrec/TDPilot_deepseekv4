@@ -66,10 +66,12 @@ _COMP_NAME = _COMP_NAMES[0]  # backward-compat alias for any external callers
 # fresh /local/tdpilot couldn't displace it).
 _SCAN_PARENTS: tuple[str, ...] = ("/local", "/project1")
 
-# Repo root validation markers (same as build_export_mcp_tox.py _is_repo_root)
+# Repo root validation markers (same as build_export_mcp_tox.py _is_repo_root).
+# PR-16 (v1.8.3) replaced the god module with the callbacks/ package; the
+# composer is the new load-bearing entry point.
 _MARKER_FILES = [
     "pyproject.toml",
-    os.path.join("td_component", "mcp_webserver_callbacks.py"),
+    os.path.join("td_component", "callbacks", "_composer.py"),
 ]
 
 # Source files whose mtime is checked against the TOX for staleness.
@@ -237,23 +239,32 @@ def _load_tox_fast(tox_path):
 
 
 def _read_api_version(tox_path):
-    """Read API_VERSION from mcp_webserver_callbacks.py adjacent to the .tox.
+    """Read API_VERSION from the ``callbacks/_header.py`` split adjacent to the .tox.
 
     Reading the version from source (rather than hardcoding it here) means
     the startup banner stays correct forever — no per-release maintenance,
-    no drift between this file and ``mcp_webserver_callbacks.py``. Falls
-    back to ``"?"`` if the file is missing (e.g. the user dragged the .tox
-    into a directory without the rest of the repo). A fallback string is
+    no drift between this file and the live API_VERSION. Falls back to
+    ``"?"`` if the file is missing (e.g. the user dragged the .tox into a
+    directory without the rest of the repo). A fallback string is
     preferable to crashing TD startup over a banner.
+
+    PR-16 (v1.8.3): the constant moved from the deleted
+    ``mcp_webserver_callbacks.py`` to ``td_component/callbacks/_header.py``.
     """
-    callbacks_path = os.path.join(os.path.dirname(tox_path), "mcp_webserver_callbacks.py")
-    try:
-        with open(callbacks_path, encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("API_VERSION"):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except OSError:
-        pass
+    base = os.path.dirname(tox_path)
+    candidates = (
+        os.path.join(base, "callbacks", "_header.py"),
+        # Fallback for users running a pre-1.8.3 checkout. Drop in v2.0.
+        os.path.join(base, "mcp_webserver_callbacks.py"),
+    )
+    for callbacks_path in candidates:
+        try:
+            with open(callbacks_path, encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("API_VERSION"):
+                        return line.split("=", 1)[1].strip().strip('"').strip("'")
+        except OSError:
+            continue
     return "?"
 
 

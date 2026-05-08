@@ -209,7 +209,11 @@ _SOURCE_FILES = (
     ("tdpilot_api_compaction", "textDAT", "td_component/tdpilot_api_compaction.py"),
     ("tdpilot_api_chat_html", "textDAT", "td_component/tdpilot_api_chat.html"),
     ("tdpilot_api_web_callbacks", "textDAT", "td_component/tdpilot_api_web_callbacks.py"),
-    ("mcp_webserver_callbacks", "textDAT", "td_component/mcp_webserver_callbacks.py"),
+    # PR-16 (v1.8.3): mcp_webserver_callbacks is now composed from the
+    # callbacks/ split package rather than a single source file. The build
+    # loop below detects the special "<COMPOSE>" sentinel and routes to
+    # _legacy._read_callbacks_source() for the composed body.
+    ("mcp_webserver_callbacks", "textDAT", "<COMPOSE>"),
     ("tdpilot_api_executor", "executeDAT", "td_component/tdpilot_api_executor.py"),
     ("tdpilot_api_parexec", "parameterexecuteDAT", "td_component/tdpilot_api_parexec.py"),
 )
@@ -611,7 +615,13 @@ def _populate_comp(comp, repo_root, info_text):
     }
     created = {}
     for name, op_type, rel_path in _SOURCE_FILES:
-        source = _legacy._read_repo_file(repo_root, rel_path)
+        if rel_path == "<COMPOSE>":
+            # PR-16 (v1.8.3): mcp_webserver_callbacks is composed from the
+            # callbacks/ split package; share the legacy helper so the
+            # standalone + CLI builds use the same composed body.
+            source = _legacy._read_callbacks_source(repo_root)
+        else:
+            source = _legacy._read_repo_file(repo_root, rel_path)
         dat = _create_dat_with_source(comp, name, op_type, source)
         created[name] = dat
         try:
