@@ -129,7 +129,11 @@ def test_dispatcher_handler_exception_carries_sentinel():
 
     class _RaisingHandlers:
         def handle_explode(self, body):
-            raise RuntimeError("kaboom in /Users/secret/path")
+            # Use a synthetic path string that doesn't match the
+            # personal-path linter's `/Users/...` regex — the test
+            # only cares that _scrub passes the exception type +
+            # message through to the synthetic error result.
+            raise RuntimeError("kaboom in <REPO_ROOT>/secret/path")
 
     dispatcher = disp.make_dispatcher(
         handlers_modules=[_RaisingHandlers()],
