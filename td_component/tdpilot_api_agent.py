@@ -208,6 +208,13 @@ class Agent:
         on_tool_result: Callable[[str, Any, bool], None] = _noop,
         on_turn_done: Callable[[str], None] = _noop,
         on_error: Callable[[BaseException], None] = _noop,
+        # Phase 2 (1.8.0) — surface DeepSeek's per-call token usage so
+        # the chat status bar can render a token meter. Fires once
+        # per API call (multiple times per turn during tool-use chains).
+        # Keys typically: input_tokens, output_tokens, cache_read_input_tokens.
+        # Treat all keys as optional — DeepSeek's compat layer may omit
+        # some fields depending on the model version.
+        on_usage: Callable[[dict], None] = _noop,
     ) -> None:
         if not api_key:
             raise AgentError("api_key is required")
@@ -253,6 +260,7 @@ class Agent:
         self.on_tool_result = on_tool_result
         self.on_turn_done = on_turn_done
         self.on_error = on_error
+        self.on_usage = on_usage
 
         self.messages: list[dict] = []
         self._stop_flag = threading.Event()
@@ -402,6 +410,15 @@ class Agent:
             response = self._call_api()
             content = response.get("content", []) or []
             stop_reason = response.get("stop_reason")
+            # Phase 2 (1.8.0) — surface per-call token usage to the chat
+            # status bar. Best-effort: a missing/exotic shape is dropped
+            # rather than raised so the agent loop is unaffected.
+            usage = response.get("usage")
+            if isinstance(usage, dict) and usage:
+                try:
+                    self.on_usage(usage)
+                except Exception:  # noqa: BLE001
+                    pass
 
             # Append assistant turn to history. ``_strip_reasoning`` only
             # removes ``reasoning_content`` SUB-KEYS — it KEEPS

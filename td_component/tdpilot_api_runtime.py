@@ -152,6 +152,11 @@ EV_DONE = "done"  # payload: str (final text)
 EV_ERROR = "error"  # payload: str (redacted message)
 EV_STATE = "state"  # payload: str ("idle"|"calling"|"thinking")
 EV_MODEL = "model"  # payload: {"tier": str, "model": str} — Sprint 4.3
+# Phase 2 (1.8.0) — per-API-call token usage. Fires multiple times per
+# turn (one per tool-use round trip). Frontend accumulates into a
+# per-turn meter and resets on EV_DONE / EV_ERROR. All fields optional
+# — DeepSeek's compat layer may omit some depending on model version.
+EV_USAGE = "usage"  # payload: {"input_tokens": int, "output_tokens": int, "cache_read_input_tokens": int}
 # Phase 1.3 — severity-tracked validation hint. Emitted at turn end
 # when high-severity mutations went out without a follow-up validator
 # call. Soft signal; chat UI renders as a subtle nudge below the
@@ -221,6 +226,39 @@ def _tool_severity(name: str) -> str:
     policy: callers decide what to do with it.
     """
     return _TOOL_SEVERITY.get(name, "low")
+
+
+# Phase 2 (1.8.0) — fields the chat token meter can render. Anything
+# else in the upstream usage dict is dropped: status-bar payloads
+# travel over the WS many times per turn, so we ship a known-safe
+# subset rather than forwarding whatever DeepSeek's compat layer
+# happens to attach this week.
+_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def _sanitise_usage(usage: Any) -> dict[str, int]:
+    """Coerce a raw usage dict to ``{field: int}`` with non-int and
+    missing fields dropped to 0. The frontend treats every key as
+    optional; this guarantees the on-the-wire payload is JSON-stable
+    and never leaks an arbitrary value (an experimental field name
+    DeepSeek might flip on someday)."""
+    if not isinstance(usage, dict):
+        return {}
+    out: dict[str, int] = {}
+    for k in _USAGE_FIELDS:
+        v = usage.get(k)
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, int):
+            out[k] = v
+        elif isinstance(v, float):
+            out[k] = int(v)
+    return out
 
 
 SYSTEM_PROMPT_BASE = (
@@ -533,6 +571,11 @@ class AgentRuntime:
         # the cook thread never blocks. Disable via
         # ``config["trace_logging"] = False``.
         self._tool_call_starts: dict[str, float] = {}
+        # Phase 2 (1.8.0) — always-on per-tool latency clock for the
+        # chat UI's "(123ms)" badge. Lives independently of the tracer
+        # so the latency stays available even when trace_logging is
+        # disabled. Drained on every matching tool_result.
+        self._tool_started_monotonic: dict[str, float] = {}
         self._trace_dir_override: Path | None = self._config.get("traces_dir")  # type: ignore[assignment]
         self._tracer = self._build_tracer()
 
@@ -602,12 +645,12 @@ class AgentRuntime:
             on_text=lambda s: self._push(EV_TEXT, s),
             on_tool_call=lambda n, a: (
                 self._trace_tool_started(n, a),
-                self._push(EV_TOOL_CALL, {"name": n, "args": a}),
+                self._push_tool_call_event(n, a),
             ),
             on_tool_result=lambda n, r, e: (
                 self._record_tool_call(n, e, r),
                 self._trace_record_tool(n, r, e),
-                self._push(EV_TOOL_RESULT, {"name": n, "result": r, "is_error": e}),
+                self._push_tool_result_event(n, r, e),
             ),
             on_turn_done=lambda s: (
                 self._maybe_emit_validation_hint(),
@@ -627,6 +670,10 @@ class AgentRuntime:
                 self._trace_update_model(tier, picked),
                 self._push(EV_MODEL, {"tier": tier, "model": picked}),
             ),
+            # Phase 2 (1.8.0) — per-call token usage to the chat
+            # status bar. Sanitised to int-or-zero so the frontend
+            # never sees a stray non-numeric field.
+            on_usage=lambda usage: self._push(EV_USAGE, _sanitise_usage(usage)),
         )
 
     # ------------------------------------------------------------------
@@ -698,6 +745,25 @@ class AgentRuntime:
         # Store (start_monotonic, args) so the matching record can
         # call ``record_tool`` with the original arg hash.
         self._tool_call_starts[name] = (time.monotonic(), args)  # type: ignore[assignment]
+
+    def _push_tool_call_event(self, name: str, args: dict) -> None:
+        """Emit ``EV_TOOL_CALL`` and start the always-on latency clock
+        so the matching ``EV_TOOL_RESULT`` can carry an elapsed time
+        for the chat UI's "(123ms)" badge. The clock is independent
+        of the tracer's own timing — Phase 2 (1.8.0)."""
+        self._tool_started_monotonic[name] = time.monotonic()
+        self._push(EV_TOOL_CALL, {"name": name, "args": args})
+
+    def _push_tool_result_event(self, name: str, result: Any, is_error: bool) -> None:
+        """Emit ``EV_TOOL_RESULT`` with elapsed latency since the
+        matching ``EV_TOOL_CALL``. Best-effort: if the start clock was
+        never set (e.g. textDAT reload mid-turn), latency_ms is
+        omitted from the payload — Phase 2 (1.8.0)."""
+        started = self._tool_started_monotonic.pop(name, None)
+        payload: dict[str, Any] = {"name": name, "result": result, "is_error": is_error}
+        if started is not None:
+            payload["latency_ms"] = int((time.monotonic() - started) * 1000)
+        self._push(EV_TOOL_RESULT, payload)
 
     def _trace_start_turn(self, user_text: str) -> None:
         """Open a tracer turn record. No-op if tracing disabled."""
@@ -1127,6 +1193,11 @@ class AgentRuntime:
         self._session_skills_activated.clear()
         # Phase 1.3 — same logic for the per-turn validation ledger.
         self._turn_tool_calls = []
+        # Phase 2 (1.8.0) — drop any straggling latency-clock entries.
+        # An interrupted turn can leave on_tool_call entries without
+        # matching on_tool_result; the next session would otherwise
+        # see ghost timing for the same tool name.
+        self._tool_started_monotonic.clear()
         # And the dynamic-context snapshot — rebuild from scratch.
         self._refresh_dynamic_context()
         self._push(EV_STATE, "idle")
