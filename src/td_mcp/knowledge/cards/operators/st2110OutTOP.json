@@ -1,0 +1,21 @@
+{
+  "card_type": "operator",
+  "op_type": "st2110OutTOP",
+  "family": "TOP",
+  "display_name": "ST2110 Out TOP",
+  "docs_url": "https://docs.derivative.ca/ST2110_Out_TOP",
+  "summary": "Transmits uncompressed video over ST 2110 IP networks for broadcast workflows (Blackmagic IP, Deltacast DELTA-ip-ST2110). Output channel and pixel format are controlled by the linked ST2110 Device CHOP.",
+  "key_params": [
+    {"name": "device", "type": "String", "note": "Path to ST2110 Device CHOP"},
+    {"name": "channel", "type": "Int", "note": "Output channel index"},
+    {"name": "format", "type": "Menu", "note": "Pixel format / sampling"},
+    {"name": "active", "type": "Toggle", "note": "Enable transmission"}
+  ],
+  "common_gotchas": [
+    "Resolution and frame rate must match the configured ST 2110 stream profile — mismatched values silently drop.",
+    "Like the input, requires PTP-synced network. Without it, downstream receivers will reject or jitter."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

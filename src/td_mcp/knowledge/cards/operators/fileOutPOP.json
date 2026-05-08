@@ -1,0 +1,21 @@
+{
+  "card_type": "operator",
+  "op_type": "fileOutPOP",
+  "family": "POP",
+  "display_name": "File Out POP",
+  "docs_url": "https://docs.derivative.ca/File_Out_POP",
+  "summary": "Writes POP contents to a single file or a numbered file sequence. Format determines which attributes survive the export.",
+  "key_params": [
+    {"name": "file", "type": "String", "note": "Output path; use $F4 for sequence numbering"},
+    {"name": "format", "type": "Menu", "note": "obj, ply, exr, spz — .obj/.spz have fixed attribute sets, .exr/.ply support arbitrary attributes"},
+    {"name": "record", "type": "Toggle", "note": "Record on/off; pulse for one-shot save"},
+    {"name": "frame", "type": "Int", "note": "Frame number used in the sequence pattern"}
+  ],
+  "common_gotchas": [
+    "If you need every POP attribute round-tripped, use .ply or .exr — .obj/.spz drop anything outside their fixed schemas.",
+    "For Alembic-style animated geometry use Alembic Out POP instead — File Out POP writes per-frame snapshots, Alembic packs them in one container."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

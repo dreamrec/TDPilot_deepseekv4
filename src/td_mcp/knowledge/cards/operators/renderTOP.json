@@ -10,13 +10,18 @@
     {"name": "geometry", "type": "String", "note": "Path(s) to Geometry COMPs to render (space-separated or wildcard)"},
     {"name": "lights", "type": "String", "note": "Path(s) to Light COMPs (space-separated or wildcard)"},
     {"name": "resolutionw", "type": "Int", "note": "Output resolution width in pixels"},
-    {"name": "resolutionh", "type": "Int", "note": "Output resolution height in pixels"}
+    {"name": "resolutionh", "type": "Int", "note": "Output resolution height in pixels"},
+    {"name": "renderpulse", "type": "Pulse", "note": "2025.30000+: pulse to render once on demand instead of every cook"},
+    {"name": "bgcolor", "type": "Color", "note": "2025.30000+: built-in background color (replaces stacking a Constant TOP behind)"},
+    {"name": "uvunwrappop", "type": "POP", "note": "2025.30000+: optional UV Unwrap POP input for UV-baking workflows"}
   ],
   "common_gotchas": [
     "An empty Geometry or Camera parameter produces a black output with no error — always verify paths.",
-    "Render is GPU-intensive at high resolutions; use instancing in Geometry COMPs rather than duplicating geometry."
+    "Render is GPU-intensive at high resolutions; use instancing in Geometry COMPs rather than duplicating geometry.",
+    "If you don't need camera or light control, the new Render Simple TOP (2025.30000+) is a lighter-weight alternative.",
+    "2025.30000+: now natively supports rendering to 3D textures and 2D arrays — see the texture-format params."
   ],
   "related_snippets": [],
   "build_relevance": "2020.20000+",
-  "last_verified": "2026-03-14"
+  "last_verified": "2026-05-08"
 }

@@ -1,0 +1,24 @@
+{
+  "card_type": "operator",
+  "op_type": "alembicOutPOP",
+  "family": "POP",
+  "display_name": "Alembic Out POP",
+  "docs_url": "https://docs.derivative.ca/Alembic_Out_POP",
+  "summary": "Writes POP geometry to an Alembic (.abc) file. Supports multi-frame animation export, built-in plus custom point/primitive attributes, and packing multiple POPs into one .abc as separate Alembic objects.",
+  "key_params": [
+    {"name": "file", "type": "String", "note": "Output .abc path"},
+    {"name": "record", "type": "Toggle", "note": "Pulse to record current frame; hold-on records range"},
+    {"name": "framestart", "type": "Int", "note": "First frame of the recorded range"},
+    {"name": "frameend", "type": "Int", "note": "Last frame of the recorded range"},
+    {"name": "objectname", "type": "String", "note": "Name of the Alembic object inside the file"},
+    {"name": "exportcustomattribs", "type": "Toggle", "note": "Include custom POP attributes in the export"}
+  ],
+  "common_gotchas": [
+    "Alembic export is per-frame — make sure the timeline is actually advancing (or trigger a frame loop) while recording.",
+    "Large attribute sets balloon file size fast — only export the attributes downstream tools need.",
+    "Pair with Alembic In POP on import; both now share the new delayed-load workflow."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

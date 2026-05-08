@@ -1,4 +1,4 @@
-# TDPilot v1.6.13 Manual
+# TDPilot v1.7.0 Manual
 
 The full reference. Read the [README](../README.md) first if you haven't installed yet — this manual assumes you've got either the standalone .tox or the Claude Code plugin running.
 
@@ -543,13 +543,18 @@ Edit the source files in `td_component/`, then rebuild via TD's Textport:
 ```python
 import os
 os.environ["TD_MCP_REPO_ROOT"] = "/ABS/PATH/TDPilot_deepseekv4"
+os.environ["TD_MCP_PARENT_PATH"] = ""  # export-only; omit to live-install at /project1
 path = os.path.join(os.environ["TD_MCP_REPO_ROOT"],
                     "td_component", "build_tdpilot_api_tox.py")
-exec(compile(open(path).read(), path, "exec"), globals(), globals())
+with open(path, encoding="utf-8") as f:  # encoding= is required — TD's default ASCII trips on em-dashes in the source
+    src = f.read()
+exec(compile(src, path, "exec"), globals(), globals())
 build_and_export()
 ```
 
-Output: `td_component/tdpilot_API.tox` is overwritten in place. The build also installs a fresh COMP at `/project1/tdpilot_API` so you can immediately test the new build.
+To rebuild **both** toxes (standalone API + CLI bridge) in one shot, loop over `("build_tdpilot_tox.py", "build_tdpilot_api_tox.py")` and exec each.
+
+Output: `td_component/tdpilot_API.tox` (and `td_component/tdpilot-dpsk4.tox` if you ran both) are overwritten in place. With `TD_MCP_PARENT_PATH=""` set, the build is export-only — drop the env var (or set a path) to also live-install a COMP for testing.
 
 ---
 

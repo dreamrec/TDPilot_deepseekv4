@@ -1,0 +1,22 @@
+{
+  "card_type": "operator",
+  "op_type": "dmxFixturePOP",
+  "family": "POP",
+  "display_name": "DMX Fixture POP",
+  "docs_url": "https://docs.derivative.ca/DMX_Fixture_POP",
+  "summary": "Defines a DMX fixture profile — channel layout and addressing — and replicates that profile across every point/primitive in the input POP. Each input point becomes one fixture instance.",
+  "key_params": [
+    {"name": "fixtureprofile", "type": "Menu", "note": "Built-in or custom fixture profile (channel set)"},
+    {"name": "universe", "type": "Int", "note": "Default DMX universe assignment"},
+    {"name": "startchannel", "type": "Int", "note": "Starting DMX channel for first fixture"},
+    {"name": "fixturegap", "type": "Int", "note": "Spacing between consecutive fixture address blocks"}
+  ],
+  "common_gotchas": [
+    "Recognised optional input attributes: `DMXFixtureGap`, `DMXFixtureNetAddress`, `DMXFixtureChannel`, `DMXFixtureUniverse` — use them to per-point override the global params.",
+    "DMX Fixture POP doesn't transmit DMX itself — feed it into DMX Out POP, which sends over Art-Net / sACN / KiNET / FTDI.",
+    "Pair with Pan Tilt CHOP and DMX Map DAT for visualizing the universe layout while building the rig."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

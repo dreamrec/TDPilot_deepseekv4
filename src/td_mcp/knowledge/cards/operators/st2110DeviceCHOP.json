@@ -1,0 +1,22 @@
+{
+  "card_type": "operator",
+  "op_type": "st2110DeviceCHOP",
+  "family": "CHOP",
+  "display_name": "ST2110 Device CHOP",
+  "docs_url": "https://docs.derivative.ca/ST2110_Device_CHOP",
+  "summary": "Configures the NIC, IP, and channel layout for ST 2110 In/Out TOPs. Acts as the central settings hub for a media-over-IP card so the In/Out TOPs can stay parameterless.",
+  "key_params": [
+    {"name": "interface", "type": "String", "note": "Physical NIC to bind to"},
+    {"name": "ipmode", "type": "Menu", "note": "DHCP / static IP"},
+    {"name": "ipaddress", "type": "String", "note": "Static IP if not using DHCP"},
+    {"name": "ptpdomain", "type": "Int", "note": "PTP domain number for clock sync"},
+    {"name": "numchannels", "type": "Int", "note": "Number of channels exposed for In/Out routing"}
+  ],
+  "common_gotchas": [
+    "Only one ST2110 Device CHOP should configure a given NIC — duplicate configs fight over the interface.",
+    "PTP domain mismatch is the single most common reason streams don't sync — verify against the master clock setting."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

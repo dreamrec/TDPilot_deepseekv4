@@ -4,17 +4,20 @@
   "family": "TOP",
   "display_name": "Constant TOP",
   "docs_url": "https://docs.derivative.ca/Constant_TOP",
-  "summary": "Outputs a solid-color texture. Useful as backgrounds, masks, or as a base for further processing.",
+  "summary": "Outputs a solid-color texture. Useful as backgrounds, masks, or as a base for further processing. Can also generate 3D textures and 2D arrays directly (2025.30000+).",
   "key_params": [
     {"name": "colorr", "type": "Float", "note": "Red channel value (0-1)"},
     {"name": "colorg", "type": "Float", "note": "Green channel value (0-1)"},
     {"name": "colorb", "type": "Float", "note": "Blue channel value (0-1)"},
-    {"name": "colora", "type": "Float", "note": "Alpha channel value (0-1)"}
+    {"name": "colora", "type": "Float", "note": "Alpha channel value (0-1)"},
+    {"name": "texturetype", "type": "Menu", "note": "2025.30000+: 2D / 2D Array / 3D Texture — pick the destination format directly"},
+    {"name": "depth", "type": "Int", "note": "2025.30000+: depth (slices) when texturetype is 3D Texture or 2D Array"}
   ],
   "common_gotchas": [
-    "Alpha defaults to 1; set it to 0 if you need a transparent base for compositing."
+    "Alpha defaults to 1; set it to 0 if you need a transparent base for compositing.",
+    "2025.30000+: setting `texturetype` to 3D Texture or 2D Array also requires the consuming downstream op to accept that format — most TOPs were upgraded for this in the same build."
   ],
   "related_snippets": [],
   "build_relevance": "2020.20000+",
-  "last_verified": "2026-03-14"
+  "last_verified": "2026-05-08"
 }

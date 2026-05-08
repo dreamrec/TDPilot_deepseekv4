@@ -1,0 +1,19 @@
+{
+  "card_type": "operator",
+  "op_type": "dmxMapDAT",
+  "family": "DAT",
+  "display_name": "DMX Map DAT",
+  "docs_url": "https://docs.derivative.ca/DMX_Map_DAT",
+  "summary": "Visualises the universe and channel layout produced by DMX Fixture POPs as a tabular map. Helps validate addressing, spot collisions, and document a rig.",
+  "key_params": [
+    {"name": "source", "type": "String", "note": "Path to a DMX Fixture POP or DMX Out POP"},
+    {"name": "universe", "type": "Int", "note": "Universe to display (or All)"}
+  ],
+  "common_gotchas": [
+    "Read-only — does not transmit DMX. Pair it with the DMX Out POP for actual output.",
+    "Channel collisions show up as duplicate cells — fix in the upstream Fixture POP's address/gap parameters."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

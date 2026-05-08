@@ -1,0 +1,22 @@
+{
+  "card_type": "operator",
+  "op_type": "nvidiaRtxVideoTOP",
+  "family": "TOP",
+  "display_name": "NVIDIA RTX Video TOP",
+  "docs_url": "https://docs.derivative.ca/NVIDIA_RTX_Video_TOP",
+  "summary": "AI-enhanced video processing using the NVIDIA RTX Video SDK. Provides RTX Video Super Resolution (sharpens/upscales) and RTX Video HDR (SDR-to-HDR upconversion) on supported NVIDIA RTX GPUs.",
+  "key_params": [
+    {"name": "mode", "type": "Menu", "note": "Super Resolution, HDR, or both"},
+    {"name": "srquality", "type": "Menu", "note": "Super Resolution quality preset (Off/Low/Med/High)"},
+    {"name": "hdrenabled", "type": "Toggle", "note": "Enable RTX Video HDR pass"},
+    {"name": "outputformat", "type": "Menu", "note": "Output pixel format — pair with HDR window pixel format for HDR delivery"}
+  ],
+  "common_gotchas": [
+    "Requires a compatible NVIDIA RTX GPU and the RTX Video SDK installed — fails silently or errors otherwise.",
+    "HDR output is only meaningful if the Window COMP is configured for HDR pixel format and the display supports HDR.",
+    "Effect runs on the GPU but is not free — measure cooking impact on busy projects."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}
