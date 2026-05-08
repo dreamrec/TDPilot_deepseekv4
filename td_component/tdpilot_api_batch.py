@@ -165,8 +165,10 @@ def handle_tool_batch(body: dict) -> dict:
             continue
         elapsed_ms = int((time.monotonic() - t_start) * 1000)
 
-        # F-12: prefer the explicit `_tool_error` sentinel, fall back
-        # to the legacy `error`-key heuristic for one release.
+        # F-12: the explicit `_tool_error` sentinel is the only
+        # failure signal post-v2.0. Internal handlers that emit
+        # `{"error": "..."}` get auto-stamped with `_tool_error: True`
+        # by `recovery.attach_hint()` inside the dispatcher pipeline.
         is_error = is_tool_error_result(result)
         results.append(
             {
