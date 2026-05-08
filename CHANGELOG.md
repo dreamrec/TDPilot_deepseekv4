@@ -2,16 +2,22 @@
 
 ## 2.1.1 - 2026-05-08
 
-**Patch: paused-TD UX trap.** When TouchDesigner playback is paused
-(`me.time.play = False`), TD's `onFrameStart` callback does not fire,
-which means the `CookThreadDispatcher` pump never runs. Every tool
-call submitted by the worker thread blocks until its 60s timeout and
-returns `{"error": "Tool ... timed out after 60.0s"}`. The agent saw
-the wall of timeouts and falsely concluded "TouchDesigner is
+**Two UX patches surfaced from live audits.** A paused-TD trap that
+made tool calls silently 60s-timeout and confused the agent into
+declaring "TD unresponsive", plus four new `recovery_hints` patterns
+harvested from a 184-message lighting-redesign turn (11 tool_result
+errors, all agent-learning, zero TD-side bugs).
+
+### Fix 1 — paused-TD UX trap
+
+When TouchDesigner playback is paused (`me.time.play = False`), TD's
+`onFrameStart` callback does not fire, which means the
+`CookThreadDispatcher` pump never runs. Every tool call submitted by
+the worker thread blocks until its 60s timeout and returns
+`{"error": "Tool ... timed out after 60.0s"}`. The agent saw the
+wall of timeouts and falsely concluded "TouchDesigner is
 unresponsive" and instructed users to restart TD — when the actual
 fix was one keypress.
-
-### Fix
 
 - New `AgentRuntime._is_td_paused()` probe — wraps
   `parent().time.play` in a defensive try/except that returns False
@@ -25,7 +31,7 @@ fix was one keypress.
   reaches the model, so users debugging with TD paused can still
   ask questions; they just see the explanation upfront.
 
-### Known limitation (tracked tech debt)
+#### Known limitation (tracked tech debt)
 
 The underlying pump architecture is unchanged: the cook-thread
 dispatcher is still driven by `onFrameStart`, so paused TD will
@@ -35,12 +41,35 @@ pump off `onFrameStart` (e.g. via a `chopExecuteDAT` watching a
 `timerCHOP` parameterCHOP) is the architecturally correct fix and
 is filed for a future minor release.
 
+### Fix 2 — Four new `recovery_hints` patterns
+
+Each pattern targets a specific wrong-API guess observed in
+production turns. Hints follow the v2.0.1 design rules (narrow
+regex, single specific hint, append at end so existing matches keep
+priority).
+
+- `'td.Par' object has no attribute 'rawVal'`
+  → use `par.eval` / `par.val` / `par.expr` (`rawVal` was a
+  TD-2022 name, removed in TD 2025).
+- `'td.renderTOP' object has no attribute '(cooking|numCooks|xres|yres)'`
+  → point at `top.par.resolutionw/h`, `top.cookCount`,
+  `top.cookTime`. Single regex covers all four typo variants.
+- `'tdu.Matrix' object has no attribute 'translation'`
+  → use `.tx` / `.ty` / `.tz` (or `.decompose()` for the full
+  triple). There's no `.translation` field.
+- `'td.ParCollection' object has no attribute 'children'`
+  → that's the parameter list, not the operator children. Use
+  `op.children`; to iterate parameters use `op.pars(page=...)`.
+
 ### Tests
 
 - `tests/test_paused_td_warning.py` — four regression tests
   covering: hint fires when paused, no hint when playing,
   `_is_td_paused` returns False outside TD, and the hint does not
   short-circuit a turn.
+- `tests/test_v211_recovery_hints.py` — seven parametrized
+  `recovery.attach_hint` cases (one per pattern, with the
+  `renderTOP` regex exercised across all four typo variants).
 
 ## 2.1.0 - 2026-05-08
 
