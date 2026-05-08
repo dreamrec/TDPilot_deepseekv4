@@ -28,29 +28,39 @@ from __future__ import annotations
 import time
 from typing import Any
 
+# Phase 3 (F-12) — soft-import the tool-error sentinel helper. Same
+# story as agent.py: the dispatcher module owns the canonical
+# predicate.
+try:
+    from tdpilot_api_dispatcher import is_tool_error_result  # type: ignore[import-not-found]
+except ImportError:
+
+    def is_tool_error_result(result):  # type: ignore[misc]
+        if not isinstance(result, dict):
+            return False
+        if "_tool_error" in result:
+            return bool(result["_tool_error"])
+        return "error" in result
+
+
 MAX_BATCH_SIZE = 8
 
 
 def _resolve_raw_dispatcher() -> Any:
-    """Walk COMP → extension → runtime to find the cook-thread-bypass
-    dispatcher (same pattern as ``handle_recipe_replay``).
+    """Resolve the cook-thread-bypass dispatcher.
 
-    Returns ``None`` if any step fails — caller surfaces a clear error.
+    PR-19 (F-18): now a one-line delegation to the shared
+    ``tdpilot_api_lookup.get_raw_dispatcher`` helper. The previous
+    bespoke walk through COMP → extension → runtime is gone — the
+    helper handles every soft-failure mode and any future shape
+    changes propagate through one place. Soft-import so a stripped
+    test embed without the helper still has a working resolver.
     """
     try:
-        comp = parent()  # type: ignore[name-defined]
-    except NameError:
+        from tdpilot_api_lookup import get_raw_dispatcher  # type: ignore[import-not-found]
+    except ImportError:
         return None
-    if comp is None:
-        return None
-    ext_dat = comp.op("tdpilot_api_extension")
-    if ext_dat is None:
-        return None
-    try:
-        ext = ext_dat.module.get_extension(comp)
-        return ext._runtime._raw_dispatcher
-    except Exception:
-        return None
+    return get_raw_dispatcher()
 
 
 def handle_tool_batch(body: dict) -> dict:
@@ -154,13 +164,15 @@ def handle_tool_batch(body: dict) -> dict:
             continue
         elapsed_ms = int((time.monotonic() - t_start) * 1000)
 
-        is_error = isinstance(result, dict) and "error" in result
+        # F-12: prefer the explicit `_tool_error` sentinel, fall back
+        # to the legacy `error`-key heuristic for one release.
+        is_error = is_tool_error_result(result)
         results.append(
             {
                 "tool": tool_name,
                 "ok": not is_error,
                 "result": result if not is_error else None,
-                "error": (result.get("error") if is_error else None),
+                "error": (result.get("error") if (is_error and isinstance(result, dict)) else None),
                 "elapsed_ms": elapsed_ms,
             }
         )

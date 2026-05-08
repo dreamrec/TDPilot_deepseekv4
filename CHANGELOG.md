@@ -1,5 +1,145 @@
 # Changelog
 
+## 1.8.1 - 2026-05-08
+
+**Architecture & logic debt — Phase 3 of the post-1.7 audit plan.**
+Six audit findings closed (F-09, F-10, F-11, F-12, F-13, F-18), no
+user-visible feature changes. The seventh Phase 3 item (F-14, the
+3149-line god-module decompose) defers to its own session per the
+handoff plan's "dedicated review pass" recommendation.
+
+### [PR-13] Compactor forensic preservation (F-09)
+
+`Compactor.maybe_compact` previously persisted ``messages[:cut]``
+where ``cut`` was the *naive* ``len(messages) - keep_recent``. But
+``compact()`` then advanced the cut FORWARD past leading
+``tool_result`` blocks (Phase 1.6.13 boundary repair), so the
+advanced-past messages were dropped from history but **absent from
+the persisted forensic archive** — silent loss exactly when the
+boundary repair fired.
+
+PR-13 factors out ``_resolve_cut(messages, keep_recent)`` as the
+single source of truth. Both ``compact()`` and
+``Compactor.maybe_compact`` now use the same cut, so the on-disk
+``~/.tdpilot-api/history/<session>.jsonl`` archive contains every
+message ``compact()`` discards.
+
+8 new tests in ``tests/test_tdpilot_api_compaction.py`` cover the
+cut-resolution function plus end-to-end archive byte-equality across
+multiple ``keep_recent`` values.
+
+### [PR-14] Public dispatcher accessor (F-10)
+
+``tool_batch``, ``recipe_replay``, ``patch_validate``, and the macro
+engine all reached the cook-thread-bypass dispatcher via
+``ext._runtime._raw_dispatcher`` — two private attrs in a row.
+Renaming either field broke every caller silently.
+
+PR-14 introduces:
+
+- ``AgentRuntime.raw_dispatcher`` property — public accessor for the
+  raw (non cook-thread-wrapped) dispatcher.
+- ``TDPilotAPIExt.runtime`` property — public accessor for the
+  runtime instance.
+
+All four callers updated to ``ext.runtime.raw_dispatcher``. A static
+test scans ``td_component/`` for the legacy private form and fails
+on any reintroduction.
+
+15 new tests in ``tests/test_tdpilot_api_batch.py`` cover the
+dispatcher accessor + previously uncovered tool_batch failure modes.
+
+### [PR-15] event_emitter to comp.storage (F-11)
+
+``event_emitter.py`` (CLI bridge variant) previously held its
+buffer + per-key last-emit map + stats counters in module-level
+globals. A textDAT module reload — triggered by build script edits,
+Reload Config pulses, or any hot-edit — wiped all three. Buffered
+events vanished silently and stats counters reset mid-session.
+
+PR-15 mirrors the 1.7.1 ``_ws_clients`` migration: state lives in
+``parent().storage`` keyed by stable strings. A reload re-imports
+the module but the COMP's storage dict is untouched, so the
+in-memory buffer + counters survive.
+
+14 new tests in ``tests/test_event_emitter_storage.py`` simulate
+module reloads and verify state persistence.
+
+### [PR-17] ``_tool_error`` sentinel (F-12)
+
+The agent loop and ``tool_batch`` previously decided "did this
+tool call fail?" via ``"error" in result`` — a brittle heuristic
+that misclassified successful handlers whose result legitimately
+contained an ``error`` field (the canonical example: ``td_get_errors``
+returning a list of TD compile errors as data).
+
+PR-17 introduces ``_tool_error: bool`` as the authoritative flag,
+exposed via ``is_tool_error_result(result)`` in
+``tdpilot_api_dispatcher``:
+  1. If the sentinel is present, it's authoritative.
+  2. Otherwise fall back to the legacy ``"error"``-key check
+     (deprecated; scheduled for removal in v2.0).
+
+The dispatcher stamps every synthetic error return with
+``_tool_error=True`` so the new convention propagates by default.
+Existing handlers that return ``{"error": ...}`` continue to work
+under the legacy fallback; handlers that want to signal success
+despite carrying an ``error`` field can opt into ``_tool_error: False``.
+
+27 new tests in ``tests/test_tool_error_sentinel.py`` cover the
+truth table, dispatcher synthetic errors, and source-level wiring.
+
+### [PR-18] Idempotency on ``add_user_message`` (F-13)
+
+A UI double-click or transient retry could append the same user
+text twice in a row. Two consecutive ``user`` blocks made DeepSeek's
+compat layer 400 with ``messages: roles must alternate``.
+
+The guard inspects the most recent message and no-ops if it's an
+identical user/text duplicate. Same text **after** an assistant turn
+(legitimate re-ask) goes through normally — the guard only blocks
+adjacent duplicates.
+
+10 new tests in ``tests/test_agent_add_user_message_idempotency.py``.
+
+### [PR-19] ``tdpilot_api_lookup`` helpers (F-18)
+
+Every handler that reached the runtime open-coded the same five-line
+walk through COMP → extension → runtime, with subtly divergent
+soft-failure behaviour (some returned None, some raised, some
+printed). PR-19 adds ``td_component/tdpilot_api_lookup.py`` with:
+
+- ``get_comp()``
+- ``get_extension(comp=None)``
+- ``get_runtime(comp=None)``
+- ``get_raw_dispatcher(comp=None)``
+- ``get_module(name, comp=None)``
+
+Each helper returns ``None`` on any failure (the centralised
+soft-failure semantic). ``tdpilot_api_batch``, ``tdpilot_api_recipes``,
+``tdpilot_api_patches``, and ``tdpilot_api_macros`` all migrate to
+the helper. Net: ~30 lines of bespoke walk replaced.
+
+22 new tests in ``tests/test_lookup_helpers.py``.
+
+### Tests + gates
+
+- **1445 tests pass** (was 1354 at v1.8.0). +91 across 5 new files.
+- ruff clean, all 12 versioned files synced at 1.8.1.
+- ``check_tox_freshness.py`` will fail until the standalone .tox AND
+  CLI .tox are rebuilt inside TouchDesigner — both variants have
+  source changes (standalone gets the new ``tdpilot_api_lookup.py``;
+  CLI gets the rewritten ``event_emitter.py``).
+
+### Deferred to a follow-up release
+
+- **F-14: god-module decompose.** ``mcp_webserver_callbacks.py`` (3149
+  lines) split into ``td_component/mcp/{auth,cors,exec_safety,
+  handlers/*,router}.py`` with a build-time composer. The handoff
+  plan flags this for a "dedicated review pass" because of its size
+  and the build composer's own correctness risk; bundling it into a
+  rolling-PR cycle is the maintainer's call.
+
 ## 1.8.0 - 2026-05-08
 
 **Visual programming console for the standalone chat.** Phase 2 of

@@ -597,20 +597,17 @@ def _apply_param_targets(
 def _get_dispatcher() -> Any:
     """Reach the parent runtime's RAW dispatcher. Same pattern as
     recipe_replay — handlers run on the cook thread; we bypass the
-    cook-thread wrapper to avoid deadlock."""
+    cook-thread wrapper to avoid deadlock. PR-19 (F-18) — delegates
+    to ``tdpilot_api_lookup.get_raw_dispatcher`` and converts the
+    soft-failure ``None`` into the same exceptions callers expected."""
     try:
-        comp = parent()  # type: ignore[name-defined]
-    except NameError as exc:
-        raise RuntimeError("running outside TouchDesigner — dispatcher unavailable") from exc
-    if comp is None:
-        raise RuntimeError("parent COMP not available")
-    ext_dat = comp.op("tdpilot_api_extension")
-    if ext_dat is None:
-        raise RuntimeError("tdpilot_api_extension DAT missing")
-    ext = ext_dat.module.get_extension(comp)
-    if ext is None or ext._runtime is None:
-        raise RuntimeError("agent runtime not built")
-    return ext._runtime._raw_dispatcher
+        from tdpilot_api_lookup import get_raw_dispatcher  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError("tdpilot_api_lookup unavailable — running outside TouchDesigner?") from exc
+    raw = get_raw_dispatcher()
+    if raw is None:
+        raise RuntimeError("agent runtime / dispatcher not available")
+    return raw
 
 
 def _create_macro(

@@ -210,13 +210,16 @@ def handle_patch_validate(body: dict) -> dict:
     scope_path = state.get("scope_path", "/")
 
     # Reach the dispatcher to call td_get_errors. We're on cook thread
-    # already so use the raw dispatcher.
+    # already so use the raw dispatcher. PR-19 (F-18) — single-source
+    # helper replaces the bespoke walk.
     try:
-        comp = parent()  # type: ignore[name-defined]
-        ext = comp.op("tdpilot_api_extension").module.get_extension(comp)
-        raw = ext._runtime._raw_dispatcher
-    except Exception as exc:
+        from tdpilot_api_lookup import get_raw_dispatcher  # type: ignore[import-not-found]
+
+        raw = get_raw_dispatcher()
+    except ImportError as exc:
         return {"error": f"Could not access dispatcher: {exc}"}
+    if raw is None:
+        return {"error": "Raw dispatcher not available"}
 
     try:
         errors_result = raw("td_get_errors", {"path": scope_path, "recursive": True})

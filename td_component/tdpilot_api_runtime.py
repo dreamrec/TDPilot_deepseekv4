@@ -527,10 +527,12 @@ class AgentRuntime:
         self._cook_dispatcher = CookThreadDispatcher(dispatcher)
         self._dispatcher = self._cook_dispatcher
         # Keep the RAW dispatcher reachable for handlers that need to
-        # invoke other tools synchronously (e.g. handle_recipe_replay).
-        # The recipe handler runs on the cook thread already; if it
-        # called self._dispatcher (the cook-thread wrapper) it would
-        # deadlock waiting for the cook thread to drain its own queue.
+        # invoke other tools synchronously (e.g. handle_recipe_replay,
+        # handle_tool_batch). The recipe / batch handlers run on the
+        # cook thread already; calling ``self._dispatcher`` (the
+        # cook-thread wrapper) would deadlock the cook thread waiting
+        # for its own queue to drain. Public access is via the
+        # ``raw_dispatcher`` property — see the property below.
         self._raw_dispatcher = dispatcher
         self._tools = tools
         self._system_prompt = system_prompt
@@ -1205,6 +1207,21 @@ class AgentRuntime:
     def pump_dispatcher(self, max_per_pump: int = 8) -> int:
         """Run pending tool calls on the cook thread. Called once per frame."""
         return self._cook_dispatcher.pump(max_per_pump)
+
+    @property
+    def raw_dispatcher(self):
+        """Public accessor for the raw (non cook-thread-wrapped) tool
+        dispatcher. Used by handlers that already run on the cook
+        thread and would deadlock waiting on the cook-thread wrapper —
+        currently ``handle_recipe_replay`` and ``handle_tool_batch``.
+
+        Phase 3 (F-10) hardening: previously these handlers reached in
+        via ``ext._runtime._raw_dispatcher`` — a private-attribute
+        access that broke any time the field was renamed. Calling
+        through the property keeps the internal name free to evolve
+        while the API stays stable.
+        """
+        return self._raw_dispatcher
 
     def messages_snapshot(self) -> list[dict]:
         if self._agent is None:
