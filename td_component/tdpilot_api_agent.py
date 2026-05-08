@@ -32,17 +32,30 @@ from typing import Any
 # Phase 3 (F-12) — soft-import the tool-error sentinel helper. The
 # dispatcher module owns the canonical predicate; the agent loop just
 # calls it. Soft-import so a stripped-down test embed without the
-# dispatcher module still loads.
+# dispatcher module still loads. The fallback mirrors the dispatcher's
+# v1.10.0 DeprecationWarning behavior so embeds that exercise this
+# shim see the same warning surface as production.
 try:
     from tdpilot_api_dispatcher import is_tool_error_result  # type: ignore[import-not-found]
 except ImportError:
+    import warnings as _warnings_shim
 
     def is_tool_error_result(result):  # type: ignore[misc]
         if not isinstance(result, dict):
             return False
         if "_tool_error" in result:
             return bool(result["_tool_error"])
-        return "error" in result
+        if "error" in result:
+            _warnings_shim.warn(
+                "Tool result was classified as an error via the legacy "
+                "'error' key. Update your handler to emit "
+                "{'_tool_error': True, 'error': '...'} explicitly. "
+                "The legacy fallback is removed in TDPilot DPSK4 v2.0.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return True
+        return False
 
 # ---------------------------------------------------------------------------
 # SSL setup — TouchDesigner's bundled Python varies by platform on whether it

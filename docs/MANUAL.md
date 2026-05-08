@@ -1,4 +1,4 @@
-# TDPilot v1.9.0 Manual
+# TDPilot v1.10.0 Manual
 
 The full reference. Read the [README](../README.md) first if you haven't installed yet — this manual assumes you've got either the standalone .tox or the Claude Code plugin running.
 

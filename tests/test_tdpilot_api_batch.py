@@ -87,12 +87,14 @@ def test_batch_records_elapsed_time(monkeypatch):
 
 
 def test_batch_per_call_error_does_not_abort_batch(monkeypatch):
-    """A sub-call returning {"error": ...} flags ok=False and the rest
-    still run. Mirrors recipe_replay's "soft" failure mode."""
+    """A sub-call returning `_tool_error: True` flags ok=False and the
+    rest still run. Mirrors recipe_replay's "soft" failure mode."""
 
     def dispatch(name, args):
         if name == "broken":
-            return {"error": "something broke"}
+            # v1.10.0+: emit the sentinel; legacy `{"error": ...}`
+            # alone is deprecated and removed in v2.0.
+            return {"_tool_error": True, "error": "something broke"}
         return {"ok": True, "tool": name}
 
     _patch_dispatcher(monkeypatch, dispatch)
