@@ -16,14 +16,14 @@ class MacroEngine:
     def __init__(self, td_client, user_template_dir: str | None = None):
         self._td_client = td_client
         self._templates: dict[str, MacroTemplate] = build_default_templates()
-        self._template_sources: dict[str, str] = {name: "built_in" for name in self._templates.keys()}
+        self._template_sources: dict[str, str] = {name: "built_in" for name in self._templates}
         self._load_warnings: list[str] = []
 
         user_templates, warnings = load_user_templates(user_template_dir)
         self._load_warnings.extend(warnings)
         if user_templates:
             self._templates.update(user_templates)
-            for name in user_templates.keys():
+            for name in user_templates:
                 self._template_sources[name] = "user"
 
     def list_macros(self) -> dict[str, Any]:

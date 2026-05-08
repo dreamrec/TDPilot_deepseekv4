@@ -392,11 +392,7 @@ async def td_memory_replay(
 
     # Build shallow-to-deep so nested paths can resolve their parent container.
     create_order = sorted(
-        (
-            rel_path
-            for rel_path in recipe_nodes.keys()
-            if isinstance(rel_path, str) and rel_path and rel_path != "/"
-        ),
+        (rel_path for rel_path in recipe_nodes if isinstance(rel_path, str) and rel_path and rel_path != "/"),
         key=lambda rel_path: rel_path.count("/"),
     )
 
