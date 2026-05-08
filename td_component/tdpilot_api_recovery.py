@@ -134,26 +134,36 @@ def attach_hint(result: Any) -> Any:
     Non-error results pass through unchanged. So do error results
     whose message doesn't match any pattern. The function never
     raises — bad input degrades silently to the original result.
+
+    v1.10.0: also normalises results to the new ``_tool_error``
+    convention. If a result has an ``error`` key but no explicit
+    ``_tool_error`` sentinel, this function stamps ``_tool_error: True``
+    so the agent loop's classifier never has to fall back to the
+    legacy ``"error" in result`` heuristic. An explicit
+    ``_tool_error: False`` (handler legitimately returns success WITH
+    an error field — e.g. ``td_get_errors``) is respected.
     """
     if not isinstance(result, dict):
         return result
     err = result.get("error")
     if not isinstance(err, str) or not err:
         return result
-    if "recovery_hint" in result:
-        # Caller already provided a hint — respect it.
-        return result
-    for pattern, hint in _RECOVERY_HINTS:
-        try:
-            if pattern.search(err):
-                enriched = dict(result)
-                enriched["recovery_hint"] = hint
-                return enriched
-        except Exception:
-            # Defensive — a bad regex or re-engine hiccup must not
-            # take down a tool result.
-            continue
-    return result
+    enriched: dict | None = None
+    if "_tool_error" not in result:
+        enriched = dict(result)
+        enriched["_tool_error"] = True
+    if "recovery_hint" not in result:
+        for pattern, hint in _RECOVERY_HINTS:
+            try:
+                if pattern.search(err):
+                    enriched = dict(enriched or result)
+                    enriched["recovery_hint"] = hint
+                    break
+            except Exception:
+                # Defensive — a bad regex or re-engine hiccup must not
+                # take down a tool result.
+                continue
+    return enriched if enriched is not None else result
 
 
 def hint_for_message(message: str) -> str | None:

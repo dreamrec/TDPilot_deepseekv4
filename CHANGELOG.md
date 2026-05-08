@@ -1,5 +1,81 @@
 # Changelog
 
+## 1.10.0 - 2026-05-08
+
+**v2.0 deprecation cycle.** v1.10.0 ships the `DeprecationWarning` for
+the legacy `error`-key tool-result classification ahead of v2.0
+removing the fallback entirely. No runtime behavior changes — failing
+tool calls still classify as errors — but external dispatcher
+integrations and user-authored handlers that emit the legacy form get
+a one-release window to migrate.
+
+### Deprecations
+
+- `is_tool_error_result()` now emits `DeprecationWarning` when a tool
+  result is classified as an error via the legacy `"error" in result`
+  heuristic (no `_tool_error` sentinel set). Update handlers to
+  emit `{"_tool_error": True, "error": "..."}` explicitly. The legacy
+  fallback is removed in v2.0. (F-12 / PR-24)
+
+  The warning fires from three call sites that share the canonical
+  predicate:
+  - [td_component/tdpilot_api_dispatcher.py:66](td_component/tdpilot_api_dispatcher.py:66) — production path
+  - [td_component/tdpilot_api_agent.py:40](td_component/tdpilot_api_agent.py:40) — soft-import shim (test embeds)
+  - [td_component/tdpilot_api_batch.py:38](td_component/tdpilot_api_batch.py:38) — soft-import shim (test embeds)
+
+### Internal
+
+- `recovery.attach_hint()` now also normalises results to the new
+  convention: any dict with an `"error"` string and no `_tool_error`
+  sentinel gets stamped `_tool_error: True` as it flows through the
+  dispatcher pipeline. An explicit `_tool_error: False` is respected
+  (handlers like `td_get_errors` legitimately return success WITH an
+  `error` field). This means internal handlers don't trigger the new
+  deprecation warning — only external dispatchers that bypass our
+  pipeline see it, which is the intended audience.
+- `tests/_mock_dispatcher.py::stub_dispatcher` updated to emit the
+  sentinel form for failure cases, demonstrating the new convention
+  in our own eval fixtures.
+- Two unit tests (`test_dispatcher_error_surfaces_as_is_error`,
+  `test_batch_per_call_error_does_not_abort_batch`) updated to use
+  the sentinel form in their mock dispatchers.
+
+### Migration
+
+If you author your own tool handlers (registered via `extra_mappings`
+on the dispatcher) or your own `Agent` dispatcher callable: emit the
+explicit sentinel on failure.
+
+```python
+# before (v1.x — deprecated in v1.10.0, removed in v2.0):
+return {"error": "tool failed"}
+
+# after (v1.10.0+):
+return {"_tool_error": True, "error": "tool failed"}
+```
+
+The deprecation warning will fire from `is_tool_error_result()` at
+the agent-loop classifier site so you can spot the call paths during
+your next `pytest` run. Treat warnings as errors with
+`-W error::DeprecationWarning` if you want CI to fail until you've
+migrated.
+
+### Tests
+
+- `tests/test_tool_error_sentinel.py`: new
+  `test_legacy_error_key_classifies_as_error_with_deprecation_warning`
+  asserts the warning fires for the legacy fallback path. The
+  existing truth-table parametrize now runs with `simplefilter("error")`
+  to verify the sentinel-driven cases stay silent.
+- New `test_sentinel_path_emits_no_deprecation_warning` and
+  `test_no_warning_on_no_error_key` lock down the silent-path
+  contract.
+
+Pytest baseline: 1602 pass / 12 deselected, no warnings (was 1600 pass
+in v1.9.0; +2 from the new deprecation tests).
+
+---
+
 ## 1.9.0 - 2026-05-08
 
 **Phase 4 of the post-1.7 audit plan — measurement infrastructure.**

@@ -177,7 +177,10 @@ def test_dispatcher_error_surfaces_as_is_error():
     calls = iter(responses)
 
     def dispatcher(name, args):
-        return {"error": "node not found", "path": args["path"]}
+        # v1.10.0+: emit `_tool_error: True` to flag failures (sentinel
+        # is authoritative). The legacy `{"error": ...}` fallback is
+        # deprecated in v1.10.0 and removed in v2.0.
+        return {"_tool_error": True, "error": "node not found", "path": args["path"]}
 
     seen: list[tuple[str, Any, bool]] = []
     agent = Agent(

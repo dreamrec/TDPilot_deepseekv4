@@ -68,7 +68,12 @@ def stub_dispatcher(name: str, args: dict) -> Any:
         op_name = args.get("name") or "node1"
         parent = args.get("parent_path") or "/project1"
         if "fakeNonexistent" in op_type:
+            # v1.10.0+: stamp `_tool_error: True` to flag failures
+            # (the legacy `{"error": ...}` heuristic is deprecated and
+            # removed in v2.0). External user-provided dispatchers
+            # should follow the same convention.
             return {
+                "_tool_error": True,
                 "error": f"Unknown operator type: {op_type}",
                 "recovery_hint": (
                     "td_list_families to enumerate available operator types, "
