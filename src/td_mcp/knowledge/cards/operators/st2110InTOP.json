@@ -1,0 +1,21 @@
+{
+  "card_type": "operator",
+  "op_type": "st2110InTOP",
+  "family": "TOP",
+  "display_name": "ST2110 In TOP",
+  "docs_url": "https://docs.derivative.ca/ST2110_In_TOP",
+  "summary": "Receives uncompressed broadcast video over an ST 2110 IP network from supported devices (Blackmagic IP, Deltacast DELTA-ip-ST2110). Configure NIC and channel routing via the ST2110 Device CHOP.",
+  "key_params": [
+    {"name": "device", "type": "String", "note": "Path to the ST2110 Device CHOP that owns the NIC config"},
+    {"name": "channel", "type": "Int", "note": "Source channel/stream index on the device"},
+    {"name": "format", "type": "Menu", "note": "Pixel format (8/10-bit, 4:2:2, etc.)"},
+    {"name": "active", "type": "Toggle", "note": "Enable receive"}
+  ],
+  "common_gotchas": [
+    "ST 2110 needs a properly configured NIC (often 25G+) with PTP grandmaster on the network — see the ST2110 Device CHOP first.",
+    "PTP synchronization is mandatory for clean reception; without it, frames will tear or drop."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

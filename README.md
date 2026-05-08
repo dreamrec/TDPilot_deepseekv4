@@ -7,7 +7,7 @@
    ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝
 ```
 
-# TDPilot — DeepSeek v4 · v1.6.13
+# TDPilot — DeepSeek v4 · v1.7.0
 
 [![CI](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/tdpilot-dpsk4?label=npm)](https://www.npmjs.com/package/tdpilot-dpsk4)
@@ -19,6 +19,8 @@
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-v4-00a86b)](https://deepseek.com)
 
 An AI assistant that lives inside TouchDesigner. It can inspect your network, build new operators, wire them up, debug errors, take screenshots, remember things between sessions, replay successful patterns, surface relevant memories before each turn, batch tool calls, recover from failures with actionable hints, and survive long conversations via context compaction.
+
+> **v1.7.0 · TouchDesigner build 2025.32820 (May 2026) support.** New operator knowledge for Trace POP, Triangulate POP, Layer Mix TOP, Render Simple TOP, NVIDIA RTX Video TOP, ST2110 In/Out, Pan Tilt CHOP, the DMX POP pipeline, and more. Existing cards (Render TOP, Movie File In, Constant TOP, Noise TOP) refreshed for the build's new params (3D textures, 2D arrays, render pulse, 4D noise derivatives, KTX2). Migration trap: **Polygonize POP is now 3D-only — for 2D inputs use Trace POP.** ZED operators now route through a central ZED TOP. See `td_get_release_delta` for the full release card. Build scripts now pass `encoding="utf-8"` so the Textport rebuild path works on macOS regardless of locale.
 
 There are two ways to run it. Pick whichever fits — they coexist in the same TD project if you want both.
 

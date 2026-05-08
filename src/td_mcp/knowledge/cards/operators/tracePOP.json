@@ -1,0 +1,23 @@
+{
+  "card_type": "operator",
+  "op_type": "tracePOP",
+  "family": "POP",
+  "display_name": "Trace POP",
+  "docs_url": "https://docs.derivative.ca/Trace_POP",
+  "summary": "Traces a 2D image (TOP) into line strips on the GPU. Replaces the 2D-input mode of the Polygonize POP, which is now 3D-only. Optimised for converting silhouettes, edges, and contours into line geometry.",
+  "key_params": [
+    {"name": "top", "type": "TOP", "note": "Source TOP to trace — typically a thresholded or edge-detected image"},
+    {"name": "threshold", "type": "Float", "note": "Brightness threshold that separates traced regions from background"},
+    {"name": "step", "type": "Int", "note": "Sampling step — larger values yield fewer, coarser points"},
+    {"name": "closed", "type": "Toggle", "note": "Force closed line strips (auto-connect last point to first)"},
+    {"name": "smooth", "type": "Int", "note": "Number of smoothing passes applied to the traced contour"}
+  ],
+  "common_gotchas": [
+    "Output is a POP of line strips, not a TOP — feed it into a Render Simple TOP, Render TOP, or Triangulate POP downstream.",
+    "Migration: if you previously fed a 2D TOP into a Polygonize POP, switch to Trace POP — Polygonize POP no longer accepts 2D input.",
+    "Very high-resolution inputs can produce huge line counts. Pre-resize the source TOP to keep tracing cheap."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

@@ -1,0 +1,23 @@
+{
+  "card_type": "operator",
+  "op_type": "renderSimpleTOP",
+  "family": "TOP",
+  "display_name": "Render Simple TOP",
+  "docs_url": "https://docs.derivative.ca/Render_Simple_TOP",
+  "summary": "Renders 3D geometry to a texture without requiring a Camera COMP or Light COMP — a built-in default camera and lighting are provided. Perfect for quick previews of a single Geometry COMP, Render Pass-style sketches, or POP-driven visuals.",
+  "key_params": [
+    {"name": "geometry", "type": "String", "note": "Path to Geometry COMP(s) to render"},
+    {"name": "resolutionw", "type": "Int", "note": "Output width"},
+    {"name": "resolutionh", "type": "Int", "note": "Output height"},
+    {"name": "bgcolor", "type": "Color", "note": "Background color (replaces needing a Constant TOP behind)"},
+    {"name": "fov", "type": "Float", "note": "Built-in camera field of view"}
+  ],
+  "common_gotchas": [
+    "Use this when you don't need camera animation or multiple lights — for full control switch to Render TOP.",
+    "Built-in lighting is fixed; can't be customized. If your shader expects specific light directions, use Render TOP.",
+    "Great pair with Trace POP / Triangulate POP / Render POP workflows where the scene is just geometry, no camera rig."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

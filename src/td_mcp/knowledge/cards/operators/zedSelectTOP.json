@@ -1,0 +1,20 @@
+{
+  "card_type": "operator",
+  "op_type": "zedSelectTOP",
+  "family": "TOP",
+  "display_name": "ZED Select TOP",
+  "docs_url": "https://docs.derivative.ca/ZED_Select_TOP",
+  "summary": "Selects a specific image stream (color, depth, confidence, normals, etc.) from an upstream ZED TOP. Part of the new ZED workflow where a single ZED TOP exposes the camera and downstream Select TOPs pick which stream to consume.",
+  "key_params": [
+    {"name": "zedtop", "type": "String", "note": "Path to the upstream ZED TOP"},
+    {"name": "stream", "type": "Menu", "note": "Color, Depth, Normals, Confidence, Disparity, etc."},
+    {"name": "view", "type": "Menu", "note": "Left, Right, or Side-by-Side for stereo cameras"}
+  ],
+  "common_gotchas": [
+    "Migration: ZED operators in older builds were standalone. In 2025.30000+ they all go through the ZED TOP — Select TOP replaces the per-stream operators.",
+    "Requires ZED SDK 5.0.2+ and a Blackwell-capable GPU for the latest features."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}
