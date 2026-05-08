@@ -1,5 +1,47 @@
 # Changelog
 
+## 2.1.1 - 2026-05-08
+
+**Patch: paused-TD UX trap.** When TouchDesigner playback is paused
+(`me.time.play = False`), TD's `onFrameStart` callback does not fire,
+which means the `CookThreadDispatcher` pump never runs. Every tool
+call submitted by the worker thread blocks until its 60s timeout and
+returns `{"error": "Tool ... timed out after 60.0s"}`. The agent saw
+the wall of timeouts and falsely concluded "TouchDesigner is
+unresponsive" and instructed users to restart TD — when the actual
+fix was one keypress.
+
+### Fix
+
+- New `AgentRuntime._is_td_paused()` probe — wraps
+  `parent().time.play` in a defensive try/except that returns False
+  outside TD (so unit tests / headless runs don't emit phantom
+  warnings).
+- `start_turn` now checks `_is_td_paused()` before any other
+  turn-prep work and emits `EV_HINT(kind="paused_td", message=...)`
+  when paused. The chat UI surfaces the hint as a soft warning
+  pointing at the spacebar / play button. The check is
+  non-blocking — the worker still spawns and the message still
+  reaches the model, so users debugging with TD paused can still
+  ask questions; they just see the explanation upfront.
+
+### Known limitation (tracked tech debt)
+
+The underlying pump architecture is unchanged: the cook-thread
+dispatcher is still driven by `onFrameStart`, so paused TD will
+still wedge tool calls until the user resumes playback. Moving the
+pump off `onFrameStart` (e.g. via a `chopExecuteDAT` watching a
+`constantCHOP` that ticks regardless of timeline play, or a
+`timerCHOP` parameterCHOP) is the architecturally correct fix and
+is filed for a future minor release.
+
+### Tests
+
+- `tests/test_paused_td_warning.py` — four regression tests
+  covering: hint fires when paused, no hint when playing,
+  `_is_td_paused` returns False outside TD, and the hint does not
+  short-circuit a turn.
+
 ## 2.1.0 - 2026-05-08
 
 **Chat UI rework + 13 v2.0 audit fixes.** Collapses what was going
