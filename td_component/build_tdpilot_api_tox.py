@@ -35,6 +35,8 @@ Override behaviour with env vars:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -217,6 +219,88 @@ _SOURCE_FILES = (
     ("tdpilot_api_executor", "executeDAT", "td_component/tdpilot_api_executor.py"),
     ("tdpilot_api_parexec", "parameterexecuteDAT", "td_component/tdpilot_api_parexec.py"),
 )
+
+
+# ---------------------------------------------------------------------------
+# v2.1.1 — API .tox freshness tracking (parallel to the dpsk4 .tox gate
+# in scripts/check_tox_freshness.py).
+#
+# Why: pre-2.1.1 only tdpilot-dpsk4.tox had a CI gate; tdpilot_API.tox
+# went stale silently if a contributor edited runtime.py / chat.html /
+# anywhere in the API source tree without rebuilding inside TD. Users
+# installing the plugin would get an old binary while CI stayed green.
+#
+# How: at build time we compute a sha256 over the byte content of every
+# source file that contributes to the API .tox, and write it alongside
+# the existing dpsk4 hash file under td_component/.tox-api-source-hash.json.
+# scripts/check_tox_api_freshness.py recomputes the hash from the current
+# tree and fails CI if it doesn't match what's stored.
+# ---------------------------------------------------------------------------
+
+
+# Direct embeds — pulled from _SOURCE_FILES (skip the `<COMPOSE>` sentinel
+# whose content comes from the callbacks/ split package below).
+_API_TOX_SOURCE_FILES = tuple(rel for _, _, rel in _SOURCE_FILES if rel != "<COMPOSE>") + (
+    # Composed mcp_webserver_callbacks textDAT pulls its body from the
+    # callbacks/ split package via _legacy._read_callbacks_source(). Any
+    # byte change in any of these files changes the composed text that
+    # gets baked into the API .tox, so the hash must cover them too.
+    # NOTE: this list overlaps with check_tox_freshness.py's SOURCE_FILES
+    # by design — both .tox files embed the composed callbacks body.
+    "td_component/callbacks/_composer.py",
+    "td_component/callbacks/__init__.py",
+    "td_component/callbacks/_header.py",
+    "td_component/callbacks/router.py",
+    "td_component/callbacks/auth.py",
+    "td_component/callbacks/serializers.py",
+    "td_component/callbacks/handlers/__init__.py",
+    "td_component/callbacks/handlers/nodes.py",
+    "td_component/callbacks/handlers/exec_and_custom_params.py",
+    "td_component/callbacks/handlers/exec_python.py",
+    "td_component/callbacks/handlers/inspect.py",
+    "td_component/callbacks/handlers/search.py",
+    "td_component/callbacks/handlers/lifecycle.py",
+    "td_component/callbacks/handlers/pulse.py",
+    "td_component/callbacks/handlers/monitor.py",
+    "td_component/callbacks/handlers/analyze_frame.py",
+    # Build script bytes — same reasoning as the dpsk4 gate (any change
+    # to how the .tox is laid out forces a rebuild signal even if no
+    # embedded source changed).
+    "td_component/build_tdpilot_api_tox.py",
+)
+
+
+def _compute_api_tox_source_hash(repo_root):
+    """Return sha256 over the bytes of every file that feeds tdpilot_API.tox.
+
+    Single source of truth for API .tox freshness. The matching list
+    in scripts/check_tox_api_freshness.py must stay aligned — a comment
+    in each file points at the other.
+    """
+    h = hashlib.sha256()
+    for rel in _API_TOX_SOURCE_FILES:
+        path = os.path.join(repo_root, rel)
+        if not os.path.isfile(path):
+            continue
+        h.update(rel.encode("utf-8"))
+        h.update(b"\x00")
+        with open(path, "rb") as f:
+            h.update(f.read())
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def _write_api_tox_source_hash(repo_root):
+    """Record the API .tox source hash so CI can detect drift after edits."""
+    manifest = {
+        "tox_source_hash": _compute_api_tox_source_hash(repo_root),
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "source_files": list(_API_TOX_SOURCE_FILES),
+    }
+    out_path = os.path.join(repo_root, "td_component", ".tox-api-source-hash.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    print(f"[tdpilot_API] Wrote {out_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -753,6 +837,9 @@ def build_and_export():
     version = _legacy._get_version(repo_root)
     print(f"[tdpilot_API] built v{version}")
     print(f"[tdpilot_API] exported TOX: {export_path}")
+    # v2.1.1 — refresh the API .tox source-hash manifest so CI's
+    # check_tox_api_freshness gate stays green.
+    _write_api_tox_source_hash(repo_root)
     if install_parent is None:
         print(f"[tdpilot_API] drag {export_path} into a TD project to install.")
     return export_path

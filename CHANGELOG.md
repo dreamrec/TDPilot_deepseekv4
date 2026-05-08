@@ -85,6 +85,31 @@ lock each piece (palette declared, thick rule, gradient bg, white
 body, white-on-red stamp, white brackets, no leakage to other
 roles).
 
+### Build/CI — API .tox freshness gate
+
+Pre-2.1.1 only `tdpilot-dpsk4.tox` had a CI freshness gate; its
+sibling `tdpilot_API.tox` (which embeds `tdpilot_api_*.py`,
+`tdpilot_api_chat.html`, the composed `mcp_webserver_callbacks`
+text, and the build script bytes) went stale silently if a
+contributor edited the API source tree without rebuilding inside
+TD. End users would install the plugin and get an old binary
+while CI stayed green.
+
+- `td_component/build_tdpilot_api_tox.py` now writes
+  `td_component/.tox-api-source-hash.json` at the end of every
+  rebuild, mirroring the dpsk4 hash file. Hash inputs:
+  - All direct embeds from `_SOURCE_FILES` (the `<COMPOSE>`
+    sentinel is skipped — its content is tracked via the
+    callbacks/ files below).
+  - The 16 files of the `callbacks/` split package (composed into
+    the `mcp_webserver_callbacks` textDAT body).
+  - The build script itself, so any change to .tox layout forces
+    a rebuild signal even when no embedded source changed.
+- New `scripts/check_tox_api_freshness.py` — parallel to the
+  existing `check_tox_freshness.py`. Same algorithm, different
+  source list. CI runs it as the new "API .tox freshness check"
+  step right after the dpsk4 gate.
+
 ### Tests
 
 - `tests/test_paused_td_warning.py` — four regression tests
@@ -96,6 +121,18 @@ roles).
   `renderTOP` regex exercised across all four typo variants).
 - `tests/test_chat_html_v211_user_mark.py` — seven HTML/CSS
   pin-tests for the new user-message stamp design.
+
+### Verifying the gate locally
+
+```bash
+# Should pass if everything's in sync:
+uv run python scripts/check_tox_api_freshness.py
+
+# Should fail with a hash mismatch when source has drifted:
+echo "# noqa" >> td_component/tdpilot_api_runtime.py
+uv run python scripts/check_tox_api_freshness.py  # exit 1
+git checkout -- td_component/tdpilot_api_runtime.py
+```
 
 ## 2.1.0 - 2026-05-08
 
