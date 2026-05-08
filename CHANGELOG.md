@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.1.1 - 2026-05-08
+
+**Patch — UX fixes for paused-TD trap + 4 new recovery hints.**
+
+### Fixes — paused TD detection (runtime.py)
+
+- `AgentRuntime.start_turn` now checks `me.time.play` and emits an
+  `EV_HINT` upfront when playback is paused. Pre-2.1.1 a paused TD
+  caused every tool call to time out at 60s and the agent falsely
+  concluded "TouchDesigner is completely unresponsive" — false
+  positive that confused users into restarting TD. Detection runs
+  before `_check_skill_triggers` so the hint reaches the chat the
+  same frame the turn starts. Defensive try/except keeps the gate
+  open in non-TD contexts (pytest fixtures don't have `me`). The
+  underlying cause is that `CookThreadDispatcher` only pumps from
+  `onFrameStart`, which TD stops calling when playback is off; a
+  proper dispatcher rework is tracked separately as a v2.x
+  architectural item.
+
+### Fixes — 4 new recovery_hints (recovery.py)
+
+- `'td.Par' object has no attribute 'rawVal'` → use `par.eval` /
+  `par.val` / `par.expr` (rawVal was removed after TD-2022).
+- renderTOP attribute typos (`cooking` / `numCooks` / `xres` /
+  `yres`) → point at `.par.resolutionw/h`, `.cookCount`,
+  `.cookTime`.
+- `'tdu.Matrix' object has no attribute 'translation'` → use
+  `.tx` / `.ty` / `.tz` or `.decompose()`.
+- `'td.ParCollection' object has no attribute 'children'` → use
+  `op.children`, `op.pars(page=...)`.
+
+Each pattern surfaced from a real lighting-redesign turn (184
+messages, 11/184 tool_result errors). The 4 patterns above cover
+6 of the 11 errors; the rest were patch-session sequencing edge
+cases already addressed.
+
+### Tests
+
+- `tests/test_v211_paused_td_hint.py` — 3 new tests around
+  `start_turn` (paused, running, missing-`me` fallback).
+- 7 parametrized recovery-hint cases (rawVal + 4 renderTOP
+  variants + Matrix.translation + ParCollection.children).
+
 ## 2.1.0 - 2026-05-08
 
 **Chat UI rework + 13 v2.0 audit fixes.** Collapses what was going

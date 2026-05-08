@@ -1095,6 +1095,28 @@ class AgentRuntime:
             return False
         if self._worker is not None and self._worker.is_alive():
             return False
+        # v2.1.1 — Warn upfront if TD playback is paused. Tool calls
+        # dispatch through CookThreadDispatcher which only pumps from
+        # onFrameStart; when playback is off, every tool call hangs the
+        # full 60s DEFAULT_TOOL_TIMEOUT and the agent concludes "TD
+        # unresponsive" (false positive). Catching this here is the
+        # cheap fix; reworking the dispatcher to pump from a non-frame
+        # source is tracked separately as a v2.x architectural item.
+        try:
+            if not me.time.play:  # type: ignore[name-defined]
+                self._push(
+                    EV_HINT,
+                    {
+                        "kind": "playback_paused",
+                        "message": (
+                            "TouchDesigner playback is paused — tool calls "
+                            "will time out after 60s. Press the spacebar in "
+                            "TD or click play on the timeline to resume."
+                        ),
+                    },
+                )
+        except Exception:  # noqa: BLE001 — defensive: out-of-TD context (tests)
+            pass
         # v2.1.0 — live-refresh model_tier from the COMP param so users
         # can switch flash ↔ pro ↔ auto mid-session without pulsing
         # Reload Config (which would rebuild the Agent and re-trigger
