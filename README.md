@@ -20,7 +20,7 @@
 
 An AI assistant that lives inside TouchDesigner. It can inspect your network, build new operators, wire them up, debug errors, take screenshots, remember things between sessions, replay successful patterns, surface relevant memories before each turn, batch tool calls, recover from failures with actionable hints, and survive long conversations via context compaction.
 
-> **v1.7.0 · TouchDesigner build 2025.32820 (May 2026) support.** New operator knowledge for Trace POP, Triangulate POP, Layer Mix TOP, Render Simple TOP, NVIDIA RTX Video TOP, ST2110 In/Out, Pan Tilt CHOP, the DMX POP pipeline, and more. Existing cards (Render TOP, Movie File In, Constant TOP, Noise TOP) refreshed for the build's new params (3D textures, 2D arrays, render pulse, 4D noise derivatives, KTX2). Migration trap: **Polygonize POP is now 3D-only — for 2D inputs use Trace POP.** ZED operators now route through a central ZED TOP. See `td_get_release_delta` for the full release card. Build scripts now pass `encoding="utf-8"` so the Textport rebuild path works on macOS regardless of locale.
+> **v2.0.0 just shipped (May 8, 2026)** — new chat font-size toggle (`a` / `A` glyph control with `Cmd/Ctrl + +` / `-` shortcuts), breaking changes to the tool-result classifier (sentinel-only) and removal of the legacy `tdpilot_v1_3.tox` filename shim. See [What's new since v1.5.x](#whats-new-since-v15x) below for the full timeline, or [CHANGELOG](CHANGELOG.md#200---2026-05-08) for the migration recap.
 
 There are two ways to run it. Pick whichever fits — they coexist in the same TD project if you want both.
 
@@ -205,6 +205,31 @@ Both variants run on the same DeepSeek backend and share the same TD-side handle
 The standalone has 91 tools that cover the everyday inspect → build → wire → verify loop, plus persistent memory, knowledge corpus, recipes, snapshots, subagents (parallel fan-out), multi-model routing (auto/flash/pro), macros, user-pluggable tools (drop a `.py` in `~/.tdpilot-api/tools/`), official-docs lookup against the derivative corpus, TD 2025 runtime introspection (Python env, threading, color pipeline), and project-audit + recipe-validation utilities.
 
 **Run both at the same time.** The two .tox files coexist in the same TD project — different ports, different config dirs, different COMP names. Standalone in the browser for quick chat, CLI in the terminal for heavy work.
+
+---
+
+## What's new since v1.5.x
+
+The line from v1.5.0 (Apr 25, 2026) to v2.0.0 (May 8, 2026) shipped in tight bursts. Most important updates, newest first:
+
+| Version | Date | Headline |
+|---|---|---|
+| **v2.0.0** | May 8 | **Breaking + chat polish.** `is_tool_error_result()` requires the explicit `_tool_error` sentinel (legacy `"error"`-key fallback removed); `tdpilot_v1_3.tox` filename shim removed. New: small/large chat font-size toggle (`a` / `A`) at the far right of the status bar with `Cmd/Ctrl + +` / `-` shortcuts. Internal handlers unaffected — `recovery.attach_hint()` auto-stamps the sentinel; only external dispatcher integrations need to migrate. |
+| **v1.10.0** | May 8 | `DeprecationWarning` cycle for v2.0's breaking change. One-release window for external dispatchers to migrate to the explicit sentinel before the fallback was removed. |
+| **v1.9.0** | May 8 | **Measurement infrastructure (Phase 4).** Mock-DeepSeek for offline agent evals in regular CI, skill-prompt evals, ruff hardening floor (F841 + SIM118). |
+| **v1.8.3** | May 8 | **God-module decompose.** 3149-line `mcp_webserver_callbacks.py` replaced by a focused split package at `td_component/callbacks/` with a build-time composer. Closes the last MED architectural finding from the v1.7.0 audit. |
+| **v1.8.0** | May 8 | **Visual chat console.** The chat goes from terminal log to real UI: markdown rendering, collapsible tool calls, a token meter, scroll-aware autoscroll + keyboard shortcuts, inline screenshots. WS protocol picks up four new structured message types (`tool_call`, `tool_result`, `model`, `usage`). |
+| **v1.7.2** | May 8 | Skills hygiene + content currency: YAML frontmatter validation surfaced via `td_skill_validate`. |
+| **v1.7.1** | May 8 | **Security hotfix.** Standalone HTTP server now requires a per-launch session token (closes a cross-origin CSRF gap). Plus three chat-state-machine bugs from the post-1.7.0 audit. |
+| **v1.7.0** | May 8 | **TouchDesigner 2025.32820 (May 2026) build support.** New operator knowledge for Trace POP, Triangulate POP, Layer Mix TOP, Render Simple TOP, NVIDIA RTX Video TOP, ST2110 In/Out, Pan Tilt CHOP, the DMX POP pipeline. Existing cards (Render TOP, Movie File In, Constant TOP, Noise TOP) refreshed for new params (3D textures, 2D arrays, render pulse, 4D noise derivatives, KTX2). **Migration trap: Polygonize POP is now 3D-only — for 2D inputs use Trace POP.** ZED operators now route through a central ZED TOP. |
+| **v1.6.12** | May 7 | **Standalone runtime overhaul** — the biggest single release in the line. The "agent with a big prompt → small runtime with policies" shift. Cache-stable dynamic context (~50× DeepSeek cache discount), SQLite/FTS corpus support, pre-turn retrieval injection, trigger-based skill loading, trust-tier-aware results, failure recovery hints, `tool_batch` (up to 8 calls per round trip), conversation compaction, per-turn observability traces, first-run wizard. Tests 935 → 1122. |
+| **v1.6.11** | May 4 | Port drift hotfix (9981/9982 → 9985/9986 across 17 files). DeepSeek v4 context-window + session-noise optimizations. |
+| **v1.6.0** | May 2 | **Cockpit ergonomics.** Focus-aware tools, hint injection, scoped search, per-COMP notes. CLI tool count 99 → 103. |
+| **v1.5.6** | May 2 | **One-button installer.** `tdpilot.tox` is now a self-installing container COMP — drag it in, the Install + Update panels do the rest. No Textport gymnastics, no shell scripts. |
+| **v1.5.3** | Apr 25 | **Knowledge corpus.** Free-form markdown knowledge store as a parallel surface to technique memory; 4 new MCP tools to query/persist. |
+| **v1.5.0** | Apr 25 | Schema migration (Phase 1) + monolithic `tool_registry.py` decomposed into 21 themed submodules (Phase 2). |
+
+For per-release detail (including the v1.6.3–v1.6.9 panel-rendering saga, audit closures, and patches between major milestones) see [CHANGELOG.md](CHANGELOG.md). Pre-1.5.0 history is also preserved there.
 
 ---
 
