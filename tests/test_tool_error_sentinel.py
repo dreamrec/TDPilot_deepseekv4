@@ -6,16 +6,22 @@ misclassified any successful handler whose result legitimately
 contained an ``error`` field (e.g. ``td_get_errors`` returning a list
 of compile errors).
 
-PR-17 introduces ``_tool_error: bool`` as the authoritative flag.
+PR-17 introduced ``_tool_error: bool`` as the authoritative flag.
 ``is_tool_error_result(result)`` checks the sentinel first and falls
-back to the legacy ``error`` key for one release (deprecated, scheduled
-for removal in v2.0). The dispatcher stamps every synthetic error
-return with ``_tool_error=True`` so the new convention propagates by
-default.
+back to the legacy ``error`` key.
+
+**v1.10.0 (PR-24)**: the legacy fallback now emits
+``DeprecationWarning`` to nudge external dispatcher integrations off
+the brittle heuristic. The fallback is removed entirely in v2.0.
 
 Tests cover:
   * ``is_tool_error_result`` truth table (sentinel-True, sentinel-False,
-    legacy fallback, non-dict input).
+    no-error-key, non-dict input). The legacy fallback paths are
+    tested separately so the ``DeprecationWarning`` is asserted at
+    its emission site.
+  * Legacy ``"error"`` key still classifies as an error AND emits
+    ``DeprecationWarning`` (v1.10.0).
+  * Sentinel-driven results never emit ``DeprecationWarning``.
   * Dispatcher synthetic errors carry the sentinel.
   * The agent loop (``tdpilot_api_agent``) imports + uses the helper.
   * ``tool_batch`` imports + uses the helper.
@@ -24,6 +30,7 @@ Tests cover:
 from __future__ import annotations
 
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -57,10 +64,7 @@ import tdpilot_api_dispatcher as disp  # noqa: E402
         ({"_tool_error": 0}, False),
         ({"_tool_error": ""}, False),
         ({"_tool_error": None}, False),
-        # Legacy fallback — no sentinel, `error` present.
-        ({"error": "Unknown tool"}, True),
-        ({"error": ""}, True),  # empty string still triggers (key-presence semantics)
-        # Legacy fallback — no sentinel, no error key.
+        # No sentinel, no error key.
         ({"ok": True, "path": "/project1"}, False),
         ({}, False),
         # Non-dict inputs.
@@ -71,13 +75,57 @@ import tdpilot_api_dispatcher as disp  # noqa: E402
     ],
 )
 def test_is_tool_error_result_truth_table(result, expected):
-    assert disp.is_tool_error_result(result) is expected
+    """Sentinel-driven cases must never emit a warning."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any DeprecationWarning fails the test
+        assert disp.is_tool_error_result(result) is expected
 
 
 def test_tool_error_key_constant_is_dunder_underscore():
     """Single source of truth — the key name lives in
     ``TOOL_ERROR_KEY`` so any future rename only happens in one place."""
     assert disp.TOOL_ERROR_KEY == "_tool_error"
+
+
+# ---------------------------------------------------------------------------
+# v1.10.0 (PR-24) — legacy "error"-key fallback emits DeprecationWarning.
+# These cases used to live in the truth-table parametrize above; they were
+# extracted here so the warning surface is asserted at its emission site.
+# In v2.0 these tests flip to expecting `False` and the warning assertion
+# goes away (the fallback is removed entirely).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"error": "Unknown tool"},
+        {"error": ""},  # empty string still triggers (key-presence semantics)
+    ],
+)
+def test_legacy_error_key_classifies_as_error_with_deprecation_warning(result):
+    with pytest.warns(DeprecationWarning, match="legacy 'error' key"):
+        assert disp.is_tool_error_result(result) is True
+
+
+def test_sentinel_path_emits_no_deprecation_warning():
+    """Sentinel-driven classification (the new convention) must stay
+    silent — only the legacy fallback is deprecated."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any DeprecationWarning fails the test
+        assert disp.is_tool_error_result({"_tool_error": True}) is True
+        assert disp.is_tool_error_result({"_tool_error": False}) is False
+        assert disp.is_tool_error_result({"_tool_error": True, "error": "x"}) is True
+        assert disp.is_tool_error_result({"_tool_error": False, "error": "x"}) is False
+
+
+def test_no_warning_on_no_error_key():
+    """A dict with neither sentinel nor error key returns False
+    silently — there's nothing to deprecate."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert disp.is_tool_error_result({"ok": True}) is False
+        assert disp.is_tool_error_result({}) is False
 
 
 # ---------------------------------------------------------------------------

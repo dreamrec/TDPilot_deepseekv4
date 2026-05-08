@@ -25,6 +25,7 @@ soft information leak.
 from __future__ import annotations
 
 import traceback
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -58,8 +59,11 @@ def _scrub(s: str) -> str:
 # returning a list of TD compile errors). The new convention sets
 # ``_tool_error: True`` on results that represent a dispatch / handler
 # failure; the agent loop checks the sentinel first and falls back to
-# the legacy ``"error"`` key for one release. The fallback drops in
-# v2.0.
+# the legacy ``"error"`` key.
+#
+# v1.10.0: the legacy fallback now emits ``DeprecationWarning`` to
+# nudge external dispatcher integrations / user-authored handlers off
+# the brittle heuristic. The fallback drops entirely in v2.0.
 TOOL_ERROR_KEY = "_tool_error"
 
 
@@ -72,13 +76,24 @@ def is_tool_error_result(result: Any) -> bool:
          (allowing handlers to flag an error WITHOUT carrying an
          ``error`` key, or to flag success even WITH an ``error`` key).
       2. Legacy ``error`` key — backward-compat shim for handlers that
-         haven't been updated. Removed in v2.0 per the audit plan.
+         haven't been updated. **Deprecated in v1.10.0**, removed in v2.0.
+         Reaching this branch emits a ``DeprecationWarning``.
     """
     if not isinstance(result, dict):
         return False
     if TOOL_ERROR_KEY in result:
         return bool(result[TOOL_ERROR_KEY])
-    return "error" in result
+    if "error" in result:
+        warnings.warn(
+            "Tool result was classified as an error via the legacy "
+            "'error' key. Update your handler to emit "
+            "{'_tool_error': True, 'error': '...'} explicitly. "
+            "The legacy fallback is removed in TDPilot DPSK4 v2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return True
+    return False
 
 
 def _mark_tool_error(payload: dict) -> dict:
