@@ -68,6 +68,13 @@ _TOX_SOURCE_FILES = (
     # + wired into _populate_component so a textDAT named "state_cache"
     # gets created inside mcp_server with this content baked in.
     "td_component/state_cache.py",
+    # v2.0.1 (security audit P2): generator scripts shape the .tox body
+    # even though they aren't embedded as textDATs. Tracking them in
+    # the source hash means a change to how the .tox is built forces
+    # the freshness gate to fire alongside any embedded-runtime edit.
+    # See scripts/check_tox_freshness.py for the matching list.
+    "td_component/build_export_mcp_tox.py",
+    "td_component/build_tdpilot_tox.py",
 )
 
 
