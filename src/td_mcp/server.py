@@ -32,7 +32,7 @@ if os.environ.get("TDPILOT_SKIP_AUTH_BOOTSTRAP", "").strip() not in ("1", "true"
     except Exception:  # noqa: BLE001 — startup must not crash on file I/O
         pass
 
-from td_mcp import LEGACY_TOX_FILENAMES, TOX_FILENAME, __version__, normalize_transport
+from td_mcp import TOX_FILENAME, __version__, normalize_transport
 from td_mcp.td_client import TDClient, TouchDesignerConnectionError
 from td_mcp.tool_registry import (
     TD_EXEC_MODE,
@@ -178,32 +178,24 @@ async def _check_td_health(host: str, port: int, timeout: float) -> tuple[bool, 
         await client.close()
 
 
-def _resolve_tox_path(repo_root: Path | None) -> tuple[Path | None, bool]:
-    """Locate the component `.tox` file, preferring the canonical filename.
+def _resolve_tox_path(repo_root: Path | None) -> Path | None:
+    """Locate the component `.tox` file at its canonical filename.
 
-    Returns ``(path, is_legacy)`` where ``is_legacy`` is True when only the
-    old pre-v1.4.7 filename (``tdpilot_v1_3.tox``) was found. Doctor surfaces
-    a warn status in that case so users know to re-run install.sh.
+    Returns the path if it exists, the canonical path if it doesn't (so
+    error messages reference it), or ``None`` if no repo root is known.
+    v2.0 (PR-26) removed the legacy ``tdpilot_v1_3.tox`` fallback —
+    pre-v1.4.7 installs need ``npx tdpilot-dpsk4 install`` to refresh.
     """
     if repo_root is None:
-        return None, False
-    tox_dir = repo_root / "td_component"
-    primary = tox_dir / TOX_FILENAME
-    if primary.is_file():
-        return primary, False
-    for legacy in LEGACY_TOX_FILENAMES:
-        legacy_path = tox_dir / legacy
-        if legacy_path.is_file():
-            return legacy_path, True
-    # Neither found — return the primary path so error messages reference it.
-    return primary, False
+        return None
+    return repo_root / "td_component" / TOX_FILENAME
 
 
 def _collect_doctor_report(*, timeout: float, skip_td_check: bool, strict: bool) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc).isoformat()
     repo_root = _find_repo_root()
-    tox_path, tox_is_legacy = _resolve_tox_path(repo_root)
+    tox_path = _resolve_tox_path(repo_root)
 
     checks.append(
         {
@@ -230,23 +222,18 @@ def _collect_doctor_report(*, timeout: float, skip_td_check: bool, strict: bool)
         }
     )
 
-    # v1.4.7: accept the legacy ``tdpilot_v1_3.tox`` filename as a fallback but
-    # warn so users know to re-run install.sh to pick up the renamed
-    # ``tdpilot-dpsk4.tox``. Doctor returns "pass" on the primary path, "warn" on
-    # the legacy path, "fail" if neither is present.
+    # v2.0 (PR-26): pass if the canonical filename exists, fail with a
+    # pointer at the install script otherwise. The legacy ``tdpilot_v1_3.tox``
+    # fallback (pre-v1.4.7) was removed — users on those vintage installs
+    # see "fail" + the install hint and refresh.
     if tox_path and tox_path.is_file():
-        if tox_is_legacy:
-            tox_status = "warn"
-            tox_detail = (
-                f"{tox_path} (legacy filename — v1.4.7 renamed to "
-                f"{TOX_FILENAME}; re-run install.sh to update)"
-            )
-        else:
-            tox_status = "pass"
-            tox_detail = str(tox_path)
+        tox_status = "pass"
+        tox_detail = str(tox_path)
     else:
         tox_status = "fail"
-        tox_detail = f"td_component/{TOX_FILENAME} not found"
+        tox_detail = (
+            f"td_component/{TOX_FILENAME} not found — run `npx tdpilot-dpsk4 install` to refresh the install"
+        )
     checks.append({"name": "tox_component", "status": tox_status, "detail": tox_detail})
 
     transport = normalize_transport(TD_TRANSPORT or "stdio")
