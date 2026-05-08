@@ -28,6 +28,13 @@
     --error-fg:  #ff7878;
     --border:    #2a1f55;
     --rule:      #3a2c70;
+    /* v2.1.1 — high-contrast red mark for user messages so the user's
+       own prompts are visually unmistakable in the scrollback. White-on-red
+       stamp + thick red rule + subtle red bg tint. Reads as a terminal
+       LCD stamp rather than a chat bubble. */
+    --user-red:    #d92020;
+    --user-red-2:  #ff4242;
+    --user-red-bg: rgba(217, 32, 32, 0.10);
   }
   * { box-sizing: border-box; }
   html, body {
@@ -381,11 +388,37 @@
   }
   .msg .role::before { content: "[ "; color: var(--rule); }
   .msg .role::after  { content: " ]"; color: var(--rule); }
+  /* v2.1.1 — user messages get the loudest treatment in the log:
+     - 4px solid red left rule (other roles use 2px),
+     - subtle red bg gradient fading right so the message reads as a
+       highlighted strip, not a solid block,
+     - pure white body text for max contrast against both the dark
+       panel and the new red elements,
+     - role tag flipped to white-on-red ("[ USER ]" stamp). Brackets
+       inherit the bg via the .role span and switch to white via the
+       overrides below — the whole `[ USER ]` reads as a single
+       monospaced LCD stamp. */
   .msg.user {
-    border-left-color: var(--accent);
-    color: var(--user-fg);
+    border-left-width: 4px;
+    border-left-color: var(--user-red);
+    background: linear-gradient(
+      90deg,
+      var(--user-red-bg) 0%,
+      var(--user-red-bg) 60%,
+      transparent 100%
+    );
+    color: #ffffff;
   }
-  .msg.user .role { color: var(--accent-2); }
+  .msg.user .role {
+    display: inline-block;
+    background: var(--user-red);
+    color: #ffffff;
+    padding: 0 6px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+  }
+  .msg.user .role::before { content: "[ "; color: #ffffff; }
+  .msg.user .role::after  { content: " ]"; color: #ffffff; }
   .msg.assistant {
     border-left-color: var(--accent-2);
   }

@@ -61,6 +61,30 @@ priority).
   → that's the parameter list, not the operator children. Use
   `op.children`; to iterate parameters use `op.pars(page=...)`.
 
+### Chat UI — user-message red mark
+
+User-typed messages were quiet purple in v2.1.0; in a long
+scrollback they were easy to lose. v2.1.1 flips the styling to a
+"terminal LCD stamp" idiom while keeping the existing CRT/ASCII
+vibe (scanlines, monospace, brackets):
+
+- 4px solid red left rule (other roles still use 2px) — the user
+  prompt is the one chunk that should be visible at a glance when
+  scrolling.
+- Red gradient background fading rightward so long prompts don't
+  read as a solid red block.
+- Pure white body text for max contrast against both the dark panel
+  and the new red elements.
+- White-on-red `[ USER ]` role stamp — brackets included, so the
+  whole tag reads as one monospaced block-stamp.
+
+Three new CSS variables (`--user-red`, `--user-red-2`,
+`--user-red-bg`) drive the palette so future tweaks don't touch
+the rules. Pin-tests in `tests/test_chat_html_v211_user_mark.py`
+lock each piece (palette declared, thick rule, gradient bg, white
+body, white-on-red stamp, white brackets, no leakage to other
+roles).
+
 ### Tests
 
 - `tests/test_paused_td_warning.py` — four regression tests
@@ -70,6 +94,8 @@ priority).
 - `tests/test_v211_recovery_hints.py` — seven parametrized
   `recovery.attach_hint` cases (one per pattern, with the
   `renderTOP` regex exercised across all four typo variants).
+- `tests/test_chat_html_v211_user_mark.py` — seven HTML/CSS
+  pin-tests for the new user-message stamp design.
 
 ## 2.1.0 - 2026-05-08
 
