@@ -51,6 +51,44 @@ def _scrub(s: str) -> str:
     return redact_paths(redact(s))
 
 
+# Phase 3 (F-12) — explicit tool-error sentinel. Pre-1.8.1 the agent
+# loop and tool_batch checked ``"error" in result`` to decide whether
+# a tool call failed, which misclassifies any handler whose successful
+# result legitimately contains an "error" field (e.g. ``td_get_errors``
+# returning a list of TD compile errors). The new convention sets
+# ``_tool_error: True`` on results that represent a dispatch / handler
+# failure; the agent loop checks the sentinel first and falls back to
+# the legacy ``"error"`` key for one release. The fallback drops in
+# v2.0.
+TOOL_ERROR_KEY = "_tool_error"
+
+
+def is_tool_error_result(result: Any) -> bool:
+    """True when ``result`` represents a tool-call failure that the
+    agent loop should signal back to the model with ``is_error=True``.
+
+    Resolution order:
+      1. Explicit ``_tool_error`` sentinel — authoritative when present
+         (allowing handlers to flag an error WITHOUT carrying an
+         ``error`` key, or to flag success even WITH an ``error`` key).
+      2. Legacy ``error`` key — backward-compat shim for handlers that
+         haven't been updated. Removed in v2.0 per the audit plan.
+    """
+    if not isinstance(result, dict):
+        return False
+    if TOOL_ERROR_KEY in result:
+        return bool(result[TOOL_ERROR_KEY])
+    return "error" in result
+
+
+def _mark_tool_error(payload: dict) -> dict:
+    """Stamp ``_tool_error: True`` on a synthetic error payload. Used
+    by the dispatcher's own error returns so callers prefer the
+    sentinel over the brittle ``error``-key heuristic."""
+    payload[TOOL_ERROR_KEY] = True
+    return payload
+
+
 # Phase 2.3 — failure recovery hints. ``attach_hint`` is best-effort:
 # the registry module may be missing in stripped-down test embeds,
 # so we soft-import + degrade to a no-op.
@@ -105,28 +143,34 @@ def make_dispatcher(handlers_modules: Any, extra_mappings: dict | None = None) -
         mapping = extras.get(tool_name) or TOOL_TO_HANDLER.get(tool_name)
         if mapping is None:
             return _attach_hint(
-                {
-                    "error": f"Unknown tool: {tool_name}",
-                    "supported": sorted(set(TOOL_TO_HANDLER.keys()) | set(extras.keys())),
-                }
+                _mark_tool_error(
+                    {
+                        "error": f"Unknown tool: {tool_name}",
+                        "supported": sorted(set(TOOL_TO_HANDLER.keys()) | set(extras.keys())),
+                    }
+                )
             )
         handler_fn_name, adapter = mapping
         handler = _resolve_handler(handler_fn_name)
         if handler is None:
             return _attach_hint(
-                {
-                    "error": f"Handler {handler_fn_name} not found on any handlers module",
-                }
+                _mark_tool_error(
+                    {
+                        "error": f"Handler {handler_fn_name} not found on any handlers module",
+                    }
+                )
             )
         try:
             body = adapter(args or {})
             result = handler(body)
         except Exception as exc:  # noqa: BLE001 — return as tool error
             return _attach_hint(
-                {
-                    "error": _scrub(f"{type(exc).__name__}: {exc}"),
-                    "traceback": _scrub(traceback.format_exc(limit=5)),
-                }
+                _mark_tool_error(
+                    {
+                        "error": _scrub(f"{type(exc).__name__}: {exc}"),
+                        "traceback": _scrub(traceback.format_exc(limit=5)),
+                    }
+                )
             )
         # mcp_webserver_callbacks handlers may return a plain dict OR a
         # (status_code, dict) tuple depending on the route. Normalize to

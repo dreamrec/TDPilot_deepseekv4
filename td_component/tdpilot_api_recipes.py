@@ -462,16 +462,15 @@ def handle_recipe_replay(body: dict) -> dict:
         }
 
     # Real replay: find the dispatcher. The recipe handler runs inside
-    # TD on the cook thread; reach back through the COMP -> extension ->
-    # runtime to grab the raw dispatcher.
-    raw_dispatcher = None
+    # TD on the cook thread; the lookup helper walks COMP → extension
+    # → runtime and returns the raw (non cook-thread-wrapped)
+    # dispatcher. PR-19 (F-18) — single-source helper replaces the
+    # bespoke walk.
     try:
-        comp = parent()  # type: ignore[name-defined]
-        ext_dat = comp.op("tdpilot_api_extension")
-        ext = ext_dat.module.get_extension(comp)
-        # Use raw dispatcher (the one before CookThreadDispatcher wraps it)
-        raw_dispatcher = ext._runtime._raw_dispatcher
-    except Exception as exc:
+        from tdpilot_api_lookup import get_raw_dispatcher  # type: ignore[import-not-found]
+
+        raw_dispatcher = get_raw_dispatcher()
+    except ImportError as exc:
         return {"error": f"Could not access dispatcher: {exc}"}
 
     if raw_dispatcher is None:

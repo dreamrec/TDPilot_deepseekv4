@@ -179,6 +179,10 @@ _SOURCE_FILES = (
     ("tdpilot_api_agent", "textDAT", "td_component/tdpilot_api_agent.py"),
     ("tdpilot_api_dispatcher", "textDAT", "td_component/tdpilot_api_dispatcher.py"),
     ("tdpilot_api_config", "textDAT", "td_component/tdpilot_api_config.py"),
+    # Phase 3 (F-18) — single-source COMP/extension/runtime lookup helpers.
+    # Pure module, no TD calls at import time, so it can be loaded
+    # before anything that depends on it.
+    ("tdpilot_api_lookup", "textDAT", "td_component/tdpilot_api_lookup.py"),
     # Schema is split across three textDATs (defs + map + shim re-export).
     # Order matters for the shim's import-time resolve: defs and map must
     # be in sys.modules before the shim is imported, so list them first.
@@ -589,6 +593,7 @@ def _populate_comp(comp, repo_root, info_text):
         "tdpilot_api_agent": (200, 200),
         "tdpilot_api_dispatcher": (400, 200),
         "tdpilot_api_config": (200, 100),
+        "tdpilot_api_lookup": (300, 100),
         "tdpilot_api_schema": (400, 100),
         "tdpilot_api_runtime": (200, 0),
         "tdpilot_api_extension": (400, 0),
