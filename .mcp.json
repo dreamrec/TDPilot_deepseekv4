@@ -5,14 +5,14 @@
       "args": [
         "run",
         "--directory",
-        "/Users/visansilviugeorge/Desktop/DREAM AI/TDPilot_deepseekv4",
+        "${TDPILOT_ROOT}",
         "tdpilot-dpsk4"
       ],
       "env": {
         "TD_MCP_HOST": "127.0.0.1",
         "TD_MCP_PORT": "9985",
         "TD_MCP_WS_PORT": "9986",
-        "TD_MCP_EXEC_MODE": "full",
+        "TD_MCP_EXEC_MODE": "restricted",
         "TD_MCP_REQUIRE_AUTH": "1",
         "TD_MCP_AUTOGENERATE_SECRET": "1",
         "TDPILOT_VARIANT": "dpsk4"
