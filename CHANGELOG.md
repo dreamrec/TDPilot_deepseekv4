@@ -1,5 +1,164 @@
 # Changelog
 
+## 2.1.0 - 2026-05-08
+
+**Chat UI rework + 13 v2.0 audit fixes.** Collapses what was going
+to be a v2.0.1 patch (12 audit findings + 1 live-tier propagation
+fix) and the chat-UI rework into a single minor release. The
+bug-fix scope alone would have been v2.0.1; the UI changes (quiet
+mode + ASCII flourishes) are new features so the bump is to 2.1.0.
+
+### Chat UI rework (v2.1.0 features)
+
+- **Removed: `aA` font-size toggle.** The v2.0.0 toggle had
+  inconsistent scaling and felt out of place in the retro
+  aesthetic. HTML, CSS, JS, and the 23 structural tests are gone.
+- **Added: quiet-mode toggle.** Replaces the font toggle in the
+  same far-right slot of the status bar. Single button with a
+  hollow `○` (off) / filled `●` (on) glyph. When active, three
+  CSS rules hide every tool-call surface
+  (`.msg.tool_call`, `.msg.tool_result`, `details.tool-pair`) so
+  the chat reads as a plain conversation: user prompts, assistant
+  text, errors, and hints only. The status bar at the top still
+  shows the agent's per-turn state ("thinking" /
+  "calling td_create_node…") so progress is never blacked out —
+  quiet mode hides DETAIL, not SIGNAL. State persists per browser
+  via `localStorage["tdpilot.quietMode"]`.
+- **Keyboard shortcut: `Cmd/Ctrl + .`** toggles quiet mode.
+  Replaces the v2.0.0 font-zoom shortcuts.
+- **Smaller default fonts.** body 13 → 12px, status bar 11 → 10px,
+  input 13 → 12px. Status-bar letter-spacing softened
+  0.1em → 0.08em; line-height bumped 1.5 → 1.55.
+- **Contextual ASCII flourishes.** On agent turn-end (state
+  transitions from working → idle),
+  `attachFlourishToLastAssistant()` walks back through `#history`
+  and appends a `.msg-flourish` div with a topic-matched glyph
+  from a 9-bucket pool (default / light / camera / particle /
+  material / audio / geom / error / success). Topic detection is
+  keyword-based against the last user message + the assistant
+  body. CSS keeps it visually quiet — `--accent-dim` color,
+  centered with 0.5em letter-spacing, 0.55 opacity, dashed top
+  border. Tiny topic label appears under the glyph.
+
+### Fixes — patch session lifecycle (was v2.0.1)
+
+- `patch_commit` now ALWAYS clears the session state regardless of
+  whether `ui.undo.endBlock()` raises. Pre-2.1.0 a single endBlock
+  failure left state set forever and every subsequent
+  `patch_begin` returned "Another patch session is already
+  active." (100% failure rate observed in audit traces.)
+- `patch_rollback` switched from `project.undo()` (does not exist
+  on TD 2025's Project object) to `ui.undo.undo()` (the actual API).
+  Pre-2.1.0 every rollback raised
+  `AttributeError: 'td.Project' object has no attribute 'undo'`.
+- `patch_begin` recovers orphaned sessions: stale (>5 min old)
+  state auto-clears with a `recovered_from` breadcrumb, and the
+  new `force=True` argument is the manual escape hatch for fresh
+  orphans.
+
+### Fixes — agent UX (was v2.0.1)
+
+- `td_python_help` now detects two common agent-mistake shapes
+  before the regex catch-all and surfaces actionable errors:
+  - Operator references (`op(...)`, `op[...]`, `/project1...`)
+    → "use `td_get_node_detail`"
+  - Parameter expressions (`.par.`, `[...]`, `(...)`)
+    → "use `td_get_params`"
+- Five new `recovery.attach_hint()` patterns for AttributeErrors
+  the agent kept hitting:
+  - `'td.X[Cc][Hh][Oo][Pp]' has no attribute 'channels'`
+    → use `chop.chans()` / `chop[ch]` / `chop[idx]`
+  - `'td.X[Cc][Hh][Oo][Pp]' has no attribute 'text'`
+    → DAT.text exists, CHOPs use `.chans()` / `[i]`
+  - `'td.Page' has no attribute 'label'` → use `page.name`
+  - `'td.Project' has no attribute 'undo'`
+    → use `ui.undo.undo()` (matches the patch_rollback fix)
+  - `Invalid target: must be a dotted identifier`
+    → reminds the agent `td_python_help` wants class names
+
+### Fixes — info textDAT red ❌ (was v2.0.1)
+
+- `_populate_component()` now wraps the info textDAT banner in a
+  Python triple-quoted string before assigning. Pre-2.1.0 the
+  banner contained an ISO-8601 timestamp that TD's Python parser
+  read as `2026 - 05 - 08T...` and rejected `05` as an invalid
+  decimal-with-leading-zero literal. The COMP showed a red error
+  indicator for what is purely metadata. New `_python_safe_info()`
+  helper is idempotent so future callers can pass already-wrapped
+  text without double-wrapping.
+
+### Fixes — security audit (was v2.0.1)
+
+- **`.mcp.json` portability** (P1): switched from a hardcoded
+  `/Users/...` `--directory` path to the `${TDPILOT_ROOT}`
+  placeholder (matches `.mcp.json.claude-desktop-template`).
+  `TD_MCP_EXEC_MODE` flipped from `full` → `restricted` (safe
+  default; users opt in to `full` for advanced workflows). The
+  leak-check exclusion for `.mcp.json` was removed so future
+  drift gets caught by CI.
+- **Refresh `uv.lock` for runtime CVEs** (P1):
+  - `cryptography` 46.0.5 → 48.0.0
+  - `pyjwt` 2.11.0 → 2.12.1
+  - `python-multipart` 0.0.22 → 0.0.27
+  - `pytest` 9.0.2 → 9.0.3 (dev)
+  - `pygments` 2.19.2 → 2.20.0 (dev)
+  Plus ancillary updates: `mcp` 1.26.0 → 1.27.1, `starlette`
+  0.52.1 → 1.0.0, `uvicorn` 0.41.0 → 0.46.0, others.
+- **WS handshake URI redaction** (P2): `onWebSocketOpen` no
+  longer logs the per-launch `?t=<token>` to the TD console.
+  New `_redact_uri()` strips the `t=` parameter to
+  `t=<redacted>` before logging. Pre-2.1.0, the v1.7.1 CSRF
+  token was readable to anyone with TD console access.
+- **`.tox` freshness gate covers generators** (P2): added
+  `td_component/build_export_mcp_tox.py` and
+  `td_component/build_tdpilot_tox.py` to both
+  `scripts/check_tox_freshness.py:SOURCE_FILES` AND
+  `_TOX_SOURCE_FILES` in the build script itself.
+- **npm wrapper shell injection** (P2): `pinToLatestTag()`
+  switched from ``execSync(`git checkout ${latestTag}`)`` to
+  ``spawnSync("git", ["checkout", latestTag])`` plus a strict
+  ``^[A-Za-z0-9._/-]+$`` validation on the tag shape.
+- **`install.sh` ZIP fallback path** (P2): GitHub's archive
+  extracts as ``TDPilot_deepseekv4-main``; the pre-2.1.0 script
+  looked for ``${REPO_DIR_NAME}-main`` (= `.tdpilot-dpsk4-main`).
+  Anyone without `git` in PATH hit a no-such-file error.
+
+### Fixes — model tier propagation
+
+- `AgentRuntime.start_turn()` now live-refreshes
+  `self._agent.model_tier` from the COMP's `Modeltier`
+  parameter on every turn. Pre-2.1.0 the tier was captured at
+  agent construction; changing the dropdown from `auto` → `pro`
+  in the parameter panel had no effect on subsequent turns until
+  the user manually pulsed Reload Config (which would rebuild
+  the entire Agent and re-trigger config file reads). Now the
+  tier change propagates on the next turn without any rebuild —
+  chat history is preserved, no extra round trip.
+
+### Tests
+
+- **1635 pass / 12 deselected**:
+  - PR #20: +17 new tests in `tests/test_v201_bugfixes.py`
+  - PR #22: -23 font-toggle tests removed + 18 new tests in
+    `tests/test_chat_html_v210_ui.py`
+- ruff check + format clean.
+
+### Migration
+
+No breaking API changes. Drop-in upgrade from v2.0.0:
+
+```bash
+npx tdpilot-dpsk4 install   # refreshes the .tox + plugin install
+```
+
+Two cosmetic shifts users may notice:
+- The `aA` font toggle is replaced by a `○` / `●` quiet-mode
+  toggle. If you were using `tdpilot.fontMode` in localStorage,
+  the new code just ignores it (no migration needed).
+- If you were using `TD_MCP_EXEC_MODE=full` from the v2.0.0
+  `.mcp.json`, either re-add it explicitly to your local config
+  OR keep the new `restricted` default (recommended).
+
 ## 2.0.0 - 2026-05-08
 
 **Breaking changes + chat font-size toggle.** v2.0 closes the
