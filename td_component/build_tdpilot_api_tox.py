@@ -76,7 +76,7 @@ def _load_legacy_module():
     import types as _types
 
     legacy_path = os.path.join(_THIS_DIR, "build_export_mcp_tox.py")
-    with open(legacy_path) as f:
+    with open(legacy_path, encoding="utf-8") as f:
         legacy_src = f.read()
     legacy_src = _re.sub(r"\nbuild_and_export\(\)\s*$", "\n", legacy_src)
     legacy_module = _types.ModuleType("build_export_mcp_tox")

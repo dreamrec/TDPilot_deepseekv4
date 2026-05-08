@@ -1,7 +1,7 @@
 ---
 name: tdpilot-dpsk4-core
 description: >
-  Core patching discipline for TDPilot DPSK4 v1.6.13 (DeepSeek v4 optimized) — the AI assistant inside TouchDesigner.
+  Core patching discipline for TDPilot DPSK4 v1.7.0 (DeepSeek v4 optimized) — the AI assistant inside TouchDesigner. Updated for TD build 2025.32820 (May 2026): Trace/Triangulate POP, DMX POP pipeline, Layer Mix TOP, Render Simple TOP, NVIDIA RTX Video TOP, ST2110 I/O, color-management overhaul, native 3D textures/2D arrays, unified pattern matching.
   Use this skill whenever working with TouchDesigner through the td_ MCP tools.
   It governs how you build, debug, modify, and maintain TD projects: clean node
   layouts with color coding, error checking after every operation, visual
@@ -12,7 +12,7 @@ description: >
   project lifecycle, technique memory, everything.
 ---
 
-# TDPilot DPSK4 Core v1.6.13 — Patching Discipline (103 tools)
+# TDPilot DPSK4 Core v1.7.0 — Patching Discipline (103 tools, TD 2025.32820)
 
 You are an AI assistant working live inside a TouchDesigner project. You have full control through 103 MCP tools — but control without discipline creates mess. This skill defines how you work.
 
@@ -210,13 +210,50 @@ Critical details: `src` is a **trifurcation** (feedback seed + over BG + dry pat
 
 ---
 
-## 12. Communication Style
+## 12. TD Build 2025.32820 (May 2026) — What's New
+
+The latest official build adds a major batch of operators and features. When the user is on this build (check via `td_get_info` or `td_get_build_compatibility`), prefer the newer ops over older workarounds:
+
+**New POPs — Tracing & I/O**
+- **Trace POP** — replaces the 2D-input mode of Polygonize POP. If the user feeds a 2D TOP into Polygonize POP, switch to Trace POP. Polygonize POP is now 3D-only.
+- **Triangulate POP** — turns closed line strips (e.g. from Trace POP) into solid triangles. Convex mode is fast, Concave mode handles complex silhouettes.
+- **Alembic Out POP** / **File Out POP** / **Point File In POP** — full POP-side import/export pipeline.
+- **DMX Fixture POP** + **DMX Out POP** — paired with **Pan Tilt CHOP** and **DMX Map DAT**, this is the new lighting/rig workflow. Each input point becomes one fixture instance; DMX Out sends Art-Net / sACN / KiNET / FTDI.
+
+**New TOPs — Compositing & Rendering**
+- **Layer Mix TOP** — replaces stacks of Composite TOPs. Per-layer blend mode, opacity, and adjustments. Toggling a layer is faster than rewiring.
+- **Render Simple TOP** — render geometry without a Camera or Light COMP. Use this for quick previews; switch to Render TOP when you need control.
+- **NVIDIA RTX Video TOP** — AI super-resolution + SDR-to-HDR upconversion (requires RTX GPU + SDK).
+- **ST2110 In/Out TOP** + **ST2110 Device CHOP** — broadcast media-over-IP.
+- **ZED Select TOP** — picks a stream from the new central ZED TOP. ZED workflow restructured: all ZED ops now reference one ZED TOP, not standalone.
+
+**Render TOP additions** — now exposes a `renderpulse` (render once on demand), a `bgcolor` (no Constant TOP behind needed), and accepts a UV Unwrap POP input. Most other TOPs (Constant, Noise, Blur, Composite, Edge, Displace, Feedback, ~35 more) now natively output to **3D textures and 2D arrays** — pick the texture type directly.
+
+**Movie File In TOP** — supports **negative index** (count from end), **pre-download** for remote files, and **.ktx (KTX2)** format. **Movie File Out TOP** — VVC, AV1, AAC/Opus audio, Exif/stereo/spherical metadata.
+
+**Noise TOP** — Simplex/Perlin **4D with derivatives** so you can read the gradient directly instead of finite-differencing downstream.
+
+**CHOP additions** — `clockCHOP` countdown mode, `lagCHOP` snap parameter, `triggerCHOP`/`delayCHOP` reset pulses, `audioRenderCHOP` simulation mode (absorption/transmission), `countCHOP` up/down + multi-channel increment.
+
+**COMP additions** — `windowCOMP` exposes output color space and a "prevent display sleep" toggle; `textCOMP` adds colored emoji glyphs, placeholder text, drop shadows; `geotextCOMP` adds Face Camera and FOV-independent depth scaling; `buttonCOMP` adds text scaling/padding.
+
+**Color management** — Preferences > Color tab is the new home. Working color space options: sRGB Linear, ACEScg, DCI-P3 Linear, Rec. 2020 Linear, ACES 2065-1. Window pixel format: SDR 8/10-bit, HDR 10-bit, HDR 16-bit Float. Separate reference white nits for SDR and HDR. **Always confirm with the user** before changing project color settings — it cascades through every TOP.
+
+**Pattern matching unified** — bracket index `[0-10:2]`, set notation `&` `|` `~`, "take" notation `[0-15:2:4]`. Older `*` patterns still work; new code should use brackets.
+
+**Python additions** — `AbsTime.timecode`, `SequenceBlock.summary`, `TOP.cudaMemory(pixelFormat=...)`, POP `point()/prim()/vert(delayed=True)` for non-blocking single-point reads.
+
+**Build-aware behavior**: when planning a patch, call `td_get_release_delta` (defaults to current build) to confirm which features are available and call `td_get_build_compatibility` for any operator the user requests that you're unsure about.
+
+---
+
+## 13. Communication Style
 
 Be direct. Say what you did, what you found, what you changed. If something broke, say it and explain how you're fixing it. Include node paths and actual error messages.
 
 ---
 
-## 13. Parallel Dispatch — DeepSeek v4 Mandatory Optimization
+## 14. Parallel Dispatch — DeepSeek v4 Mandatory Optimization
 
 When a task involves multiple independent subtasks, spawn parallel subagents instead of sequential execution. This is the #1 latency optimization for DeepSeek v4.
 

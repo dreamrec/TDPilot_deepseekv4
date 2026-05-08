@@ -1,0 +1,25 @@
+{
+  "card_type": "operator",
+  "op_type": "panTiltCHOP",
+  "family": "CHOP",
+  "display_name": "Pan Tilt CHOP",
+  "docs_url": "https://docs.derivative.ca/Pan_Tilt_CHOP",
+  "summary": "Generates pan and tilt channel data for moving lighting fixtures (yokes/movers). Replaces hand-rolled rotation-to-DMX math — outputs DMX-ready values respecting per-fixture range, invert, and home offsets.",
+  "key_params": [
+    {"name": "pan", "type": "Float", "note": "Pan angle in degrees (or normalized, depending on mode)"},
+    {"name": "tilt", "type": "Float", "note": "Tilt angle"},
+    {"name": "panrange", "type": "Float", "note": "Mechanical pan range of the fixture (e.g. 540°)"},
+    {"name": "tiltrange", "type": "Float", "note": "Mechanical tilt range (e.g. 270°)"},
+    {"name": "invertpan", "type": "Toggle", "note": "Invert pan direction"},
+    {"name": "inverttilt", "type": "Toggle", "note": "Invert tilt direction"},
+    {"name": "panoffset", "type": "Float", "note": "Pan home offset"},
+    {"name": "tiltoffset", "type": "Float", "note": "Tilt home offset"}
+  ],
+  "common_gotchas": [
+    "Pair with the DMX Fixture POP / DMX Out POP for the full lighting pipeline — Pan Tilt CHOP only generates the pan/tilt values, not full DMX frames.",
+    "Different fixtures have different mechanical ranges — set `panrange`/`tiltrange` per-fixture, otherwise the head won't reach the intended angle."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

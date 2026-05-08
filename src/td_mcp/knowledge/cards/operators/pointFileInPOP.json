@@ -1,0 +1,22 @@
+{
+  "card_type": "operator",
+  "op_type": "pointFileInPOP",
+  "family": "POP",
+  "display_name": "Point File In POP",
+  "docs_url": "https://docs.derivative.ca/Point_File_In_POP",
+  "summary": "Loads point-cloud files from disk as POP geometry. Supports .obj, .ply, .fits, .exr, .xyz, .pts, .csv, .txt formats with their associated attributes.",
+  "key_params": [
+    {"name": "file", "type": "String", "note": "Path to the point cloud file"},
+    {"name": "format", "type": "Menu", "note": "Auto-detect or force a specific reader"},
+    {"name": "scale", "type": "Float", "note": "Uniform scale applied to incoming points"},
+    {"name": "reload", "type": "Pulse", "note": "Force re-read from disk"},
+    {"name": "delayed", "type": "Toggle", "note": "Defer the read off the cooking thread for large files"}
+  ],
+  "common_gotchas": [
+    "Very large clouds (millions of points) can stall cooks — use the delayed toggle, or downsample upstream.",
+    ".csv/.txt formats need column ordering hints — make sure header or column-mapping params match the file."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

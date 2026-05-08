@@ -1,0 +1,19 @@
+{
+  "card_type": "operator",
+  "op_type": "serialDevicesDAT",
+  "family": "DAT",
+  "display_name": "Serial Devices DAT",
+  "docs_url": "https://docs.derivative.ca/Serial_Devices_DAT",
+  "summary": "Lists all serial ports on the system as a table — port name, description, vendor/product IDs, and which TouchDesigner Serial DAT (if any) currently owns the port. Useful for picking the right COM port at startup.",
+  "key_params": [
+    {"name": "refresh", "type": "Pulse", "note": "Re-scan available serial devices"},
+    {"name": "active", "type": "Toggle", "note": "Auto-update on changes (hot-plug detection)"}
+  ],
+  "common_gotchas": [
+    "Read-only — this DAT inspects, it doesn't open ports. Use Serial DAT for actual I/O.",
+    "On macOS, expect both `/dev/cu.*` and `/dev/tty.*` entries; prefer `cu.` for outgoing connections."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

@@ -1,0 +1,22 @@
+{
+  "card_type": "operator",
+  "op_type": "triangulatePOP",
+  "family": "POP",
+  "display_name": "Triangulate POP",
+  "docs_url": "https://docs.derivative.ca/Triangulate_POP",
+  "summary": "Triangulates closed line strips into solid triangle primitives on the GPU. Useful for filling traced contours (Trace POP) or 2D outlines into renderable surfaces.",
+  "key_params": [
+    {"name": "mode", "type": "Menu", "note": "Convex Only (highly parallel, fast) or Convex and Concave (handles concavities, slower for long strips)"},
+    {"name": "removezeroarea", "type": "Toggle", "note": "Discard degenerate triangles with zero area (avoids render artifacts)"},
+    {"name": "flipnormals", "type": "Toggle", "note": "Flip output triangle winding"},
+    {"name": "uvscale", "type": "Float", "note": "Scale factor for generated UV coordinates"}
+  ],
+  "common_gotchas": [
+    "Input must be CLOSED line strips. Use the `closed` parameter on the upstream POP (Trace POP, etc.) or close them manually.",
+    "Concave mode is much slower than Convex on long strips — start with Convex and only switch up if the silhouette demands it.",
+    "Self-intersecting line strips can produce flipped or missing triangles — clean the source contour first."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

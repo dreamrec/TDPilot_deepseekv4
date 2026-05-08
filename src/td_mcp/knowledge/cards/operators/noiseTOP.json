@@ -10,13 +10,15 @@
     {"name": "amp", "type": "Float", "note": "Overall amplitude/brightness of the noise output"},
     {"name": "period", "type": "Float", "note": "Spatial frequency of noise — smaller values yield coarser patterns"},
     {"name": "t", "type": "Float", "note": "Time offset for animating noise; link to absTime.seconds for smooth motion"},
-    {"name": "monochrome", "type": "Toggle", "note": "When on, outputs greyscale noise; off gives per-channel RGB noise"}
+    {"name": "monochrome", "type": "Toggle", "note": "When on, outputs greyscale noise; off gives per-channel RGB noise"},
+    {"name": "outputderivatives", "type": "Toggle", "note": "2025.30000+: emit Simplex/Perlin 4D derivatives (gradient) alongside the value — extra channels can drive normals or flow directly"}
   ],
   "common_gotchas": [
     "Forgetting to animate the 't' parameter results in a static image — wire absTime.seconds or a CHOP to it.",
-    "Resolution defaults to 256x256; set it explicitly or use an input to inherit resolution."
+    "Resolution defaults to 256x256; set it explicitly or use an input to inherit resolution.",
+    "2025.30000+: the new 4D derivative output is GPU-cheap and avoids manually finite-differencing the noise downstream."
   ],
   "related_snippets": [],
   "build_relevance": "2020.20000+",
-  "last_verified": "2026-03-14"
+  "last_verified": "2026-05-08"
 }
