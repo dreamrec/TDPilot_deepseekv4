@@ -24,10 +24,16 @@ feature: a small/large font-size toggle in the chat status bar.
   flash on reload. Default is `small` (today's behavior) so
   existing users see no change unless they opt in. (PR-27)
 
+  Accessibility: the button carries `aria-pressed="true|false"`,
+  kept in sync by `applyFontMode()` so screen readers announce the
+  current toggle state. Keyboard tab focus shows an accent-colored
+  `:focus-visible` ring matching the existing `#input:focus`
+  pattern.
+
   Implementation lives entirely in
   [td_component/tdpilot_api_chat.html](td_component/tdpilot_api_chat.html)
   — no backend, no WS protocol changes, no new dependencies.
-  Pinned by 21 structural assertions in
+  Pinned by 23 structural assertions in
   [tests/test_chat_html_font_toggle.py](tests/test_chat_html_font_toggle.py).
 
 ### Breaking
@@ -87,13 +93,18 @@ feature: a small/large font-size toggle in the chat status bar.
 
 ### Tests
 
-- 1623 pass / 12 deselected (delta +21 from v1.10.0):
-  - PR-25 removed 4 v1.10.0 deprecation-warning tests; flipped 2
-    parametrize cases from True → False; added them to the truth-
-    table parametrize.
-  - PR-27 added 21 structural assertions on the chat HTML toggle
+- 1623 pass / 12 deselected (delta +21 from v1.10.0's 1602):
+  - PR-25 net -2: removed 4 v1.10.0 deprecation-warning test runs
+    (2 parametrize cases of `test_legacy_error_key_classifies_…`,
+    `test_sentinel_path_emits_no_deprecation_warning`,
+    `test_no_warning_on_no_error_key`); added 2 new cases to the
+    truth-table parametrize for the `{"error": "..."}` → False
+    classification.
+  - PR-27 +21: structural assertions on the chat HTML toggle
     (DOM order, CSS scaling rules, JS persistence + click +
     keyboard handlers).
+  - Pre-tag audit +2: aria-pressed sync via `applyFontMode`, and
+    `:focus-visible` accent ring.
 
 ### Migration recap
 

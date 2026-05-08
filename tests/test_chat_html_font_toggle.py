@@ -50,15 +50,45 @@ def html() -> str:
 
 def test_font_toggle_button_exists(html: str):
     """The toggle is a single button with the canonical id, type, and
-    aria-label. Title text doubles as a hover hint."""
+    aria-label. Title text doubles as a hover hint. aria-pressed
+    starts at "false" (small mode = default); applyFontMode keeps
+    it in sync with the active mode."""
     assert 'id="font-toggle"' in html
     assert 'type="button"' in html
-    # The button has both an aria-label (a11y) and a title (hover tip).
+    # The button has aria-label (a11y), title (hover tip), and
+    # aria-pressed (toggle state for screen readers).
     pattern = re.compile(
-        r'<button\s+id="font-toggle"[\s\S]*?aria-label="Toggle chat font size"',
+        r'<button\s+id="font-toggle"[\s\S]*?'
+        r'aria-label="Toggle chat font size"[\s\S]*?'
+        r'aria-pressed="false"',
         re.MULTILINE,
     )
-    assert pattern.search(html), "font-toggle button missing aria-label"
+    assert pattern.search(html), "font-toggle button missing aria-label or aria-pressed='false'"
+
+
+def test_apply_font_mode_updates_aria_pressed(html: str):
+    """`applyFontMode` keeps aria-pressed in sync with the active
+    mode — large = pressed, small = not pressed. Lets screen readers
+    announce the toggle state on focus."""
+    pattern = re.compile(
+        r"\$fontToggle\.setAttribute\('aria-pressed',\s*"
+        r"mode === 'large' \? 'true' : 'false'\)",
+    )
+    assert pattern.search(html), "applyFontMode is not updating aria-pressed"
+
+
+def test_font_toggle_has_focus_visible_styling(html: str):
+    """Keyboard tab navigation needs a clear focus indicator that
+    matches the project's existing pattern (see #input:focus). The
+    browser default focus ring would clash with the chat aesthetic."""
+    # Either :focus or :focus-visible should set the accent ring.
+    assert "#font-toggle:focus-visible" in html
+    pattern = re.compile(
+        r"#font-toggle:focus-visible \{[^}]*"
+        r"box-shadow:[^}]*var\(--accent\)[^}]*\}",
+        re.MULTILINE,
+    )
+    assert pattern.search(html), "font-toggle is missing accent-colored :focus-visible ring"
 
 
 def test_font_toggle_has_two_glyph_children(html: str):
