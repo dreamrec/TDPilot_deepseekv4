@@ -1,5 +1,124 @@
 # Changelog
 
+## 2.0.0 - 2026-05-08
+
+**Breaking changes + chat font-size toggle.** v2.0 closes the
+deprecation cycle opened in v1.10.0 (the legacy `error`-key
+tool-result heuristic is gone) and ships the long-promised hero
+feature: a small/large font-size toggle in the chat status bar.
+
+### Features
+
+- **Chat font-size toggle** — two-state glyph control (`a` / `A`)
+  at the far right of the chat status bar. Click swaps the size;
+  `Cmd/Ctrl + +` and `Cmd/Ctrl + -` toggle via keyboard
+  (`preventDefault`-guarded so they don't bleed into browser-native
+  zoom). Scales `#history` (messages) and `#input` (textarea) from
+  13px to 17px in large mode; chrome — status bar, buttons, modal
+  headers, badges — stays fixed at its designed scale so the
+  layout doesn't reflow.
+
+  Persists per browser via `localStorage["tdpilot.fontMode"]`,
+  applied to `<html>` before `$history.innerHTML = WELCOME_HTML`
+  so users with a saved 'large' setting never see a small-text
+  flash on reload. Default is `small` (today's behavior) so
+  existing users see no change unless they opt in. (PR-27)
+
+  Accessibility: the button carries `aria-pressed="true|false"`,
+  kept in sync by `applyFontMode()` so screen readers announce the
+  current toggle state. Keyboard tab focus shows an accent-colored
+  `:focus-visible` ring matching the existing `#input:focus`
+  pattern.
+
+  Implementation lives entirely in
+  [td_component/tdpilot_api_chat.html](td_component/tdpilot_api_chat.html)
+  — no backend, no WS protocol changes, no new dependencies.
+  Pinned by 23 structural assertions in
+  [tests/test_chat_html_font_toggle.py](tests/test_chat_html_font_toggle.py).
+
+### Breaking
+
+- **`is_tool_error_result()` no longer falls back to
+  `"error" in result`.** The explicit `_tool_error: True` sentinel
+  is the only signal that marks a tool-call failure. v1.10.0 emitted
+  a `DeprecationWarning` on the legacy heuristic; v2.0 removed the
+  fallback entirely. (F-12 / PR-25)
+
+  Internal handlers are unaffected: every result that flows through
+  the dispatcher pipeline is normalised by
+  [`recovery.attach_hint()`](td_component/tdpilot_api_recovery.py:130)
+  which auto-stamps `_tool_error: True` when an `error` key is
+  present without an explicit sentinel. The migration audience is
+  external dispatcher integrations and user-authored handlers that
+  register via `extra_mappings` and bypass attach_hint.
+
+  Migration:
+  ```python
+  # before (v1.x — deprecated in v1.10.0, removed in v2.0):
+  return {"error": "tool failed"}
+
+  # after (v2.0+):
+  return {"_tool_error": True, "error": "tool failed"}
+  ```
+
+- **`LEGACY_TOX_FILENAMES` removed.** The legacy `tdpilot_v1_3.tox`
+  filename was renamed in v1.4.7 (March 2026); pre-v1.4.7 installs
+  are roughly 14 months old by v2.0 cut time. The doctor's "warn"
+  branch served them as a one-time migration nudge that has long
+  since done its job. (PR-26)
+
+  Migration: users on a vintage install run
+  ```bash
+  npx tdpilot-dpsk4 install
+  ```
+  once to refresh. The doctor's missing-tox detail now points at
+  this script directly.
+
+### Internal
+
+- `_resolve_tox_path` simplified to return `Path | None` instead of
+  the `(Path | None, bool)` tuple — the `is_legacy` flag is gone
+  alongside the legacy fallback.
+- Doctor's tox check is now pass / fail only (no more "warn" tier
+  for the legacy filename).
+- `td_component/tdpilot_api_dispatcher.py` no longer imports
+  `warnings`. Comment block + docstring rewritten to past-tense.
+- `td_component/tdpilot_api_agent.py` + `tdpilot_api_batch.py`
+  soft-import shims simplified to mirror the dispatcher's v2.0
+  semantics.
+- Status bar layout: `.rhs` now carries `margin-left: auto` so the
+  font toggle can sit as a third flex child without being pushed
+  to the middle of the bar by `space-between`. No-op for the
+  pre-PR-27 2-child layout. (PR-27)
+
+### Tests
+
+- 1623 pass / 12 deselected (delta +21 from v1.10.0's 1602):
+  - PR-25 net -2: removed 4 v1.10.0 deprecation-warning test runs
+    (2 parametrize cases of `test_legacy_error_key_classifies_…`,
+    `test_sentinel_path_emits_no_deprecation_warning`,
+    `test_no_warning_on_no_error_key`); added 2 new cases to the
+    truth-table parametrize for the `{"error": "..."}` → False
+    classification.
+  - PR-27 +21: structural assertions on the chat HTML toggle
+    (DOM order, CSS scaling rules, JS persistence + click +
+    keyboard handlers).
+  - Pre-tag audit +2: aria-pressed sync via `applyFontMode`, and
+    `:focus-visible` accent ring.
+
+### Migration recap
+
+If you author your own tool handlers (registered via
+`extra_mappings` on the dispatcher) or your own `Agent` dispatcher
+callable, emit the explicit sentinel on failure:
+
+```python
+return {"_tool_error": True, "error": "tool failed"}
+```
+
+If you are running an install that pre-dates v1.4.7 (March 2026),
+run `npx tdpilot-dpsk4 install` once after upgrading.
+
 ## 1.10.0 - 2026-05-08
 
 **v2.0 deprecation cycle.** v1.10.0 ships the `DeprecationWarning` for
