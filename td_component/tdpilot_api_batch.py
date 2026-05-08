@@ -28,31 +28,19 @@ from __future__ import annotations
 import time
 from typing import Any
 
-# Phase 3 (F-12) — soft-import the tool-error sentinel helper. Same
-# story as agent.py: the dispatcher module owns the canonical
-# predicate. The fallback mirrors the dispatcher's v1.10.0
-# DeprecationWarning behavior so embeds that exercise this shim see
-# the same warning surface as production.
+# F-12 — soft-import the tool-error sentinel helper. Same story as
+# agent.py: the dispatcher module owns the canonical predicate. The
+# fallback mirrors the dispatcher's v2.0 semantics: only the explicit
+# ``_tool_error`` sentinel marks failure.
 try:
     from tdpilot_api_dispatcher import is_tool_error_result  # type: ignore[import-not-found]
 except ImportError:
-    import warnings as _warnings_shim
 
     def is_tool_error_result(result):  # type: ignore[misc]
         if not isinstance(result, dict):
             return False
         if "_tool_error" in result:
             return bool(result["_tool_error"])
-        if "error" in result:
-            _warnings_shim.warn(
-                "Tool result was classified as an error via the legacy "
-                "'error' key. Update your handler to emit "
-                "{'_tool_error': True, 'error': '...'} explicitly. "
-                "The legacy fallback is removed in TDPilot DPSK4 v2.0.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            return True
         return False
 
 
