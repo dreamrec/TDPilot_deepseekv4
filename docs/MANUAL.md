@@ -289,7 +289,7 @@ The runtime classifies every tool call as high / medium / low severity (`td_crea
 
 ### Failure recovery hints
 
-When a tool returns `{"error": ...}` whose message matches one of 10 registered patterns, the dispatcher attaches a `recovery_hint` field with an actionable next step. The agent sees both the error and the hint, so it routes differently on the next turn instead of retrying the same failed call.
+When a tool returns `{"error": ...}` whose message matches one of 14 registered patterns, the dispatcher attaches a `recovery_hint` field with an actionable next step. The agent sees both the error and the hint, so it routes differently on the next turn instead of retrying the same failed call.
 
 | Error pattern | Hint suggests |
 |---|---|
@@ -303,8 +303,18 @@ When a tool returns `{"error": ...}` whose message matches one of 10 registered 
 | `Module .* not found` / `No module named` | Likely a stale .tox; rebuild |
 | `Permission denied` / `read-only file system` / `EACCES` | Check `~/.tdpilot-api/` ownership |
 | `timed out` / `TimeoutError` | Narrower query, check Cooking Info for stuck operators |
+| `'td.Par' object has no attribute 'rawVal'` (v2.1.1) | Use `par.eval` / `par.val` / `par.expr` (`rawVal` was removed after TD-2022) |
+| `'td.renderTOP' object has no attribute '(cooking|numCooks|xres|yres)'` (v2.1.1) | Use `.par.resolutionw/h`, `.cookCount`, `.cookTime` |
+| `'tdu.Matrix' object has no attribute 'translation'` (v2.1.1) | Use `.tx` / `.ty` / `.tz` or `.decompose()` — there is no `.translation` field |
+| `'td.ParCollection' object has no attribute 'children'` (v2.1.1) | `op.children` for child operators; `op.pars(page=...)` to iterate parameters |
 
 Patterns are deliberately narrow to avoid false positives. New patterns can be added in `td_component/tdpilot_api_recovery.py`.
+
+### Paused-TD UX hint (v2.1.1, standalone only)
+
+When TD playback is paused (`me.time.play = False`), TD's `onFrameStart` callback does not fire — and the standalone agent's `CookThreadDispatcher` pumps tool-call results from `onFrameStart`. Pre-2.1.1 every tool call would block the full 60s `DEFAULT_TOOL_TIMEOUT` and the agent would falsely declare "TouchDesigner is unresponsive", telling the user to restart TD when one keypress was the actual fix.
+
+v2.1.1 adds a soft `EV_HINT(kind="paused_td")` event at turn start: "TouchDesigner playback is paused — tool calls will time out after 60s. Press the spacebar in TD (or the play button in the timeline) to resume cook-thread tool dispatch." The check is non-blocking — the worker still spawns and your message still reaches the model, so debugging with TD paused stays possible; you just see the explanation upfront instead of after waiting through 60 seconds of wedged calls. Architectural fix (move the pump off `onFrameStart`) is tracked separately as tech debt.
 
 ### `tool_batch`
 
