@@ -345,6 +345,23 @@ def _build_info_text(repo_root, export_path):
     )
 
 
+def _python_safe_info(text):
+    """Wrap info-banner text in a Python triple-quoted string literal so the
+    textDAT compiles cleanly under TD's default Python parser. Without this,
+    an ISO-8601 timestamp like ``2026-05-08T15:38:42`` is parsed as
+    ``2026 - 05 - 08T...`` and ``05`` is rejected as an invalid decimal-with-
+    leading-zero literal — the COMP shows a red error indicator for what is
+    purely a banner. Wrapping turns the body into a module-level string
+    literal (a no-op pseudo-docstring) that TD compiles without complaint.
+
+    Idempotent: if text is already triple-quote-wrapped, returns it unchanged.
+    """
+    stripped = text.strip()
+    if stripped.startswith('"""') and stripped.endswith('"""'):
+        return text
+    return '"""\n' + text.rstrip("\n") + '\n"""\n'
+
+
 def _reset_or_create_comp(parent, name):
     existing = parent.op(name)
     if existing is not None and OVERWRITE_COMPONENT:
@@ -399,7 +416,9 @@ def _populate_component(comp, callbacks_code, event_emitter_code, ws_callbacks_c
     callbacks.text = callbacks_code
     ws_callbacks.text = ws_callbacks_code
     event_emitter.text = event_emitter_code
-    info.text = info_text
+    # Wrap banner content so TD's Python compile-on-access doesn't choke on
+    # the ISO timestamps. See _python_safe_info() for the full rationale.
+    info.text = _python_safe_info(info_text)
     state_cache.text = state_cache_code
 
     _configure_websocket_dat(ws_client)
