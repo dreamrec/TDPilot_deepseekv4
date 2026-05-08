@@ -1,5 +1,104 @@
 # Changelog
 
+## 1.7.2 - 2026-05-08
+
+**Skills hygiene + content currency.** Closes the audit's three skill-
+related findings (P2 #4, P3 #5, P3 #6). All changes are on the
+standalone variant; the CLI bridge is unaffected at the source level
+(rebuilds only to refresh `API_VERSION`).
+
+### [P3] YAML frontmatter validation, surfaced via `td_skill_validate`
+
+Pre-1.7.2 `tdpilot_api_skills._parse_frontmatter` was a one-off
+custom parser that silently swallowed bad input — a typo in a user
+skill made the entry vanish from `td_skill_list` with no error
+surfaced. Now:
+
+  - Frontmatter parses through `yaml.safe_load` (PyYAML is already a
+    dependency) with explicit field validation.
+  - Invalid skills are kept in `td_skill_list` (with `valid=false` +
+    a `validation_errors` list of human-readable messages) so the
+    user sees what's broken.
+  - Invalid skills are filtered out of trigger matching, auto-load,
+    and the system-prompt index — they never feed into the agent's
+    context.
+  - New `td_skill_validate` tool runs validation explicitly, with
+    optional `name` to validate one skill or omitted to list every
+    invalid skill at once.
+
+This brings the standalone tool count from **90 → 91** (sync_counts
+auto-updates the docs; new canonical surface in
+`tdpilot_api_schema_map.py`).
+
+### [P3] Trigger semantics — word-boundary regex for ALL lengths
+
+Pre-1.7.2 trigger matching was substring-based for any trigger >= 5
+chars, so `"don't optimize this"` activated the performance skill
+because `optimize` substring-matched. 1.7.2 uses word-boundary regex
+(`\boptimize\b`) for every trigger regardless of length. Short
+triggers retain the same behaviour they already had.
+
+### [P2] Bundled skills explicitly declare `surface: standalone`
+
+Audit P2 #4 — every shipped skill now has a `surface` field
+(standalone | cli | both) so a user running both the standalone .tox
+AND the Claude Code plugin can see at a glance which one a skill
+applies to. Validated as part of `_validate_skill_meta`. Default is
+`both` when omitted.
+
+### [P3] `td_component/skills/popx-mode.md` refreshed for v1.7.0 / TD 2025.32820
+
+Pre-1.7.2 the skill referenced TD `2025.32460` while v1.7.0 actually
+targets `2025.32820`. The skill now:
+
+  - References the correct build (2025.32820, May 2026).
+  - Lists the new native POPs from this build: `tracePOP`,
+    `triangulatePOP`, `dmxFixturePOP`, `dmxOutPOP`, `alembicOutPOP`,
+    `fileOutPOP`, `pointFileInPOP`.
+  - Calls out the **Polygonize POP migration trap** — Polygonize POP
+    is now 3D-only; for 2D inputs the agent must use Trace POP.
+  - Points the agent at `td_get_release_delta` and
+    `td_get_build_compatibility` for build-aware capability checks.
+
+### [P3] `td_component/skills/performance-mode.md` — inspect first, don't memorise param names
+
+Pre-1.7.2 the skill cargo-culted `cookpulsewhennotviewed=False` as a
+universal recipe, but that param only exists on some TOPs and is
+misleading on CHOP perf issues. Now it teaches:
+
+  - **Inspect first** via `td_get_params({page: 'Common'})`.
+  - **Read back the param** after setting to confirm — TD silently
+    ignores unknown param writes in some builds.
+  - **Caveats `td_screenshot`** during perf debugging — screenshots
+    trigger a cook on the screenshotted TOP, skewing measurements.
+
+### Tests
+
+  - `tests/test_skill_validation.py` — 20 tests covering the new YAML
+    parser, validation rules, word-boundary trigger semantics,
+    invalid-skills-still-listed behaviour, and the new
+    `td_skill_validate` handler.
+  - `tests/test_skill_content.py` — 10 tests asserting the bundled
+    skills reference `2025.32820`, mention the new native POPs,
+    document the Polygonize migration trap, and counsel the
+    inspect-first pattern.
+
+Suite total: **1208 passed** (+30 new since 1.7.1, +67 vs 1.7.0), 12
+deselected.
+
+### Migration
+
+`~/.tdpilot-api/skills/*.md` files that previously parsed loosely
+through the custom parser may now surface validation warnings if they
+omitted required fields (e.g. `name`). The skills aren't dropped —
+they show up with `valid: false` in `td_skill_list` along with the
+specific errors. Run `td_skill_validate` to see them all at once.
+
+The `.tox` rebuild already documented in 1.7.1 carries these changes
+forward — no additional manual step.
+
+---
+
 ## 1.7.1 - 2026-05-08
 
 **Security + chat-state hotfix.** Closes the cross-origin CSRF gap on

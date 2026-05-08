@@ -1,4 +1,4 @@
-# TDPilot v1.7.1 — TouchDesigner AI Assistant Plugin
+# TDPilot v1.7.2 — TouchDesigner AI Assistant Plugin
 
 This plugin installs the **DPSK4 (Claude Code CLI) variant** of TDPilot.
 Two variants ship in the same repo:
