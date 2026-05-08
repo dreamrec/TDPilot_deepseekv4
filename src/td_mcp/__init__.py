@@ -2,17 +2,13 @@
 
 __version__ = "1.10.0"
 
-# v1.4.7: renamed from ``tdpilot_v1_3.tox`` (legacy v1.3-era filename) to a
-# version-less, stable filename. The TD component's API_VERSION lives inside
-# the .tox itself (see ``td_component/callbacks/_header.py`` since v1.8.3,
-# previously ``mcp_webserver_callbacks.py``), so the filename doesn't need
-# to carry a version marker — and the old ``v1_3`` was
-# misleading as soon as v1.4 shipped. LEGACY_TOX_FILENAMES is consulted as a
-# fallback so existing v1.3/v1.4.x installs (where ``~/.tdpilot-dpsk4/td_component/``
-# still holds the old name) keep working until their next ``install.sh`` run
-# copies the renamed file over.
+# Canonical .tox filename. The TD component's API_VERSION lives inside the
+# .tox itself (see ``td_component/callbacks/_header.py`` since v1.8.3), so
+# the filename doesn't carry a version marker. v2.0 (PR-26) removed the
+# legacy ``tdpilot_v1_3.tox`` fallback that pre-v1.4.7 installs relied on;
+# users on those vintage installs run ``npx tdpilot-dpsk4 install`` once to
+# refresh.
 TOX_FILENAME = "tdpilot-dpsk4.tox"
-LEGACY_TOX_FILENAMES: tuple[str, ...] = ("tdpilot_v1_3.tox",)
 
 
 def normalize_transport(raw: str) -> str:
