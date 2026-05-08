@@ -259,7 +259,19 @@ def onHTTPRequest(webServerDAT, request, response):
         # authenticate subsequent fetches + the WS handshake.
         html_dat = _comp().op("tdpilot_api_chat_html")
         body = html_dat.text if html_dat is not None else "<h1>chat html DAT missing</h1>"
-        body = body.replace(_TOKEN_TEMPLATE_MARKER, _session_token())
+        # ``count=1`` (1.8.2 fix) — the placeholder string ``__TDPILOT_TOKEN__``
+        # appears TWICE in the HTML: once in the meta-tag content (the
+        # legitimate substitution target, line ~14) and once in the JS
+        # sentinel ``TOKEN !== '__TDPILOT_TOKEN__'`` (line ~723) that the
+        # client uses to detect a file:// load.
+        # Without count=1, the global replace rewrites the JS comparison
+        # to ``TOKEN !== <real-token>`` — and since TOKEN equals the real
+        # token, ``HAS_VALID_TOKEN`` becomes always false and ``send()``
+        # refuses to call /send with a "No session token in this page"
+        # error. This regression was latent since v1.7.1 and surfaced
+        # right after the v1.8.1 .tox rebuild because every prior session
+        # had been talking to a chat tab loaded BEFORE the bug shipped.
+        body = body.replace(_TOKEN_TEMPLATE_MARKER, _session_token(), 1)
         _cors(response, request_origin)
         response["statusCode"] = 200
         response["statusReason"] = "OK"
