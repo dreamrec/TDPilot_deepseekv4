@@ -98,6 +98,10 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    /* PR-27: keeps .rhs (and the font toggle that follows it as a
+       sibling) clustered at the right edge in the 3-child status bar.
+       No-op for the pre-PR-27 2-child layout. */
+    margin-left: auto;
   }
   #status-bar .rhs::before {
     content: "[";
@@ -145,6 +149,42 @@
     visibility: hidden;
   }
   #status-bar.working .cursor { visibility: visible; }
+  /* PR-27 (v2.0) — chat font-size toggle. Two-state glyph control
+     (`a` / `A`) at the far right of the status bar; the active size
+     lights up in --accent, the inactive in --muted. Click swaps the
+     size class on <html>; the body has no other knowledge of the
+     toggle, so the rest of the chat keeps its existing scale.
+     Defaults to small (today's behavior) so existing users see no
+     change unless they opt in. */
+  #font-toggle {
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--muted);
+    font-family: inherit;
+    padding: 1px 7px 2px;
+    margin-left: 10px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 3px;
+    letter-spacing: 0;        /* override status-bar uppercase tracking */
+    text-transform: none;     /* lowercase 'a' must stay lowercase */
+    line-height: 1;
+  }
+  #font-toggle:hover {
+    border-color: var(--accent);
+    background: var(--bg-3);
+  }
+  #font-toggle .fs-a { font-size: 9px;  color: var(--muted); }
+  #font-toggle .fs-A { font-size: 13px; color: var(--muted); }
+  :root.fs-small #font-toggle .fs-a { color: var(--accent); }
+  :root.fs-large #font-toggle .fs-A { color: var(--accent); }
+  /* Scales chat content + input only — chrome (status bar, buttons,
+     modal headers, badges) stays fixed at its designed scale so the
+     layout doesn't reflow awkwardly. Tool-call summaries inherit
+     from #history so they scale automatically. */
+  :root.fs-large #history { font-size: 17px; }
+  :root.fs-large #input   { font-size: 17px; }
   @keyframes blink {
     0%, 49% { opacity: 1; }
     50%, 100% { opacity: 0; }
@@ -670,6 +710,11 @@
     <span class="rhs">
       <span id="status-text">idle</span><span id="model-badge"></span><span id="token-meter"></span><span class="cursor">█</span>
     </span>
+    <button id="font-toggle" type="button"
+            title="Toggle chat font size (small / large)"
+            aria-label="Toggle chat font size">
+      <span class="fs-a">a</span><span class="fs-A">A</span>
+    </button>
   </div>
   <!--
     History is intentionally empty on initial DOM. The IIFE injects the
@@ -758,6 +803,27 @@
   const $modelBadge = document.getElementById('model-badge');
   const $tokenMeter = document.getElementById('token-meter');
   const $scrollJump = document.getElementById('scroll-jump');
+  const $fontToggle = document.getElementById('font-toggle');
+
+  // PR-27 (v2.0) — chat font-size toggle. Two states; the active one
+  // is reflected as a class on <html>. Persisted per-browser via
+  // localStorage so the choice survives reloads. Restored before any
+  // history rendering happens so users with a saved 'large' setting
+  // never see a small-text flash on page load.
+  const FONT_KEY = 'tdpilot.fontMode';
+  function applyFontMode(mode) {
+    if (mode !== 'small' && mode !== 'large') mode = 'small';
+    document.documentElement.classList.remove('fs-small', 'fs-large');
+    document.documentElement.classList.add('fs-' + mode);
+    try { localStorage.setItem(FONT_KEY, mode); } catch (_) { /* private mode */ }
+  }
+  let _savedFontMode = 'small';
+  try { _savedFontMode = localStorage.getItem(FONT_KEY) || 'small'; } catch (_) { /* private mode */ }
+  applyFontMode(_savedFontMode);
+  $fontToggle.addEventListener('click', () => {
+    const cur = document.documentElement.classList.contains('fs-large') ? 'large' : 'small';
+    applyFontMode(cur === 'large' ? 'small' : 'large');
+  });
 
   // Render the initial welcome from the same template fullSync uses, so
   // the wizard DOM is guaranteed present.
@@ -1820,6 +1886,19 @@
     if (cmd && e.key === '/') {
       e.preventDefault();
       $input.focus();
+      return;
+    }
+    // PR-27 (v2.0) — Cmd/Ctrl + `+` / `-` toggles chat font size
+    // independently of the browser-native zoom (which still works).
+    // `=` matches `+` for the unshifted keycap on US/EU layouts.
+    if (cmd && (e.key === '+' || e.key === '=')) {
+      e.preventDefault();
+      applyFontMode('large');
+      return;
+    }
+    if (cmd && e.key === '-') {
+      e.preventDefault();
+      applyFontMode('small');
       return;
     }
     // End — jump to bottom of history. Useful after scrolling up to
