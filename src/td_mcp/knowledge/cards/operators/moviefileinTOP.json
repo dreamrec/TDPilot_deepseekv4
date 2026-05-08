@@ -4,19 +4,22 @@
   "family": "TOP",
   "display_name": "Movie File In TOP",
   "docs_url": "https://docs.derivative.ca/Movie_File_In_TOP",
-  "summary": "Loads image or video files (PNG, JPG, EXR, MP4, HAP, NotchLC, etc.) from disk into a texture. Supports image sequences and looping.",
+  "summary": "Loads image or video files (PNG, JPG, EXR, MP4, HAP, NotchLC, KTX2, etc.) from disk into a texture. Supports image sequences and looping.",
   "key_params": [
     {"name": "file", "type": "String", "note": "File path to the image or video file"},
     {"name": "play", "type": "Toggle", "note": "Enable/disable playback for video files"},
-    {"name": "index", "type": "Float", "note": "Frame index for image sequences or seek position in video"},
+    {"name": "index", "type": "Float", "note": "Frame index for image sequences or seek position in video — negative indices count from the end (2025.30000+)"},
     {"name": "reload", "type": "Toggle", "note": "Pulse to force-reload the file from disk"},
-    {"name": "preread", "type": "Toggle", "note": "Pre-read frames ahead for smoother playback"}
+    {"name": "preread", "type": "Toggle", "note": "Pre-read frames ahead for smoother playback"},
+    {"name": "predownload", "type": "Toggle", "note": "2025.30000+: download a remote/HTTP movie fully before playback starts"}
   ],
   "common_gotchas": [
     "HAP and NotchLC codecs offer GPU-decoded playback and are vastly faster than H.264 for real-time use.",
-    "Large image sequences can consume significant RAM — use pre-read carefully and monitor memory."
+    "Large image sequences can consume significant RAM — use pre-read carefully and monitor memory.",
+    "2025.30000+: .ktx (KTX2) format is now supported for compressed pre-baked textures.",
+    "Negative index values (2025.30000+) seek from the end — handy for cueing the last frame of a sequence without knowing the count."
   ],
   "related_snippets": [],
   "build_relevance": "2020.20000+",
-  "last_verified": "2026-03-14"
+  "last_verified": "2026-05-08"
 }

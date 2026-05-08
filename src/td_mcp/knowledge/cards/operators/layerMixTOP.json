@@ -1,0 +1,24 @@
+{
+  "card_type": "operator",
+  "op_type": "layerMixTOP",
+  "family": "TOP",
+  "display_name": "Layer Mix TOP",
+  "docs_url": "https://docs.derivative.ca/Layer_Mix_TOP",
+  "summary": "Composites unlimited image layers in a stack with per-layer blend mode, opacity, and adjustment controls. Replaces the typical chain of multiple Composite TOPs for stacked compositing.",
+  "key_params": [
+    {"name": "numlayers", "type": "Int", "note": "Number of layer inputs to expose (each becomes layer1, layer2, ...)"},
+    {"name": "layerN_blendmode", "type": "Menu", "note": "Per-layer blend mode (Normal, Add, Multiply, Screen, Overlay, etc.)"},
+    {"name": "layerN_opacity", "type": "Float", "note": "Per-layer opacity (0–1)"},
+    {"name": "layerN_enabled", "type": "Toggle", "note": "Toggle a layer on/off without disconnecting it"},
+    {"name": "layerN_adjust", "type": "Toggle", "note": "Reveal per-layer adjustment params (brightness, contrast, hue, etc.)"},
+    {"name": "background", "type": "Color", "note": "Background plate behind the entire stack"}
+  ],
+  "common_gotchas": [
+    "Resolution comes from the first connected layer by default — set `outputresolution` explicitly if downstream nodes assume a fixed size.",
+    "Migration: dependent networks that used a chain of Composite TOPs may calculate resolution differently after switching to Layer Mix TOP.",
+    "Disabling a layer with the toggle is faster than rewiring — prefer it for live performance."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}

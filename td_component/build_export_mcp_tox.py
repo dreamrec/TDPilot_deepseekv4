@@ -53,7 +53,7 @@ def _get_version(repo_root):
     """Read the version from pyproject.toml."""
     pyproject_path = os.path.join(repo_root, "pyproject.toml")
     if os.path.isfile(pyproject_path):
-        with open(pyproject_path, "r") as f:
+        with open(pyproject_path, "r", encoding="utf-8") as f:
             for line in f:
                 stripped = line.strip()
                 if stripped.startswith("version") and "=" in stripped:
@@ -88,7 +88,7 @@ def _write_tox_source_hash(repo_root):
         "source_files": list(_TOX_SOURCE_FILES),
     }
     out_path = os.path.join(repo_root, "td_component", ".tox-source-hash.json")
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     print("[TDPilot] Wrote {}".format(out_path))
 

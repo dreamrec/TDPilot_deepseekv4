@@ -1,0 +1,23 @@
+{
+  "card_type": "operator",
+  "op_type": "dmxOutPOP",
+  "family": "POP",
+  "display_name": "DMX Out POP",
+  "docs_url": "https://docs.derivative.ca/DMX_Out_POP",
+  "summary": "Sends DMX data to lighting hardware over Art-Net, sACN, KiNET, or FTDI USB. Reads channel/universe layout from one or more upstream DMX Fixture POPs.",
+  "key_params": [
+    {"name": "protocol", "type": "Menu", "note": "Art-Net / sACN / KiNET / FTDI"},
+    {"name": "netinterface", "type": "String", "note": "Network interface for IP-based protocols"},
+    {"name": "destination", "type": "String", "note": "Target IP / multicast / device for the chosen protocol"},
+    {"name": "active", "type": "Toggle", "note": "Enable transmission"},
+    {"name": "fps", "type": "Int", "note": "Output frame rate (typical: 40)"}
+  ],
+  "common_gotchas": [
+    "Active toggle defaults to off — nothing transmits until you enable it.",
+    "Multicast sACN needs the right NIC bound. On Windows, check Windows Defender Firewall — outgoing Art-Net/sACN must be allowed.",
+    "When using FTDI, only one TouchDesigner instance can hold the device at a time."
+  ],
+  "related_snippets": [],
+  "build_relevance": "2025.30000+",
+  "last_verified": "2026-05-08"
+}
