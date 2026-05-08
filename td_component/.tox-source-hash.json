@@ -1,6 +1,6 @@
 {
-  "tox_source_hash": "4aef95e09bf5fa4689a19abc58ce1e257bf60f3dd9df7348b4f1aff758becf7a",
-  "built_at": "2026-05-08T15:38:42.723144+00:00",
+  "tox_source_hash": "72ac1511c8ea57fa8a37b4ce1e580039856ecf6a9091fa13fc1e160d19d5e144",
+  "built_at": "2026-05-08T18:23:31.396635+00:00",
   "source_files": [
     "td_component/callbacks/_composer.py",
     "td_component/callbacks/__init__.py",
@@ -25,6 +25,8 @@
     "td_component/installer_exec.py",
     "td_component/autostart.py",
     "td_component/renderer.py",
-    "td_component/state_cache.py"
+    "td_component/state_cache.py",
+    "td_component/build_export_mcp_tox.py",
+    "td_component/build_tdpilot_tox.py"
   ]
 }
