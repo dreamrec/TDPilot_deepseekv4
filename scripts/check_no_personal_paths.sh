@@ -39,10 +39,12 @@ EXCLUDES=(
   # they get regenerated per-clone and don't leak intent.
   ':!uv.lock'
   ':!npm/package-lock.json'
-  # .mcp.json is a local MCP config template — it necessarily contains an
-  # absolute --directory path so uv can find the project. Users replace it
-  # with their own clone path.
-  ':!.mcp.json'
+  # v2.0.1 (security audit): .mcp.json is now a portable template using
+  # ``${TDPILOT_ROOT}`` (matching .mcp.json.claude-desktop-template). The
+  # leak-check previously excluded it because the older committed form
+  # held the maintainer's absolute /Users/... path. With the template
+  # form there is nothing personal to skip — drift gets caught from now
+  # on.
 )
 
 if git grep -nE "$PATTERN" -- "${EXCLUDES[@]}" 2>/dev/null; then

@@ -54,6 +54,16 @@ SOURCE_FILES = (
     # v1.6.7 — state_cache module that the renderer reads from. Was missing
     # from main from v1.5.6 through v1.6.6 (see CHANGELOG v1.6.7).
     "td_component/state_cache.py",
+    # v2.0.1 (security audit P2): the generator scripts shape the .tox
+    # body even though they aren't embedded as textDATs. Pre-2.0.1 a
+    # change to e.g. `_populate_component()` (the function that creates
+    # the info textDAT and assigns its text) could ship a stale .tox
+    # while the freshness gate still reported clean. The PR #19
+    # info-textDAT fix is exactly that class. Tracking the generator
+    # bytes alongside the embedded runtime closes the loop: any change
+    # to how the .tox is built forces a rebuild signal too.
+    "td_component/build_export_mcp_tox.py",
+    "td_component/build_tdpilot_tox.py",
 )
 HASH_FILE = ROOT / "td_component" / ".tox-source-hash.json"
 TOX_FILE = ROOT / "td_component" / "tdpilot-dpsk4.tox"

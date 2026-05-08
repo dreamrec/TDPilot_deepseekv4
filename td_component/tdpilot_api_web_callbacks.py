@@ -467,12 +467,37 @@ def _ws_token_from_uri(uri: str) -> str:
     return ""
 
 
+def _redact_uri(uri: str) -> str:
+    """Strip the per-launch session token from a URI before logging.
+
+    v2.0.1 security audit: the WS handshake URI carries
+    ``?t=<token>`` because browsers can't set custom WS headers, and
+    the previous handler logged ``uri={uri!r}`` on every open + every
+    rejected handshake. That landed the token in the TD console log
+    where another local user (or a screen-sharing session) could read
+    it and impersonate the chat client. Now we redact the ``t``
+    parameter to ``t=<redacted>`` before logging; the rest of the URI
+    is preserved so debugging stays useful.
+    """
+    if not uri or "?" not in uri:
+        return uri or ""
+    base, qs = uri.split("?", 1)
+    parts = []
+    for kv in qs.split("&"):
+        if kv.startswith("t="):
+            parts.append("t=<redacted>")
+        else:
+            parts.append(kv)
+    return base + "?" + "&".join(parts)
+
+
 def onWebSocketOpen(webServerDAT, client, uri):
+    redacted = _redact_uri(uri)
     if not _insecure_mode():
         expected = _session_token()
         got = _ws_token_from_uri(uri)
         if not expected or not got or not hmac.compare_digest(got, expected):
-            print(f"[tdpilot_API/web] WS open REJECTED (bad/missing token) uri={uri!r}")
+            print(f"[tdpilot_API/web] WS open REJECTED (bad/missing token) uri={redacted!r}")
             try:
                 webServerDAT.webSocketSendText(
                     client,
@@ -483,7 +508,7 @@ def onWebSocketOpen(webServerDAT, client, uri):
             return
     clients = _ws_clients()
     clients.add(client)
-    print(f"[tdpilot_API/web] WS open uri={uri!r} total={len(clients)}")
+    print(f"[tdpilot_API/web] WS open uri={redacted!r} total={len(clients)}")
     _send_full_history(webServerDAT, client)
 
 
