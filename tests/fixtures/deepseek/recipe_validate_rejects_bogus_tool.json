@@ -1,0 +1,586 @@
+{
+  "scenario": "recipe_validate_rejects_bogus_tool",
+  "captured_at": "2026-05-08T12:07:30+00:00",
+  "model": "deepseek-v4-pro",
+  "model_tier": "auto",
+  "prompts": [
+    "Validate this recipe: replay=[{tool: 'fake_tool_that_does_not_exist', args: {}}]. Use td_validate_recipe and tell me what's wrong."
+  ],
+  "tool_calls_observed": [
+    {
+      "name": "td_validate_recipe",
+      "args": {
+        "replay": [
+          {
+            "tool": "fake_tool_that_does_not_exist",
+            "args": {}
+          }
+        ]
+      }
+    }
+  ],
+  "final_text_concatenated": "Here's what the validation found:\n\n**Result: ❌ Invalid**\n\n**Error:** `\"Unknown tool: fake_tool_that_does_not_exist\"`\n\n**Explanation:**\n\nThe recipe's replay sequence references a tool named `fake_tool_that_does_not_exist`, but that tool is **not recognized** by the system. Only tools that are actually available in the environment can be used in a recipe's replay steps.\n\nIf you'd like to check which tools are available, you can examine the function list I have access to — for example, tools like `td_create_node`, `td_delete_node`, `td_get_info`, `knowledge_search`, `memory_save`, etc.\n\nWould you like me to suggest a corrected version using a valid tool?",
+  "exchanges": [
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Validate this recipe: replay=[{tool: 'fake_tool_that_does_not_exist', args: {}}]. Use td_validate_recipe and tell me what's wrong."
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "b968dd2e-a24c-4875-a8ed-5204e3ab1401",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants me to validate a recipe using `td_validate_recipe`. Let me do that.",
+            "signature": "b968dd2e-a24c-4875-a8ed-5204e3ab1401"
+          },
+          {
+            "type": "tool_use",
+            "id": "call_00_ozAcQojnHKtvyum8aC0p8580",
+            "name": "td_validate_recipe",
+            "input": {
+              "replay": [
+                {
+                  "tool": "fake_tool_that_does_not_exist",
+                  "args": {}
+                }
+              ]
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 109,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 896,
+          "output_tokens": 90,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Validate this recipe: replay=[{tool: 'fake_tool_that_does_not_exist', args: {}}]. Use td_validate_recipe and tell me what's wrong."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user wants me to validate a recipe using `td_validate_recipe`. Let me do that.",
+                "signature": "b968dd2e-a24c-4875-a8ed-5204e3ab1401"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_00_ozAcQojnHKtvyum8aC0p8580",
+                "name": "td_validate_recipe",
+                "input": {
+                  "replay": [
+                    {
+                      "tool": "fake_tool_that_does_not_exist",
+                      "args": {}
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_00_ozAcQojnHKtvyum8aC0p8580",
+                "content": "{\"valid\": false, \"errors\": [\"Unknown tool: fake_tool_that_does_not_exist\"]}",
+                "is_error": false
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "83137279-eb86-4336-8c2e-824d02ee8d39",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The validation result clearly shows the issue. Let me explain it to the user.",
+            "signature": "83137279-eb86-4336-8c2e-824d02ee8d39"
+          },
+          {
+            "type": "text",
+            "text": "Here's what the validation found:\n\n**Result: ❌ Invalid**\n\n**Error:** `\"Unknown tool: fake_tool_that_does_not_exist\"`\n\n**Explanation:**\n\nThe recipe's replay sequence references a tool named `fake_tool_that_does_not_exist`, but that tool is **not recognized** by the system. Only tools that are actually available in the environment can be used in a recipe's replay steps.\n\nIf you'd like to check which tools are available, you can examine the function list I have access to — for example, tools like `td_create_node`, `td_delete_node`, `td_get_info`, `knowledge_search`, `memory_save`, etc.\n\nWould you like me to suggest a corrected version using a valid tool?"
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 104,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1024,
+          "output_tokens": 173,
+          "service_tier": "standard"
+        }
+      }
+    }
+  ]
+}

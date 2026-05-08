@@ -1,0 +1,1248 @@
+{
+  "scenario": "memory_save_and_recall",
+  "captured_at": "2026-05-08T12:08:13+00:00",
+  "model": "deepseek-v4-pro",
+  "model_tier": "auto",
+  "prompts": [
+    "Use memory_save to save a memory. name=eval_phase42_marker, type=feedback, description='Phase 4.2 eval marker', content='hello phase 4.2'. Confirm when saved.",
+    "Recall the memory called eval_phase42_marker (use memory_get) and quote a few words from its content."
+  ],
+  "tool_calls_observed": [
+    {
+      "name": "memory_save",
+      "args": {
+        "name": "eval_phase42_marker",
+        "type": "feedback",
+        "description": "Phase 4.2 eval marker",
+        "content": "hello phase 4.2"
+      }
+    },
+    {
+      "name": "memory_get",
+      "args": {
+        "name": "eval_phase42_marker"
+      }
+    }
+  ],
+  "final_text_concatenated": "Memory saved successfully! ✅ Here are the details:\n\n| Field | Value |\n|---|---|\n| **Name** | `eval_phase42_marker` |\n| **Type** | `feedback` |\n| **Description** | Phase 4.2 eval marker |\n| **Content** | hello phase 4.2 |\n\nThe memory entry has been persisted and is ready to be retrieved anytime with `memory_get`.\nHere's the recalled memory:\n\n> **\"hello phase 4.2\"**\n\nThat's the full content of the `eval_phase42_marker` memory — a short and sweet greeting from Phase 4.2! 👋",
+  "exchanges": [
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Use memory_save to save a memory. name=eval_phase42_marker, type=feedback, description='Phase 4.2 eval marker', content='hello phase 4.2'. Confirm when saved."
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "549f9b3e-94f1-4232-ad44-0bc79d9d8881",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants me to save a memory using the memory_save tool with the provided parameters.",
+            "signature": "549f9b3e-94f1-4232-ad44-0bc79d9d8881"
+          },
+          {
+            "type": "tool_use",
+            "id": "call_00_WwdadgImjNcnhT9nU4Vc3671",
+            "name": "memory_save",
+            "input": {
+              "name": "eval_phase42_marker",
+              "type": "feedback",
+              "description": "Phase 4.2 eval marker",
+              "content": "hello phase 4.2"
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 115,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 896,
+          "output_tokens": 128,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Use memory_save to save a memory. name=eval_phase42_marker, type=feedback, description='Phase 4.2 eval marker', content='hello phase 4.2'. Confirm when saved."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user wants me to save a memory using the memory_save tool with the provided parameters.",
+                "signature": "549f9b3e-94f1-4232-ad44-0bc79d9d8881"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_00_WwdadgImjNcnhT9nU4Vc3671",
+                "name": "memory_save",
+                "input": {
+                  "name": "eval_phase42_marker",
+                  "type": "feedback",
+                  "description": "Phase 4.2 eval marker",
+                  "content": "hello phase 4.2"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_00_WwdadgImjNcnhT9nU4Vc3671",
+                "content": "{\"saved\": true, \"name\": \"eval_phase42_marker\", \"type\": \"feedback\"}",
+                "is_error": false
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "9f3aa857-6778-4819-8197-436c90bd3d24",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The memory was saved successfully.",
+            "signature": "9f3aa857-6778-4819-8197-436c90bd3d24"
+          },
+          {
+            "type": "text",
+            "text": "Memory saved successfully! ✅ Here are the details:\n\n| Field | Value |\n|---|---|\n| **Name** | `eval_phase42_marker` |\n| **Type** | `feedback` |\n| **Description** | Phase 4.2 eval marker |\n| **Content** | hello phase 4.2 |\n\nThe memory entry has been persisted and is ready to be retrieved anytime with `memory_get`."
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 150,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1024,
+          "output_tokens": 90,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Use memory_save to save a memory. name=eval_phase42_marker, type=feedback, description='Phase 4.2 eval marker', content='hello phase 4.2'. Confirm when saved."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user wants me to save a memory using the memory_save tool with the provided parameters.",
+                "signature": "549f9b3e-94f1-4232-ad44-0bc79d9d8881"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_00_WwdadgImjNcnhT9nU4Vc3671",
+                "name": "memory_save",
+                "input": {
+                  "name": "eval_phase42_marker",
+                  "type": "feedback",
+                  "description": "Phase 4.2 eval marker",
+                  "content": "hello phase 4.2"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_00_WwdadgImjNcnhT9nU4Vc3671",
+                "content": "{\"saved\": true, \"name\": \"eval_phase42_marker\", \"type\": \"feedback\"}",
+                "is_error": false
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The memory was saved successfully.",
+                "signature": "9f3aa857-6778-4819-8197-436c90bd3d24"
+              },
+              {
+                "type": "text",
+                "text": "Memory saved successfully! ✅ Here are the details:\n\n| Field | Value |\n|---|---|\n| **Name** | `eval_phase42_marker` |\n| **Type** | `feedback` |\n| **Description** | Phase 4.2 eval marker |\n| **Content** | hello phase 4.2 |\n\nThe memory entry has been persisted and is ready to be retrieved anytime with `memory_get`."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Recall the memory called eval_phase42_marker (use memory_get) and quote a few words from its content."
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "06b6ece7-26f4-42cc-a1b7-352b558a88da",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants me to retrieve the memory entry \"eval_phase42_marker\" using memory_get, then quote a few words from its content.",
+            "signature": "06b6ece7-26f4-42cc-a1b7-352b558a88da"
+          },
+          {
+            "type": "tool_use",
+            "id": "call_00_PFmqotUi2XvNgrMj2YJ73523",
+            "name": "memory_get",
+            "input": {
+              "name": "eval_phase42_marker"
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 140,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1152,
+          "output_tokens": 79,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Use memory_save to save a memory. name=eval_phase42_marker, type=feedback, description='Phase 4.2 eval marker', content='hello phase 4.2'. Confirm when saved."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user wants me to save a memory using the memory_save tool with the provided parameters.",
+                "signature": "549f9b3e-94f1-4232-ad44-0bc79d9d8881"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_00_WwdadgImjNcnhT9nU4Vc3671",
+                "name": "memory_save",
+                "input": {
+                  "name": "eval_phase42_marker",
+                  "type": "feedback",
+                  "description": "Phase 4.2 eval marker",
+                  "content": "hello phase 4.2"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_00_WwdadgImjNcnhT9nU4Vc3671",
+                "content": "{\"saved\": true, \"name\": \"eval_phase42_marker\", \"type\": \"feedback\"}",
+                "is_error": false
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The memory was saved successfully.",
+                "signature": "9f3aa857-6778-4819-8197-436c90bd3d24"
+              },
+              {
+                "type": "text",
+                "text": "Memory saved successfully! ✅ Here are the details:\n\n| Field | Value |\n|---|---|\n| **Name** | `eval_phase42_marker` |\n| **Type** | `feedback` |\n| **Description** | Phase 4.2 eval marker |\n| **Content** | hello phase 4.2 |\n\nThe memory entry has been persisted and is ready to be retrieved anytime with `memory_get`."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Recall the memory called eval_phase42_marker (use memory_get) and quote a few words from its content."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user wants me to retrieve the memory entry \"eval_phase42_marker\" using memory_get, then quote a few words from its content.",
+                "signature": "06b6ece7-26f4-42cc-a1b7-352b558a88da"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_00_PFmqotUi2XvNgrMj2YJ73523",
+                "name": "memory_get",
+                "input": {
+                  "name": "eval_phase42_marker"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_00_PFmqotUi2XvNgrMj2YJ73523",
+                "content": "{\"name\": \"eval_phase42_marker\", \"content\": \"hello phase 4.2\", \"type\": \"feedback\"}",
+                "is_error": false
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "6217445b-2a62-4182-b706-1ad136058d1a",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The memory was retrieved successfully. The content is \"hello phase 4.2\". I'll quote a few words from it.",
+            "signature": "6217445b-2a62-4182-b706-1ad136058d1a"
+          },
+          {
+            "type": "text",
+            "text": "Here's the recalled memory:\n\n> **\"hello phase 4.2\"**\n\nThat's the full content of the `eval_phase42_marker` memory — a short and sweet greeting from Phase 4.2! 👋"
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 131,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1280,
+          "output_tokens": 75,
+          "service_tier": "standard"
+        }
+      }
+    }
+  ]
+}

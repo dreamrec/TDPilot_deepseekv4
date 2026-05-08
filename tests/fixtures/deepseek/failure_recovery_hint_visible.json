@@ -1,0 +1,585 @@
+{
+  "scenario": "failure_recovery_hint_visible",
+  "captured_at": "2026-05-08T12:08:42+00:00",
+  "model": "deepseek-v4-pro",
+  "model_tier": "auto",
+  "prompts": [
+    "Try to create an operator of type 'fakeNonexistentTOP' at /project1 named eval_recovery_test. When it fails, tell me what alternative tool the error message suggests."
+  ],
+  "tool_calls_observed": [
+    {
+      "name": "td_create_node",
+      "args": {
+        "parent_path": "/project1",
+        "op_type": "fakeNonexistentTOP",
+        "name": "eval_recovery_test"
+      }
+    }
+  ],
+  "final_text_concatenated": "Let's attempt to create the fake operator and see what happens.\nAs expected, creating `fakeNonexistentTOP` fails. The error message is:\n\n> **\"Unknown operator type: fakeNonexistentTOP\"**\n\nAnd the **recovery hint** in the error suggests two alternative tools you could use:\n\n1. **`td_list_families`** — to enumerate all available operator types (so you can find a valid one)\n2. **`td_search_official_docs`** — to perform a fuzzy match search across the official TouchDesigner documentation\n\nSo if you're ever unsure about a valid operator type name, you can call `td_list_families` to see what's available, or use `td_search_official_docs` to look up similar names in the docs. Want to try either of those next?",
+  "exchanges": [
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Try to create an operator of type 'fakeNonexistentTOP' at /project1 named eval_recovery_test. When it fails, tell me what alternative tool the error message suggests."
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "44672990-10ac-4f9d-9467-b5cdec4ae8f9",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants me to try creating a nonexistent operator type to see what error message we get. Let me do that.",
+            "signature": "44672990-10ac-4f9d-9467-b5cdec4ae8f9"
+          },
+          {
+            "type": "text",
+            "text": "Let's attempt to create the fake operator and see what happens."
+          },
+          {
+            "type": "tool_use",
+            "id": "call_00_Un4lXcbbEwRtFQzQ2YQK9642",
+            "name": "td_create_node",
+            "input": {
+              "parent_path": "/project1",
+              "op_type": "fakeNonexistentTOP",
+              "name": "eval_recovery_test"
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 108,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 896,
+          "output_tokens": 125,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Try to create an operator of type 'fakeNonexistentTOP' at /project1 named eval_recovery_test. When it fails, tell me what alternative tool the error message suggests."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user wants me to try creating a nonexistent operator type to see what error message we get. Let me do that.",
+                "signature": "44672990-10ac-4f9d-9467-b5cdec4ae8f9"
+              },
+              {
+                "type": "text",
+                "text": "Let's attempt to create the fake operator and see what happens."
+              },
+              {
+                "type": "tool_use",
+                "id": "call_00_Un4lXcbbEwRtFQzQ2YQK9642",
+                "name": "td_create_node",
+                "input": {
+                  "parent_path": "/project1",
+                  "op_type": "fakeNonexistentTOP",
+                  "name": "eval_recovery_test"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_00_Un4lXcbbEwRtFQzQ2YQK9642",
+                "content": "{\"error\": \"Unknown operator type: fakeNonexistentTOP\", \"recovery_hint\": \"td_list_families to enumerate available operator types, or td_search_official_docs for fuzzy matches.\"}",
+                "is_error": true
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "a4a263c0-7235-4e77-9169-9fa7680dc4a9",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The error message gives a recovery hint suggesting two alternative tools:\n1. `td_list_families` - to enumerate available operator types\n2. `td_search_official_docs` - for fuzzy matches\n\nLet me tell the user about this.",
+            "signature": "a4a263c0-7235-4e77-9169-9fa7680dc4a9"
+          },
+          {
+            "type": "text",
+            "text": "As expected, creating `fakeNonexistentTOP` fails. The error message is:\n\n> **\"Unknown operator type: fakeNonexistentTOP\"**\n\nAnd the **recovery hint** in the error suggests two alternative tools you could use:\n\n1. **`td_list_families`** — to enumerate all available operator types (so you can find a valid one)\n2. **`td_search_official_docs`** — to perform a fuzzy match search across the official TouchDesigner documentation\n\nSo if you're ever unsure about a valid operator type name, you can call `td_list_families` to see what's available, or use `td_search_official_docs` to look up similar names in the docs. Want to try either of those next?"
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 160,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1024,
+          "output_tokens": 212,
+          "service_tier": "standard"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,574 @@
+{
+  "scenario": "knowledge_search_trust_tier",
+  "captured_at": "2026-05-08T12:07:58+00:00",
+  "model": "deepseek-v4-pro",
+  "model_tier": "auto",
+  "prompts": [
+    "Use knowledge_search with query='noise' and top_k=2. Then for the first match, tell me which corpus it came from and what its trust_tier is."
+  ],
+  "tool_calls_observed": [
+    {
+      "name": "knowledge_search",
+      "args": {
+        "query": "noise",
+        "top_k": 2
+      }
+    }
+  ],
+  "final_text_concatenated": "The search returned **1 result** (not 2, as there's only one relevant entry in the corpus). Here are the details for the first (and only) match:\n\n| Field        | Value              |\n|--------------|--------------------|\n| **Name**     | `noise_top_basics` |\n| **Corpus**   | `derivative`       |\n| **Trust Tier** | `bundled`        |\n\nSo the first match came from the **derivative** corpus (which contains official Derivative-curated content) and has a trust tier of **bundled** (indicating it's trusted, official knowledge).",
+  "exchanges": [
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Use knowledge_search with query='noise' and top_k=2. Then for the first match, tell me which corpus it came from and what its trust_tier is."
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "53390b1e-dfdf-4e33-bde2-d5cbaa8f3996",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants me to:\n1. Use knowledge_search with query='noise' and top_k=2\n2. For the first match, tell them which corpus it came from and what its trust_tier is\n\nLet me start by making the search call.",
+            "signature": "53390b1e-dfdf-4e33-bde2-d5cbaa8f3996"
+          },
+          {
+            "type": "tool_use",
+            "id": "call_00_91CFnLAwstdq6NzyyB974797",
+            "name": "knowledge_search",
+            "input": {
+              "query": "noise",
+              "top_k": 2
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 106,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 896,
+          "output_tokens": 116,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Use knowledge_search with query='noise' and top_k=2. Then for the first match, tell me which corpus it came from and what its trust_tier is."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user wants me to:\n1. Use knowledge_search with query='noise' and top_k=2\n2. For the first match, tell them which corpus it came from and what its trust_tier is\n\nLet me start by making the search call.",
+                "signature": "53390b1e-dfdf-4e33-bde2-d5cbaa8f3996"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_00_91CFnLAwstdq6NzyyB974797",
+                "name": "knowledge_search",
+                "input": {
+                  "query": "noise",
+                  "top_k": 2
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_00_91CFnLAwstdq6NzyyB974797",
+                "content": "{\"results\": [{\"name\": \"noise_top_basics\", \"snippet\": \"Knowledge entry matching 'noise'\", \"trust_tier\": \"bundled\", \"corpus\": \"derivative\"}]}",
+                "is_error": false
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "26d0b1e0-f950-4092-b969-56dbf535396e",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The search returned one result. Let me analyze:\n\n1. First match: name = \"noise_top_basics\"\n   - corpus: \"derivative\"\n   - trust_tier: \"bundled\"\n\nLet me tell the user about the first match's corpus and trust_tier.",
+            "signature": "26d0b1e0-f950-4092-b969-56dbf535396e"
+          },
+          {
+            "type": "text",
+            "text": "The search returned **1 result** (not 2, as there's only one relevant entry in the corpus). Here are the details for the first (and only) match:\n\n| Field        | Value              |\n|--------------|--------------------|\n| **Name**     | `noise_top_basics` |\n| **Corpus**   | `derivative`       |\n| **Trust Tier** | `bundled`        |\n\nSo the first match came from the **derivative** corpus (which contains official Derivative-curated content) and has a trust tier of **bundled** (indicating it's trusted, official knowledge)."
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 152,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1024,
+          "output_tokens": 190,
+          "service_tier": "standard"
+        }
+      }
+    }
+  ]
+}
