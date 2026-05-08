@@ -1,6 +1,6 @@
 """TouchDesigner MCP Server — AI-powered control of TouchDesigner via MCP."""
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 
 # Canonical .tox filename. The TD component's API_VERSION lives inside the
 # .tox itself (see ``td_component/callbacks/_header.py`` since v1.8.3), so
