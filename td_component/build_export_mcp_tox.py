@@ -209,7 +209,7 @@ def _guess_repo_root():
         # v1.8.3: PR-16 replaced the god module with td_component/callbacks/. Use
         # the composer as the new marker — it's the load-bearing entry point
         # for the .tox build.
-        marker = os.path.join(path, "td_component", "mcp", "_composer.py")
+        marker = os.path.join(path, "td_component", "callbacks", "_composer.py")
         pyproject = os.path.join(path, "pyproject.toml")
         return os.path.isfile(marker) and os.path.isfile(pyproject)
 
