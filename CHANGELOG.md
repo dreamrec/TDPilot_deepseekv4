@@ -1,5 +1,59 @@
 # Changelog
 
+## 1.8.2 - 2026-05-08
+
+**Hotfix: chat HTML token substitution rewrites the JS sentinel.**
+
+The GET / handler's `body.replace(_TOKEN_TEMPLATE_MARKER, _session_token())`
+ran without a count limit, so the token rewrote BOTH occurrences of
+the placeholder string in the served HTML:
+
+  1. The `<meta name="tdpilot-token" content="__TDPILOT_TOKEN__" />`
+     attribute (the legitimate substitution target).
+  2. The JS sentinel `const HAS_VALID_TOKEN = TOKEN && TOKEN !==
+     '__TDPILOT_TOKEN__'`.
+
+After the global substitution, the JS comparison became
+`TOKEN !== <real-token>` — i.e. ``TOKEN !== TOKEN``, always false.
+``HAS_VALID_TOKEN`` evaluated to false, so the chat's `send()`
+function refused to call /send and surfaced **"No session token in
+this page"** to the user.
+
+This regression has been latent since v1.7.1 (when the token guard
+shipped). It only surfaced after fresh hard-refreshes against a
+post-v1.8.1 .tox — earlier sessions had been talking to chat tabs
+that pre-dated the bug.
+
+### Fix
+
+One-line change in
+[td_component/tdpilot_api_web_callbacks.py:262](td_component/tdpilot_api_web_callbacks.py:262):
+
+```python
+body = body.replace(_TOKEN_TEMPLATE_MARKER, _session_token(), 1)
+```
+
+`count=1` limits the substitution to the FIRST occurrence (the meta
+tag, which appears at line 14 of the chat HTML — well before the
+JS sentinel at line 723). The JS comparison literal stays intact.
+
+### Tests
+
+5 new tests in [tests/test_standalone_csrf.py](tests/test_standalone_csrf.py)
+exercise the actual `onHTTPRequest` GET / handler with both a
+miniature stub HTML and the real chat HTML, asserting:
+- The meta tag's content becomes the real token.
+- The JS sentinel literal `TOKEN !== '__TDPILOT_TOKEN__'` survives.
+- Exactly one occurrence remains in the served HTML for the stub.
+- The real chat HTML has both substitution sites present and in
+  the correct order (meta BEFORE sentinel — required for `count=1`
+  to land on the right occurrence).
+
+### Distribution
+
+This is a chat-HTML / standalone-only fix; no CLI bridge changes.
+Only the standalone .tox needs a rebuild post-merge.
+
 ## 1.8.1 - 2026-05-08
 
 **Architecture & logic debt — Phase 3 of the post-1.7 audit plan.**
