@@ -7,21 +7,15 @@ contained an ``error`` field (e.g. ``td_get_errors`` returning a list
 of compile errors).
 
 PR-17 introduced ``_tool_error: bool`` as the authoritative flag.
-``is_tool_error_result(result)`` checks the sentinel first and falls
-back to the legacy ``error`` key.
-
-**v1.10.0 (PR-24)**: the legacy fallback now emits
-``DeprecationWarning`` to nudge external dispatcher integrations off
-the brittle heuristic. The fallback is removed entirely in v2.0.
+``is_tool_error_result(result)`` checks the sentinel; v1.10.0 emitted
+a ``DeprecationWarning`` for the legacy ``"error" in result`` fallback;
+**v2.0 (PR-25) removed the fallback entirely** — only the explicit
+sentinel marks failure.
 
 Tests cover:
   * ``is_tool_error_result`` truth table (sentinel-True, sentinel-False,
-    no-error-key, non-dict input). The legacy fallback paths are
-    tested separately so the ``DeprecationWarning`` is asserted at
-    its emission site.
-  * Legacy ``"error"`` key still classifies as an error AND emits
-    ``DeprecationWarning`` (v1.10.0).
-  * Sentinel-driven results never emit ``DeprecationWarning``.
+    no-error-key, non-dict input, AND a bare ``"error"`` key — which
+    no longer marks failure post-v2.0).
   * Dispatcher synthetic errors carry the sentinel.
   * The agent loop (``tdpilot_api_agent``) imports + uses the helper.
   * ``tool_batch`` imports + uses the helper.
@@ -64,6 +58,14 @@ import tdpilot_api_dispatcher as disp  # noqa: E402
         ({"_tool_error": 0}, False),
         ({"_tool_error": ""}, False),
         ({"_tool_error": None}, False),
+        # v2.0 (PR-25): a bare ``error`` key no longer marks failure —
+        # the sentinel is the only signal. Handlers that emit
+        # ``{"error": "..."}`` without the sentinel are silently
+        # treated as success. Pre-v2.0 these classified as True via
+        # the legacy heuristic; v1.10.0 emitted DeprecationWarning;
+        # v2.0 removed the fallback entirely.
+        ({"error": "Unknown tool"}, False),
+        ({"error": ""}, False),
         # No sentinel, no error key.
         ({"ok": True, "path": "/project1"}, False),
         ({}, False),
@@ -75,9 +77,12 @@ import tdpilot_api_dispatcher as disp  # noqa: E402
     ],
 )
 def test_is_tool_error_result_truth_table(result, expected):
-    """Sentinel-driven cases must never emit a warning."""
+    """No path through ``is_tool_error_result`` should emit a warning
+    in v2.0 — the legacy ``DeprecationWarning`` was removed alongside
+    the fallback. ``simplefilter('error')`` is kept as a regression
+    guard against accidentally re-introducing one."""
     with warnings.catch_warnings():
-        warnings.simplefilter("error")  # any DeprecationWarning fails the test
+        warnings.simplefilter("error")
         assert disp.is_tool_error_result(result) is expected
 
 
@@ -85,47 +90,6 @@ def test_tool_error_key_constant_is_dunder_underscore():
     """Single source of truth — the key name lives in
     ``TOOL_ERROR_KEY`` so any future rename only happens in one place."""
     assert disp.TOOL_ERROR_KEY == "_tool_error"
-
-
-# ---------------------------------------------------------------------------
-# v1.10.0 (PR-24) — legacy "error"-key fallback emits DeprecationWarning.
-# These cases used to live in the truth-table parametrize above; they were
-# extracted here so the warning surface is asserted at its emission site.
-# In v2.0 these tests flip to expecting `False` and the warning assertion
-# goes away (the fallback is removed entirely).
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        {"error": "Unknown tool"},
-        {"error": ""},  # empty string still triggers (key-presence semantics)
-    ],
-)
-def test_legacy_error_key_classifies_as_error_with_deprecation_warning(result):
-    with pytest.warns(DeprecationWarning, match="legacy 'error' key"):
-        assert disp.is_tool_error_result(result) is True
-
-
-def test_sentinel_path_emits_no_deprecation_warning():
-    """Sentinel-driven classification (the new convention) must stay
-    silent — only the legacy fallback is deprecated."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")  # any DeprecationWarning fails the test
-        assert disp.is_tool_error_result({"_tool_error": True}) is True
-        assert disp.is_tool_error_result({"_tool_error": False}) is False
-        assert disp.is_tool_error_result({"_tool_error": True, "error": "x"}) is True
-        assert disp.is_tool_error_result({"_tool_error": False, "error": "x"}) is False
-
-
-def test_no_warning_on_no_error_key():
-    """A dict with neither sentinel nor error key returns False
-    silently — there's nothing to deprecate."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        assert disp.is_tool_error_result({"ok": True}) is False
-        assert disp.is_tool_error_result({}) is False
 
 
 # ---------------------------------------------------------------------------

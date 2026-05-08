@@ -25,7 +25,6 @@ soft information leak.
 from __future__ import annotations
 
 import traceback
-import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -52,18 +51,14 @@ def _scrub(s: str) -> str:
     return redact_paths(redact(s))
 
 
-# Phase 3 (F-12) — explicit tool-error sentinel. Pre-1.8.1 the agent
-# loop and tool_batch checked ``"error" in result`` to decide whether
-# a tool call failed, which misclassifies any handler whose successful
-# result legitimately contains an "error" field (e.g. ``td_get_errors``
-# returning a list of TD compile errors). The new convention sets
-# ``_tool_error: True`` on results that represent a dispatch / handler
-# failure; the agent loop checks the sentinel first and falls back to
-# the legacy ``"error"`` key.
-#
-# v1.10.0: the legacy fallback now emits ``DeprecationWarning`` to
-# nudge external dispatcher integrations / user-authored handlers off
-# the brittle heuristic. The fallback drops entirely in v2.0.
+# F-12 — explicit tool-error sentinel. Handlers signal a dispatch /
+# handler failure by stamping ``_tool_error: True`` on the result;
+# this is the authoritative signal the agent loop checks. A handler
+# whose successful result legitimately contains an ``error`` field
+# (e.g. ``td_get_errors`` returning a list of TD compile errors) is
+# classified as success — the sentinel is the only thing that marks
+# failure. v1.10.0 emitted a ``DeprecationWarning`` for the legacy
+# ``"error" in result`` heuristic; v2.0 removed the fallback entirely.
 TOOL_ERROR_KEY = "_tool_error"
 
 
@@ -71,28 +66,15 @@ def is_tool_error_result(result: Any) -> bool:
     """True when ``result`` represents a tool-call failure that the
     agent loop should signal back to the model with ``is_error=True``.
 
-    Resolution order:
-      1. Explicit ``_tool_error`` sentinel — authoritative when present
-         (allowing handlers to flag an error WITHOUT carrying an
-         ``error`` key, or to flag success even WITH an ``error`` key).
-      2. Legacy ``error`` key — backward-compat shim for handlers that
-         haven't been updated. **Deprecated in v1.10.0**, removed in v2.0.
-         Reaching this branch emits a ``DeprecationWarning``.
+    The ``_tool_error`` sentinel is authoritative — a handler must
+    stamp it explicitly to mark failure. A bare ``"error"`` key alone
+    is no longer a failure signal (the legacy v1.x fallback was
+    removed in v2.0).
     """
     if not isinstance(result, dict):
         return False
     if TOOL_ERROR_KEY in result:
         return bool(result[TOOL_ERROR_KEY])
-    if "error" in result:
-        warnings.warn(
-            "Tool result was classified as an error via the legacy "
-            "'error' key. Update your handler to emit "
-            "{'_tool_error': True, 'error': '...'} explicitly. "
-            "The legacy fallback is removed in TDPilot DPSK4 v2.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return True
     return False
 
 
