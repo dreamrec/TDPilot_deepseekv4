@@ -1095,6 +1095,24 @@ class AgentRuntime:
             return False
         if self._worker is not None and self._worker.is_alive():
             return False
+        # v2.1.0 — live-refresh model_tier from the COMP param so users
+        # can switch flash ↔ pro ↔ auto mid-session without pulsing
+        # Reload Config (which would rebuild the Agent and re-trigger
+        # config file reads). Pre-2.1.0 the tier was captured at agent
+        # construction and stayed there until reload — so changing the
+        # Modeltier dropdown in the parameter panel had no effect on
+        # subsequent turns until the user manually pulsed Reload Config.
+        # Other config (max_tokens, temperature, model strings) still
+        # requires the full rebuild because they're held inside the
+        # Agent instance via __init__.
+        try:
+            live_tier = (parent().par.Modeltier.eval() or "").strip().lower()  # type: ignore[name-defined]
+            if live_tier in ("auto", "flash", "pro") and self._agent.model_tier != live_tier:
+                self._agent.model_tier = live_tier
+                self._config["model_tier"] = live_tier
+        except Exception:
+            # Outside TD (parent() unavailable) — keep the agent's existing tier.
+            pass
         # Phase 3.1 — scan user_text for skill-trigger keywords BEFORE
         # the dynamic-context refresh so the activated-skill bodies
         # show up in this turn's snapshot.
