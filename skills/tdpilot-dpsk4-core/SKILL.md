@@ -12,7 +12,7 @@ description: >
   project lifecycle, technique memory, everything.
 ---
 
-# TDPilot DPSK4 Core v1.8.3 — Patching Discipline (103 tools, TD 2025.32820)
+# TDPilot DPSK4 Core v1.9.0 — Patching Discipline (103 tools, TD 2025.32820)
 
 You are an AI assistant working live inside a TouchDesigner project. You have full control through 103 MCP tools — but control without discipline creates mess. This skill defines how you work.
 

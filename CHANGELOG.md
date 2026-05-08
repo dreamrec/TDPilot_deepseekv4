@@ -1,10 +1,16 @@
 # Changelog
 
-## Unreleased — Phase 4 work-in-progress
+## 1.9.0 - 2026-05-08
 
-Phase 4 of the post-1.7 audit plan ships as a single bundled v1.9.0
-release once PR-20..PR-23 all land. This entry records work-in-progress
-that's merged onto main but not yet released.
+**Phase 4 of the post-1.7 audit plan — measurement infrastructure.**
+Bundles PR-20..PR-23 into one release. No `_TOX_SOURCE_FILES` were
+touched in PR-21..PR-23, but PR-20 reshaped them and the .tox is
+rebuilt against the v1.9.0 sources to bake the new API_VERSION.
+
+User-visible: nothing changes at runtime. This release is about
+measurement: agent-eval coverage in regular CI, skill-prompt
+property tests, error-path coverage, and a tighter ruff floor that
+catches future regressions.
 
 ### [PR-20] Mock-DeepSeek fixture for agent evals (F-24a)
 
@@ -53,6 +59,115 @@ the mock returns 400. Backstop for
 live `agent_eval`-marker tests stay deselected — they continue to
 exercise the standalone webserver against real TD when the user
 runs `pytest -m agent_eval` with TD up.
+
+### [PR-21] Skill prompt assembly + CLI skill metadata fixtures (F-24b)
+
+Properties of the skill loader and rendered system prompt pinned
+without pinning absolute prompt bytes. Editing a skill body or
+`SYSTEM_PROMPT_BASE` doesn't break these tests; only regressions
+in the documented invariants do.
+
+**`tests/test_skill_prompt_assembly.py`** (13 tests):
+- `build_system_prompt()` byte-determinism — DeepSeek's auto-cache
+  contract requires identical bytes across turns.
+- Independence from user-skill insertion order on disk.
+- Required protocol sections survive future `SYSTEM_PROMPT_BASE`
+  refactors (`Skills protocol`, `Memory protocol`, `Knowledge
+  protocol`, `Recipe protocol`, `Safety / patch protocol`).
+- `get_auto_load_skills_text()` ordering: priority desc, name asc.
+- Auto-load filter excludes non-auto-load bodies.
+- `get_skills_index_hint()` alphabetical + `[auto]` marker.
+- User-dir skill overrides bundled with same name.
+- `find_triggered_skills()` returns alphabetical order.
+- Worst-case prompt size guard (< 80KB even with three large
+  auto-load user skills).
+- Per-bundled-skill 32KB ceiling.
+
+**`tests/test_cli_skill_metadata.py`** (16 tests):
+- All three plugin skills present.
+- Each `SKILL.md` parses via the standalone validator.
+- Frontmatter `name` matches directory name.
+- Per-skill 80KB ceiling, combined 200KB ceiling.
+- Description carries trigger guidance.
+- Body opens with `H1` header.
+
+### [PR-22] Test coverage for previously uncovered error paths (F-24c)
+
+Filled genuine coverage gaps for production error paths that have
+no existing tests but DO run when something goes sideways. Each
+test pins one specific gap; no coverage-padding for already-tested
+paths.
+
+**`tests/test_uncovered_error_paths.py`** (13 tests):
+
+`tdpilot_api_agent._call_api`:
+- `URLError` (DNS / refused) → `AgentError` with "Network error".
+- `TimeoutError` → `AgentError` with "I/O error".
+- `OSError` (`EHOSTUNREACH`) → `AgentError` with "I/O error".
+- `HTTPError` where `exc.read()` itself raises → still
+  `AgentError` with the HTTP code.
+
+`tdpilot_api_skills`:
+- `_parse_frontmatter` where YAML parses but is a list/string →
+  flagged with "yaml mapping" error.
+- `_user_entries` with an unreadable file → log + skip; no
+  exception propagates.
+- `handle_skill_get` with missing/blank/unknown name → error
+  message including the offending input.
+- `handle_skill_load` activation flag (`activated=True` on
+  success; absent on error).
+
+`tdpilot_api_runtime` validation hint chain:
+- Wired callback path (Agent's `on_tool_result` + `on_turn_done`
+  → runtime → `EV_HINT` on chat queue) — ports the runtime-side
+  intent of the live `test_build_no_validation_emits_hint` agent
+  eval without needing mock-DeepSeek.
+- Same path with paired validator → no hint.
+
+### [PR-23] Ruff hardening — re-enable F841 + SIM118 (F-16)
+
+Two previously-ignored ruff rules turned back on, violations
+fixed, ignores narrowed. F401 + SIM110 stay ignored with
+annotated reasons (252 violations + .tox-source-hash collision
+respectively).
+
+**F841 (unused local variables)** — 7 violations, all real:
+- `scripts/build_popx_brain.py:140` — drop unused `version`.
+- `scripts/build_tutorial_brain.py:543` — drop dead `frame_count`
+  + `frames_dir`.
+- `tests/test_chat_status_bar.py:74` — drop redundant first
+  `re.search` (`full_block` search 7 lines below covered it).
+- `tests/test_cli.py:107` — drop unused `as exc` from
+  `pytest.raises`.
+- `tests/test_recipe_states.py:21`,
+  `tests/test_technique_store.py:145`,
+  `tests/test_technique_store_upgrades.py:49` — drop unused
+  `tid` / `t2`; keep `store.add()` for side-effects.
+
+**SIM118 (`in dict.keys()`)** — 5 violations, all auto-clean
+rewrites in `src/td_mcp/macros/engine.py`,
+`src/td_mcp/registry/tools_memory.py`, and
+`src/td_mcp/tool_registry.py`.
+
+**`pyproject.toml`** — F841 + SIM118 removed from ignore list;
+F401 + SIM110 ignores now carry annotated v1.9.0 reasons.
+
+### Bare-except (F-17) audit result — most sites are intentional
+
+The handoff doc estimated ~15 sites worth fixing, but audit showed
+the truly load-bearing modules (dispatcher + runtime) already use
+`except Exception as exc:  # noqa: BLE001` with proper logging.
+Remaining `except Exception: pass` sites are mostly TD callbacks
+where pass-on-error is the documented "must not propagate"
+contract — skipped per the user's "skip cases where pass is
+correct" rule. F-17 considered closed.
+
+### Test count
+
+1557 → 1583 (after PR-21/22) is the unit-test progression. Live
+agent_eval suite stays at 12 deselected; mock-driven evals (added
+in PR-20) run in regular CI. F841 + SIM118 enforcement runs on
+every push.
 
 ## 1.8.3 - 2026-05-08
 
