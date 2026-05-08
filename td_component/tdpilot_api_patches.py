@@ -162,22 +162,53 @@ def handle_patch_begin(body: dict) -> dict:
 
     Opens a TD undo block (ui.undo.startBlock) — every operation
     performed before patch_commit/patch_rollback gets grouped into a
-    single undo step. On rollback, project.undo() reverts the entire
-    block atomically.
+    single undo step. On rollback, ``ui.undo.undo()`` reverts the
+    entire block atomically.
 
     Only one patch session can be active at a time. Re-entry without
-    commit/rollback returns an error.
+    commit/rollback returns an error — UNLESS the prior session is
+    older than 5 minutes (almost certainly orphaned by a failed
+    commit/rollback) OR the caller passes ``force=True``, in which
+    case we auto-clean and start fresh.
     """
-    state = _get_patch_state()
-    if state is not None:
-        return {
-            "error": "Another patch session is already active.",
-            "active_patch": state.get("name"),
-            "hint": "Commit or rollback the active patch before beginning a new one.",
-        }
-
     name = (body.get("name") or "patch").strip()
     scope_path = (body.get("scope_path") or "/").strip()
+    force = bool(body.get("force", False))
+
+    state = _get_patch_state()
+    recovered_from = None
+    if state is not None:
+        # v2.0.1: detect orphaned sessions. patch_commit / patch_rollback
+        # used to leave state set when their underlying TD calls failed,
+        # so the next patch_begin would refuse forever. We now auto-clear
+        # in those handlers, but ALSO defend here for sessions left over
+        # from older .tox builds. Stale = older than 5 minutes.
+        age_s = time.time() - state.get("started_at", time.time())
+        STALE_AFTER_S = 300
+        if not force and age_s < STALE_AFTER_S:
+            return {
+                "error": "Another patch session is already active.",
+                "active_patch": state.get("name"),
+                "active_age_seconds": round(age_s, 1),
+                "hint": (
+                    "Commit or rollback the active patch before beginning "
+                    "a new one. If the prior session was orphaned (commit "
+                    "or rollback raised), retry with force=True to clear "
+                    "and start fresh."
+                ),
+            }
+        # Either stale or force=True. Defensively close any lingering
+        # undo block before we open a new one.
+        try:
+            ui.undo.endBlock()  # type: ignore[name-defined]
+        except Exception:
+            pass
+        recovered_from = {
+            "name": state.get("name"),
+            "age_seconds": round(age_s, 1),
+            "reason": "force" if force else "stale",
+        }
+        print(f"[tdpilot_api_patches] auto-cleared {recovered_from}")
 
     try:
         ui.undo.startBlock(name)  # type: ignore[name-defined]
@@ -193,7 +224,10 @@ def handle_patch_begin(body: dict) -> dict:
         "step_count": 0,
     }
     _set_patch_state(new_state)
-    return {"ok": True, "patch": new_state}
+    result: dict = {"ok": True, "patch": new_state}
+    if recovered_from is not None:
+        result["recovered_from"] = recovered_from
+    return result
 
 
 def handle_patch_validate(body: dict) -> dict:
@@ -237,32 +271,68 @@ def handle_patch_validate(body: dict) -> dict:
 def handle_patch_commit(body: dict) -> dict:
     """Finalize the patch session — close the undo block. The whole
     sequence is now ONE step in TD's undo stack (manual Cmd+Z still
-    reverts everything if the user wants)."""
+    reverts everything if the user wants).
+
+    v2.0.1: state is cleared regardless of whether endBlock succeeds.
+    The previous behavior left state set when endBlock raised, which
+    meant the next patch_begin saw a phantom "already active" session
+    and refused. The undo block close is best-effort — if TD's undo
+    stack is in a weird state (block already closed by something else,
+    block never opened cleanly), the operations performed during the
+    session are still applied to the network and the agent should be
+    able to start a fresh session right after.
+    """
     state = _get_patch_state()
     if state is None:
         return {"error": "No active patch session to commit."}
 
+    endblock_warning: str | None = None
     try:
         ui.undo.endBlock()  # type: ignore[name-defined]
     except NameError:
+        # No TD env — clear state defensively so unit tests don't get stuck.
+        _set_patch_state(None)
         return {"error": "ui.undo not available"}
     except Exception as exc:
-        return {"error": f"ui.undo.endBlock failed: {type(exc).__name__}: {exc}"}
+        endblock_warning = f"ui.undo.endBlock failed: {type(exc).__name__}: {exc}"
+        print(f"[tdpilot_api_patches] {endblock_warning}")
 
+    # ALWAYS clear state, regardless of endBlock outcome. This is the
+    # core v2.0.1 fix — without it, a single endBlock failure orphans
+    # the session forever.
     _set_patch_state(None)
-    return {
+
+    result: dict = {
         "ok": True,
         "committed": state["name"],
         "duration_seconds": round(time.time() - state.get("started_at", time.time()), 2),
     }
+    if endblock_warning:
+        result["warning"] = endblock_warning
+        result["note"] = (
+            "Undo block close raised but state has been cleared so a new "
+            "patch_begin will succeed. Operations performed during this "
+            "session remain applied to the network — manual Cmd+Z in TD "
+            "may revert them as separate steps if needed."
+        )
+    return result
 
 
 def handle_patch_rollback(body: dict) -> dict:
     """Roll back the entire patch session atomically.
 
-    Closes the undo block and immediately calls project.undo() to
+    Closes the undo block and immediately calls ``ui.undo.undo()`` to
     revert the whole grouped sequence. Use after a failed step or
     when the user wants to abandon the build.
+
+    v2.0.1: switched from ``project.undo()`` to ``ui.undo.undo()``.
+    The ``project`` global in TD 2025 is a Project instance with no
+    ``.undo()`` method; the undo machinery lives on ``ui.undo``.
+    Pre-v2.0.1 every rollback raised
+    ``AttributeError: 'td.Project' object has no attribute 'undo'``.
+
+    State is cleared regardless of whether either underlying TD call
+    succeeds, so a failed rollback doesn't orphan the session.
     """
     state = _get_patch_state()
     if state is None:
@@ -272,34 +342,40 @@ def handle_patch_rollback(body: dict) -> dict:
     try:
         ui.undo.endBlock()  # type: ignore[name-defined]
     except NameError:
+        _set_patch_state(None)
         return {"error": "ui.undo not available"}
     except Exception as exc:
-        # endBlock failed — undo state is now ambiguous (the block may or
-        # may not be closed). Continue with project.undo() because that
-        # is still the user's best chance of reverting; surface the
-        # warning in the result so the caller knows the rollback was not
-        # clean and may want to inspect the project manually.
         endblock_warning = f"endBlock failed during rollback: {type(exc).__name__}: {exc}"
         print(f"[tdpilot_api_patches] {endblock_warning}")
 
+    undo_warning: str | None = None
     try:
-        # ``project.undo()`` reverts one step. With the just-closed
-        # block as the most recent step, this reverts everything done
-        # since patch_begin.
-        project.undo()  # type: ignore[name-defined]
+        # ui.undo.undo() reverts one step. With the just-closed block as
+        # the most recent step, this reverts everything done since
+        # patch_begin. Replaces the broken pre-v2.0.1 project.undo() call.
+        ui.undo.undo()  # type: ignore[name-defined]
     except NameError:
         _set_patch_state(None)
-        return {"error": "project.undo not available"}
+        return {"error": "ui.undo not available"}
     except Exception as exc:
-        _set_patch_state(None)
-        return {"error": f"project.undo failed: {type(exc).__name__}: {exc}"}
+        undo_warning = f"ui.undo.undo failed: {type(exc).__name__}: {exc}"
+        print(f"[tdpilot_api_patches] {undo_warning}")
 
     _set_patch_state(None)
-    result = {
+    result: dict = {
         "ok": True,
         "rolled_back": state["name"],
         "duration_seconds": round(time.time() - state.get("started_at", time.time()), 2),
     }
     if endblock_warning:
-        result["warning"] = endblock_warning
+        result["warning_endblock"] = endblock_warning
+    if undo_warning:
+        result["warning_undo"] = undo_warning
+    if endblock_warning or undo_warning:
+        result["note"] = (
+            "Rollback signalled but TD's undo machinery may not have fully "
+            "reverted the session. Inspect the project manually and use "
+            "Cmd+Z in TD if needed. State has been cleared so a new "
+            "patch_begin will succeed."
+        )
     return result
