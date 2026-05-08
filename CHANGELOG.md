@@ -1,5 +1,223 @@
 # Changelog
 
+## 1.7.2 - 2026-05-08
+
+**Skills hygiene + content currency.** Closes the audit's three skill-
+related findings (P2 #4, P3 #5, P3 #6). All changes are on the
+standalone variant; the CLI bridge is unaffected at the source level
+(rebuilds only to refresh `API_VERSION`).
+
+### [P3] YAML frontmatter validation, surfaced via `td_skill_validate`
+
+Pre-1.7.2 `tdpilot_api_skills._parse_frontmatter` was a one-off
+custom parser that silently swallowed bad input — a typo in a user
+skill made the entry vanish from `td_skill_list` with no error
+surfaced. Now:
+
+  - Frontmatter parses through `yaml.safe_load` (PyYAML is already a
+    dependency) with explicit field validation.
+  - Invalid skills are kept in `td_skill_list` (with `valid=false` +
+    a `validation_errors` list of human-readable messages) so the
+    user sees what's broken.
+  - Invalid skills are filtered out of trigger matching, auto-load,
+    and the system-prompt index — they never feed into the agent's
+    context.
+  - New `td_skill_validate` tool runs validation explicitly, with
+    optional `name` to validate one skill or omitted to list every
+    invalid skill at once.
+
+This brings the standalone tool count from **90 → 91** (sync_counts
+auto-updates the docs; new canonical surface in
+`tdpilot_api_schema_map.py`).
+
+### [P3] Trigger semantics — word-boundary regex for ALL lengths
+
+Pre-1.7.2 trigger matching was substring-based for any trigger >= 5
+chars, so `"don't optimize this"` activated the performance skill
+because `optimize` substring-matched. 1.7.2 uses word-boundary regex
+(`\boptimize\b`) for every trigger regardless of length. Short
+triggers retain the same behaviour they already had.
+
+### [P2] Bundled skills explicitly declare `surface: standalone`
+
+Audit P2 #4 — every shipped skill now has a `surface` field
+(standalone | cli | both) so a user running both the standalone .tox
+AND the Claude Code plugin can see at a glance which one a skill
+applies to. Validated as part of `_validate_skill_meta`. Default is
+`both` when omitted.
+
+### [P3] `td_component/skills/popx-mode.md` refreshed for v1.7.0 / TD 2025.32820
+
+Pre-1.7.2 the skill referenced TD `2025.32460` while v1.7.0 actually
+targets `2025.32820`. The skill now:
+
+  - References the correct build (2025.32820, May 2026).
+  - Lists the new native POPs from this build: `tracePOP`,
+    `triangulatePOP`, `dmxFixturePOP`, `dmxOutPOP`, `alembicOutPOP`,
+    `fileOutPOP`, `pointFileInPOP`.
+  - Calls out the **Polygonize POP migration trap** — Polygonize POP
+    is now 3D-only; for 2D inputs the agent must use Trace POP.
+  - Points the agent at `td_get_release_delta` and
+    `td_get_build_compatibility` for build-aware capability checks.
+
+### [P3] `td_component/skills/performance-mode.md` — inspect first, don't memorise param names
+
+Pre-1.7.2 the skill cargo-culted `cookpulsewhennotviewed=False` as a
+universal recipe, but that param only exists on some TOPs and is
+misleading on CHOP perf issues. Now it teaches:
+
+  - **Inspect first** via `td_get_params({page: 'Common'})`.
+  - **Read back the param** after setting to confirm — TD silently
+    ignores unknown param writes in some builds.
+  - **Caveats `td_screenshot`** during perf debugging — screenshots
+    trigger a cook on the screenshotted TOP, skewing measurements.
+
+### Tests
+
+  - `tests/test_skill_validation.py` — 20 tests covering the new YAML
+    parser, validation rules, word-boundary trigger semantics,
+    invalid-skills-still-listed behaviour, and the new
+    `td_skill_validate` handler.
+  - `tests/test_skill_content.py` — 10 tests asserting the bundled
+    skills reference `2025.32820`, mention the new native POPs,
+    document the Polygonize migration trap, and counsel the
+    inspect-first pattern.
+
+Suite total: **1208 passed** (+30 new since 1.7.1, +67 vs 1.7.0), 12
+deselected.
+
+### Migration
+
+`~/.tdpilot-api/skills/*.md` files that previously parsed loosely
+through the custom parser may now surface validation warnings if they
+omitted required fields (e.g. `name`). The skills aren't dropped —
+they show up with `valid: false` in `td_skill_list` along with the
+specific errors. Run `td_skill_validate` to see them all at once.
+
+The `.tox` rebuild already documented in 1.7.1 carries these changes
+forward — no additional manual step.
+
+---
+
+## 1.7.1 - 2026-05-08
+
+**Security + chat-state hotfix.** Closes the cross-origin CSRF gap on
+the standalone .tox plus three chat HTML state-machine bugs surfaced by
+the post-1.7.0 audit. Code changes are concentrated on the standalone
+variant (`tdpilot_API.tox`); the CLI bridge (`tdpilot-dpsk4.tox`) only
+rebuilds to pick up the new `API_VERSION`.
+
+### [P0] Standalone HTTP server now requires a per-launch session token
+
+Pre-1.7.1, `td_component/tdpilot_api_web_callbacks.py` shipped with
+`Access-Control-Allow-Origin: *` and no auth on POST /send / /stop /
+/reset or GET /history / /firstrun. A live cross-origin probe proved
+end-to-end CSRF: any local webpage could POST to /send, drive a real
+DeepSeek turn, and burn the user's tokens. /history was readable
+cross-origin, leaking the entire chat transcript.
+
+Post-fix (three layers):
+  - **Per-launch session token.** Random `secrets.token_urlsafe(24)`
+    generated on COMP load, persisted in `comp.storage` so textDAT
+    reloads don't rotate it. Required as `X-TDPilot-Token` header on
+    every non-bootstrap HTTP route and as `?t=<token>` on the
+    WebSocket handshake URL. Token is server-injected into the served
+    HTML body at GET / time so the same-origin chat already has it.
+  - **Origin allowlist.** Cross-origin requests with non-localhost
+    origins are rejected with 403 regardless of token state.
+    `Access-Control-Allow-Origin` reflects the allowed origin instead
+    of `*`.
+  - **`Sec-Fetch-Site` rejection.** Browser-issued cross-site fetches
+    are 403'd before the token check.
+
+Bootstrap routes (GET /, /index.html, /health, OPTIONS preflight) skip
+the gate so the chat HTML can load before its JS has the token. Those
+routes don't expose any agent state.
+
+Escape hatch for external tooling: set `TDPILOT_API_INSECURE=1` to
+disable the token + origin checks. Default is secure.
+
+### [P2] Chat wizard DOM survives /reset and empty WS sync
+
+Pre-1.7.1 the initial inline DOM had `<div id="wizard">` but
+`fullSync([])`'s welcome rebuild didn't — so the first /reset wiped
+the wizard forever and `/firstrun` polling rendered into the void.
+
+Post-fix: a single `WELCOME_HTML` constant is the source of truth for
+both the initial render and any rebuild. After `fullSync([])` re-arms
+`pollFirstRun()` against the freshly-mounted DOM.
+
+### [P2] First-run polling recovers from transient HTTP errors
+
+Pre-1.7.1 a 500/503 from /firstrun during startup permanently killed
+the wizard — the `!resp.ok` branch returned without rescheduling.
+
+Post-fix: the `!resp.ok` branch schedules another poll after the same
+8s backoff used by the network-blip catch path.
+
+### [P2] WebSocket reconnect no longer mimics an active agent turn
+
+Pre-1.7.1 a single `setStatus()` was driven by both agent events and
+WS transport events. Reconnect strings like `"reconnecting in 500ms"`
+fell through `isWorkingStatus`'s allow-list and rendered the Stop
+button + pulse animation as if a turn were in flight.
+
+Post-fix: `agentState` and `wsState` are tracked separately. A new
+`render()` function composes them — pulse + Stop button only fire when
+`isWorkingAgentState(agentState)` is true. `scheduleReconnect()`
+drives the ws channel only.
+
+### [P3] Tool-error tracebacks now redacted before model echo
+
+`tdpilot_api_dispatcher.py` returned raw `traceback.format_exc()` to
+the model on handler exceptions, leaking absolute file paths and
+sometimes API-key residues. New `redact_paths()` helper in
+`tdpilot_api_config.py` strips home + config-dir paths; existing
+`redact()` continues to scrub the API key.
+
+### Chat HTML — host param restricted to localhost
+
+Hash-fragment overrides (`#host=...`) are now filtered through a
+`SAFE_HOSTS` allowlist (127.0.0.1, localhost, ::1). Previously a
+malicious link could redirect the chat's fetches to an attacker host
+and exfiltrate user messages. Same-class fix as the CSRF gate.
+
+### Tests
+
+  - `tests/test_standalone_csrf.py` — 18 tests for the new auth gate
+    (token + origin + Sec-Fetch-Site + Bearer fallback + insecure
+    bypass + WS handshake token extraction).
+  - `tests/test_chat_html_state.py` — 19 structural assertions on the
+    served HTML: token meta tag, AUTH_HEADERS spread on every fetch,
+    WS URL token query, host allowlist, WELCOME_HTML wizard div,
+    pollFirstRun retry path, agent/ws state separation.
+
+Suite total: **1178 passed** (+37 new), 12 deselected (agent_evals).
+
+### Migration
+
+No user action required for normal use. Open browser tabs reconnect
+automatically; the new token is delivered with the page on next load.
+
+External-tooling users (curl scripts, custom panels) need to either
+add an `X-TDPilot-Token` header / `Authorization: Bearer <token>`
+fetched once from the served HTML's `<meta name="tdpilot-token">`, or
+set `TDPILOT_API_INSECURE=1` to disable the check (with the
+documented security caveats).
+
+The standalone `.tox` (`td_component/tdpilot_API.tox`) **must be
+rebuilt inside TouchDesigner** before the new auth path takes effect —
+the source files baked into it have changed. From the Textport:
+
+```python
+exec(open('td_component/build_tdpilot_api_tox.py').read())
+```
+
+The CLI `.tox` (`tdpilot-dpsk4.tox`) is rebuilt mechanically to bump
+`API_VERSION`; no behavioral change there.
+
+---
+
 ## 1.6.13 - 2026-05-07
 
 **Audit hotfix.** Five findings from the post-1.6.12 cold-pass review,

@@ -1067,6 +1067,27 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["name"],
         },
     },
+    {
+        "name": "skill_validate",
+        "description": (
+            "Re-validate skill frontmatter (YAML schema) and surface any "
+            "broken skills. Pre-1.7.2 invalid skills were silently skipped; "
+            "now they're listed with specific error messages. Pass `name` to "
+            "validate one skill, omit to get the list of all currently "
+            "invalid skills. Use after editing a skill in "
+            "~/.tdpilot-api/skills/ to confirm it parses correctly."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Optional skill name to validate. If omitted, returns all invalid skills.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
     # ---------------------------------------------------------------------
     # Snapshot + Patch session tools — safety mechanisms for risky builds.
     # Snapshots are full .toe saves to ~/.tdpilot-api/snapshots/ (heavy).

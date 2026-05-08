@@ -3,6 +3,15 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!--
+  tdpilot-token: replaced server-side at GET / time with the per-launch
+  session token. Token is injected into the served HTML body so the
+  same-origin chat can authenticate against /send /stop /reset /history
+  /firstrun + the WS handshake. A cross-origin attacker can't read this
+  meta tag because the server emits ACAO: <our-origin> only — the
+  token never leaves the served HTML body.
+-->
+<meta name="tdpilot-token" content="__TDPILOT_TOKEN__" />
 <title>TDPILOT_API</title>
 <style>
   :root {
@@ -358,26 +367,14 @@
       <span id="status-text">idle</span><span class="cursor">█</span>
     </span>
   </div>
-  <div id="history">
-    <div class="welcome">
-<pre class="logo">████████╗██████╗ ██████╗ ██╗██╗      ██████╗ ████████╗
-╚══██╔══╝██╔══██╗██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝
-   ██║   ██║  ██║██████╔╝██║██║     ██║   ██║   ██║
-   ██║   ██║  ██║██╔═══╝ ██║██║     ██║   ██║   ██║
-   ██║   ██████╔╝██║     ██║███████╗╚██████╔╝   ██║
-   ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝</pre>
-      <div class="tag">api · standalone · deepseek v4</div>
-      <hr class="divider" />
-      <div id="wizard" class="wizard" style="display:none;">
-        <h4>quickstart</h4>
-        <ol id="wizard-steps"></ol>
-      </div>
-      <div class="body">
-        type a message and press <kbd>enter</kbd><br/>
-        <kbd>shift</kbd>+<kbd>enter</kbd> for newline
-      </div>
-    </div>
-  </div>
+  <!--
+    History is intentionally empty on initial DOM. The IIFE injects the
+    welcome screen (including the wizard div) via WELCOME_HTML on load.
+    Single source of truth means the wizard DOM survives both the
+    initial render AND fullSync([]) — pre-1.7.1 the inline welcome and
+    fullSync's rebuild diverged so /reset wiped the wizard forever.
+  -->
+  <div id="history"></div>
   <div id="input-bar">
     <textarea id="input" placeholder="ask touchdesigner to do something…" rows="2" autocomplete="off" spellcheck="false"></textarea>
     <button id="stop" title="Interrupt the agent (POST /stop)">stop</button>
@@ -386,11 +383,54 @@
 
 <script>
 (() => {
+  // ---- bootstrap ------------------------------------------------------
+  // Hash params let power-users override host/port (e.g. running TD on
+  // a different machine) but we restrict host to a localhost allowlist
+  // so a malicious page can't link the user to the chat with host=evil
+  // and exfiltrate their messages.
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
-  const TD_PORT = params.get('port') || '9987';
-  const TD_HOST = params.get('host') || '127.0.0.1';
+  const SAFE_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+  let TD_HOST = params.get('host') || '127.0.0.1';
+  let TD_PORT = params.get('port') || '9987';
+  if (!SAFE_HOSTS.has(TD_HOST)) TD_HOST = '127.0.0.1';
+  if (!/^\d{1,5}$/.test(TD_PORT)) TD_PORT = '9987';
   const SEND_URL = `http://${TD_HOST}:${TD_PORT}/send`;
   const STOP_URL = `http://${TD_HOST}:${TD_PORT}/stop`;
+  const FIRSTRUN_URL = `http://${TD_HOST}:${TD_PORT}/firstrun`;
+
+  // Per-launch session token, server-injected at GET / time. The literal
+  // `__TDPILOT_TOKEN__` value means the page was loaded out-of-band
+  // (file://, opened directly from disk) — fetches will 401 in that case
+  // and the user gets a clear "missing token" error rather than a silent
+  // CSRF window.
+  const _tokenMeta = document.querySelector('meta[name="tdpilot-token"]');
+  const TOKEN = _tokenMeta ? _tokenMeta.getAttribute('content') : '';
+  const HAS_VALID_TOKEN = TOKEN && TOKEN !== '__TDPILOT_TOKEN__';
+  const AUTH_HEADERS = HAS_VALID_TOKEN ? { 'X-TDPilot-Token': TOKEN } : {};
+
+  // Welcome HTML — single source of truth for the initial render AND
+  // any fullSync([]) rebuild. Pre-1.7.1 these diverged: only the inline
+  // initial DOM had the wizard div, so the first /reset wiped it
+  // permanently. Defining it once means the DOM stays consistent.
+  const WELCOME_HTML = `
+        <div class="welcome">
+<pre class="logo">████████╗██████╗ ██████╗ ██╗██╗      ██████╗ ████████╗
+╚══██╔══╝██╔══██╗██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝
+   ██║   ██║  ██║██████╔╝██║██║     ██║   ██║   ██║
+   ██║   ██║  ██║██╔═══╝ ██║██║     ██║   ██║   ██║
+   ██║   ██████╔╝██║     ██║███████╗╚██████╔╝   ██║
+   ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝</pre>
+          <div class="tag">api · standalone · deepseek v4</div>
+          <hr class="divider" />
+          <div id="wizard" class="wizard" style="display:none;">
+            <h4>quickstart</h4>
+            <ol id="wizard-steps"></ol>
+          </div>
+          <div class="body">
+            type a message and press <kbd>enter</kbd><br/>
+            <kbd>shift</kbd>+<kbd>enter</kbd> for newline
+          </div>
+        </div>`;
 
   const $history = document.getElementById('history');
   const $input = document.getElementById('input');
@@ -399,6 +439,10 @@
   const $status = document.getElementById('status-text');
   const $statusBar = document.getElementById('status-bar');
   const $lhs = $statusBar.querySelector('.lhs');
+
+  // Render the initial welcome from the same template fullSync uses, so
+  // the wizard DOM is guaranteed present.
+  $history.innerHTML = WELCOME_HTML;
 
   // Three-cell block-wave animation that ties to the project's ASCII
   // logo aesthetic. Active while the agent is working; pauses to a
@@ -409,9 +453,18 @@
   let pulseTimer = null;
   let pulseIdx = 0;
 
-  function isWorkingStatus(s) {
+  // Pre-1.7.1 there was a single setStatus() driven by both agent
+  // events AND ws transport events. Reconnect strings like
+  // "reconnecting in 500ms" fell through isWorkingStatus's allow-list
+  // and rendered the Stop button + pulse animation as if a turn were
+  // in flight. Now agent and ws state are tracked separately and
+  // composed into the displayed text by render().
+  let agentState = 'idle';   // idle | thinking | calling | reset | error | <free-form>
+  let wsState = 'connecting'; // connecting | connected | reconnecting
+
+  function isWorkingAgentState(s) {
     const t = String(s || '').toLowerCase();
-    if (!t || t === 'idle' || t === 'connected' || t === 'ready' || t === 'reset') return false;
+    if (!t || t === 'idle' || t === 'ready' || t === 'reset' || t === 'connected') return false;
     if (t.startsWith('error') || t.startsWith('send failed')) return false;
     return true;
   }
@@ -474,9 +527,21 @@
   }
 
   async function pollFirstRun() {
+    if (!welcomed) return;
     try {
-      const resp = await fetch(`http://${TD_HOST}:${TD_PORT}/firstrun`, { method: 'GET' });
-      if (!resp.ok) return;
+      const resp = await fetch(FIRSTRUN_URL, {
+        method: 'GET',
+        headers: { ...AUTH_HEADERS },
+      });
+      if (!resp.ok) {
+        // Pre-1.7.1 a transient 500/503 during startup killed the
+        // wizard forever — the !resp.ok branch returned without
+        // rescheduling. Now we treat any non-2xx the same as a
+        // network blip: retry after the longer backoff so the
+        // wizard recovers when the server comes up.
+        setTimeout(pollFirstRun, 8000);
+        return;
+      }
       const state = await resp.json();
       renderFirstRunWizard(state);
       // Once the wizard is fully complete (no next_steps), stop
@@ -522,10 +587,20 @@
     autoScroll();
   }
 
-  function setStatus(text) {
-    const t = (text || 'idle').toLowerCase();
-    $status.textContent = t;
-    if (isWorkingStatus(t)) {
+  function render() {
+    // Compose the right-hand status text from both states. When the
+    // agent is doing real work that's the headline; otherwise the ws
+    // transport state surfaces (so the user sees "reconnecting" but
+    // doesn't see a phantom Stop button).
+    const a = String(agentState || 'idle').toLowerCase();
+    const w = String(wsState || 'connected').toLowerCase();
+    const working = isWorkingAgentState(a);
+    if (working) {
+      $status.textContent = w === 'connected' ? a : `${a} · ws ${w}`;
+    } else {
+      $status.textContent = w === 'connected' ? a : `ws ${w}`;
+    }
+    if (working) {
       startPulse();
       $stop.classList.add('visible');
       $stop.disabled = false;
@@ -535,26 +610,35 @@
     }
   }
 
+  function setAgentStatus(text) {
+    agentState = (text || 'idle').toLowerCase();
+    render();
+  }
+
+  function setWsStatus(text) {
+    wsState = (text || 'connected').toLowerCase();
+    render();
+  }
+
+  // Back-compat shim — the public window.tdpilotChat surface and any
+  // legacy WS payloads of {type:'status', status:'<text>'} continue
+  // to call setStatus(); route those to the agent channel since the
+  // backend only emits agent state through that event.
+  function setStatus(text) {
+    setAgentStatus(text);
+  }
+
   function fullSync(rows) {
     $history.innerHTML = '';
     welcomed = false;
     if (!rows || !rows.length) {
+      // Re-render from the canonical template so the wizard div
+      // is present in the new DOM. Then re-arm pollFirstRun against
+      // the fresh element — the previous wizard pointer was wiped
+      // by the innerHTML replacement.
       welcomed = true;
-      $history.innerHTML = `
-        <div class="welcome">
-<pre class="logo">████████╗██████╗ ██████╗ ██╗██╗      ██████╗ ████████╗
-╚══██╔══╝██╔══██╗██╔══██╗██║██║     ██╔═══██╗╚══██╔══╝
-   ██║   ██║  ██║██████╔╝██║██║     ██║   ██║   ██║
-   ██║   ██║  ██║██╔═══╝ ██║██║     ██║   ██║   ██║
-   ██║   ██████╔╝██║     ██║███████╗╚██████╔╝   ██║
-   ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝</pre>
-          <div class="tag">api · standalone · deepseek v4</div>
-          <hr class="divider" />
-          <div class="body">
-            type a message and press <kbd>enter</kbd><br/>
-            <kbd>shift</kbd>+<kbd>enter</kbd> for newline
-          </div>
-        </div>`;
+      $history.innerHTML = WELCOME_HTML;
+      pollFirstRun();
       return;
     }
     for (const r of rows) appendMessage(r.role, r.message);
@@ -564,21 +648,28 @@
     const text = $input.value;
     const trimmed = (text || '').trim();
     if (!trimmed) return;
+    if (!HAS_VALID_TOKEN) {
+      appendMessage(
+        'error',
+        'No session token in this page. Reload the chat from http://127.0.0.1:9987/ — opening the HTML directly bypasses the server-injected token and all requests will 401.',
+      );
+      return;
+    }
     $input.value = '';
     $send.disabled = true;
-    setStatus('sending…');
+    setAgentStatus('sending…');
     appendMessage('user', trimmed);
     fetch(SEND_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      headers: { 'Content-Type': 'text/plain;charset=utf-8', ...AUTH_HEADERS },
       body: trimmed,
     })
       .then((r) => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
-        setStatus('thinking…');
+        setAgentStatus('thinking…');
       })
       .catch((err) => {
-        setStatus('send failed: ' + err.message);
+        setAgentStatus('send failed: ' + err.message);
         appendMessage('error', 'Could not reach TD WebServer at ' + SEND_URL + ': ' + err.message);
       })
       .finally(() => {
@@ -593,8 +684,8 @@
     // before exiting. Show "stopping…" until the runtime emits its
     // own status change ('idle' / 'stopped') over the WebSocket.
     $stop.disabled = true;
-    setStatus('stopping…');
-    fetch(STOP_URL, { method: 'POST' })
+    setAgentStatus('stopping…');
+    fetch(STOP_URL, { method: 'POST', headers: { ...AUTH_HEADERS } })
       .catch((err) => {
         appendMessage('error', 'Stop request failed: ' + err.message);
       });
@@ -646,8 +737,14 @@
   }
 
   function connectWS() {
+    setWsStatus('connecting');
     try {
-      ws = new WebSocket(`ws://${TD_HOST}:${TD_PORT}/`);
+      // Browsers don't allow custom WebSocket headers, so the per-launch
+      // token rides on the query string instead. Server validates it
+      // in onWebSocketOpen — handshakes without a matching token are
+      // rejected before being added to the broadcast registry.
+      const tokenParam = HAS_VALID_TOKEN ? `?t=${encodeURIComponent(TOKEN)}` : '';
+      ws = new WebSocket(`ws://${TD_HOST}:${TD_PORT}/${tokenParam}`);
     } catch (err) {
       console.error('[tdpilot] WS construct failed', err);
       scheduleReconnect();
@@ -655,7 +752,7 @@
     }
     ws.onopen = () => {
       reconnectDelay = 500;
-      setStatus('connected');
+      setWsStatus('connected');
     };
     ws.onmessage = (ev) => {
       try { applyMessage(JSON.parse(ev.data)); }
@@ -666,7 +763,13 @@
   }
 
   function scheduleReconnect() {
-    setStatus(`reconnecting in ${reconnectDelay}ms`);
+    // Pre-1.7.1 this called setStatus() which routed through
+    // isWorkingStatus() and made the Stop button visible because the
+    // string didn't match any of the "not working" allow-list entries.
+    // Now reconnect drives the ws channel only — the agent channel
+    // stays at whatever it was, and the Stop button only shows when
+    // the agent is actually working.
+    setWsStatus(`reconnecting in ${reconnectDelay}ms`);
     setTimeout(connectWS, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 8000);
   }
