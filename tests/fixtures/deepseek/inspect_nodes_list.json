@@ -1,0 +1,571 @@
+{
+  "scenario": "inspect_nodes_list",
+  "captured_at": "2026-05-08T12:06:48+00:00",
+  "model": "deepseek-v4-pro",
+  "model_tier": "auto",
+  "prompts": [
+    "List the operators that live at /project1. Use td_get_nodes."
+  ],
+  "tool_calls_observed": [
+    {
+      "name": "td_get_nodes",
+      "args": {
+        "path": "/project1"
+      }
+    }
+  ],
+  "final_text_concatenated": "The operators located at **`/project1`** are:\n\n| Name | Type | Family |\n|------|------|--------|\n| `moviefilein1` | `moviefilein` | TOP |\n| `constant1` | `constant` | CHOP |\n| `noise1` | `noise` | TOP |\n\nSo there are **3 operators** in that path:\n1. **moviefilein1** (TOP) – Movie File In\n2. **constant1** (CHOP) – Constant CHOP\n3. **noise1** (TOP) – Noise TOP",
+  "exchanges": [
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "List the operators that live at /project1. Use td_get_nodes."
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "ccc84cfe-3e27-4ec2-8a3b-ed0a41bce9f3",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants to list operators at /project1 using td_get_nodes. Let me do that.",
+            "signature": "ccc84cfe-3e27-4ec2-8a3b-ed0a41bce9f3"
+          },
+          {
+            "type": "tool_use",
+            "id": "call_00_HnjCQbQtIfGsynn0bCvd6105",
+            "name": "td_get_nodes",
+            "input": {
+              "path": "/project1"
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 85,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 896,
+          "output_tokens": 67,
+          "service_tier": "standard"
+        }
+      }
+    },
+    {
+      "request": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "List the operators that live at /project1. Use td_get_nodes."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user wants to list operators at /project1 using td_get_nodes. Let me do that.",
+                "signature": "ccc84cfe-3e27-4ec2-8a3b-ed0a41bce9f3"
+              },
+              {
+                "type": "tool_use",
+                "id": "call_00_HnjCQbQtIfGsynn0bCvd6105",
+                "name": "td_get_nodes",
+                "input": {
+                  "path": "/project1"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_00_HnjCQbQtIfGsynn0bCvd6105",
+                "content": "{\"path\": \"/project1\", \"children\": [{\"name\": \"moviefilein1\", \"type\": \"moviefilein\", \"family\": \"TOP\"}, {\"name\": \"constant1\", \"type\": \"constant\", \"family\": \"CHOP\"}, {\"name\": \"noise1\", \"type\": \"noise\", \"family\": \"TOP\"}]}",
+                "is_error": false
+              }
+            ]
+          }
+        ],
+        "temperature": 0.7,
+        "system": "You are TDPilot, an assistant inside TouchDesigner. Use tools when needed.",
+        "tools": [
+          {
+            "name": "knowledge_search",
+            "description": "BM25 search over the knowledge corpus.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "top_k": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "memory_get",
+            "description": "Retrieve a memory entry by name.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "memory_save",
+            "description": "Persist a named memory entry.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ]
+            }
+          },
+          {
+            "name": "recipe_save",
+            "description": "Save a multi-step build sequence as a replayable recipe.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "name",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "td_create_node",
+            "description": "Create an operator at a parent path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "parent_path": {
+                  "type": "string"
+                },
+                "op_type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "parent_path",
+                "op_type",
+                "name"
+              ]
+            }
+          },
+          {
+            "name": "td_delete_node",
+            "description": "Delete an operator at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_capabilities",
+            "description": "Report TD build features.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_errors",
+            "description": "Validate a node — return any errors at the path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_get_info",
+            "description": "Get TouchDesigner project info (FPS, build, platform).",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          },
+          {
+            "name": "td_get_nodes",
+            "description": "List operators at the given path.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          },
+          {
+            "name": "td_search_official_docs",
+            "description": "Search official Derivative docs.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "query"
+              ]
+            }
+          },
+          {
+            "name": "td_validate_recipe",
+            "description": "Validate a recipe's replay sequence.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "replay": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "tool_batch",
+            "description": "Call multiple tools in parallel.",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "calls": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "calls"
+              ]
+            }
+          }
+        ]
+      },
+      "response": {
+        "id": "fc0a1584-f6a6-42db-a9a0-9f62f868aef3",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The result shows the operators at /project1. Let me present this to the user.",
+            "signature": "fc0a1584-f6a6-42db-a9a0-9f62f868aef3"
+          },
+          {
+            "type": "text",
+            "text": "The operators located at **`/project1`** are:\n\n| Name | Type | Family |\n|------|------|--------|\n| `moviefilein1` | `moviefilein` | TOP |\n| `constant1` | `constant` | CHOP |\n| `noise1` | `noise` | TOP |\n\nSo there are **3 operators** in that path:\n1. **moviefilein1** (TOP) – Movie File In\n2. **constant1** (CHOP) – Constant CHOP\n3. **noise1** (TOP) – Noise TOP"
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 114,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 1024,
+          "output_tokens": 147,
+          "service_tier": "standard"
+        }
+      }
+    }
+  ]
+}

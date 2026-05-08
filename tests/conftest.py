@@ -162,3 +162,41 @@ def exec_client_factory():
         )
 
     return _make
+
+
+@pytest.fixture
+def mock_deepseek():
+    """Spin up a Mock-DeepSeek HTTP server for the duration of a test.
+
+    Returns a callable: ``mock_deepseek(scenario_name, **kwargs)`` →
+    started ``MockDeepSeek`` instance pointing at a fresh localhost port.
+    Each call cleans up automatically when the test ends.
+
+    Usage::
+
+        def test_inspect_fps(mock_deepseek):
+            server = mock_deepseek("inspect_basic_fps")
+            agent = Agent(api_key="sk-mock", base_url=server.base_url, ...)
+            agent.add_user_message("...")
+            agent.run_turn()
+            assert server.thinking_violations() == []
+
+    Pass ``enforce_thinking_echo=False`` to relax the constraint when
+    a test specifically wants to exercise stripped-thinking behavior.
+    Pass ``strict_request_match=True`` to also assert the agent's
+    outbound request shape matches the captured fixture.
+    """
+    from _mock_deepseek import MockDeepSeek
+
+    started: list = []
+
+    def _factory(scenario: str, **kwargs):
+        server = MockDeepSeek.from_fixture(scenario, **kwargs)
+        server.start()
+        started.append(server)
+        return server
+
+    yield _factory
+
+    for s in started:
+        s.stop()

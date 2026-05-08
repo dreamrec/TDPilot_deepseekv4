@@ -1,5 +1,59 @@
 # Changelog
 
+## Unreleased — Phase 4 work-in-progress
+
+Phase 4 of the post-1.7 audit plan ships as a single bundled v1.9.0
+release once PR-20..PR-23 all land. This entry records work-in-progress
+that's merged onto main but not yet released.
+
+### [PR-20] Mock-DeepSeek fixture for agent evals (F-24a)
+
+The 12 deselected `agent_eval` integration tests required live TD +
+real DeepSeek to run. PR-20 adds a fixture-replay harness so the
+same evals run in regular CI without either dependency.
+
+**New infrastructure:**
+- `tests/_mock_deepseek.py` — single-file `HTTPServer` that replays
+  captured DeepSeek `/v1/messages` exchanges. Enforces the
+  thinking-block echo contract by returning HTTP 400 (with the
+  canonical DeepSeek error message) when an assistant turn's
+  `type:thinking` blocks aren't echoed back in the next request.
+- `tests/_mock_dispatcher.py` — shape-realistic stub TD tool
+  results, shared between the capture script and the replay tests
+  so a fixture captured against version N replays cleanly against
+  N+1.
+- `scripts/capture_deepseek_fixtures.py` — recorder/proxy that
+  forwards real DeepSeek calls to `api.deepseek.com` and writes
+  the (request, response) pairs to JSON. Run once per scenario;
+  fixtures live in `tests/fixtures/deepseek/<name>.json`.
+- `tests/conftest.py` — new `mock_deepseek` pytest fixture wraps
+  the lifecycle: `server = mock_deepseek("scenario")` returns a
+  started server, auto-stopped at test end.
+
+**11 real DeepSeek fixtures captured** (real API, real responses):
+inspect_basic_fps, inspect_nodes_list, recipe_save,
+recipe_validate_passes, recipe_validate_rejects_bogus_tool,
+build_create_node, knowledge_corpus_present,
+knowledge_search_trust_tier, memory_save_and_recall,
+batch_parallel_calls, failure_recovery_hint_visible.
+
+**11 mock-driven eval tests** under `tests/agent_evals_mock/`
+mirror the live suite at `tests/agent_evals/` but run in regular
+CI. The 12th eval (`test_build_no_validation_emits_hint`) tests
+the `AgentRuntime`'s validation-hint emission, not the `Agent`
+class — that one stays in the live suite.
+
+**Regression detector** at
+`tests/agent_evals_mock/test_thinking_echo_regression.py`:
+sabotages `_strip_reasoning` to drop thinking blocks and asserts
+the mock returns 400. Backstop for
+`feedback_deepseek_thinking_blocks_must_echo`.
+
+39 new tests in regular CI (1557 pass / 12 deselected). The 12
+live `agent_eval`-marker tests stay deselected — they continue to
+exercise the standalone webserver against real TD when the user
+runs `pytest -m agent_eval` with TD up.
+
 ## 1.8.3 - 2026-05-08
 
 **God-module decompose — Phase 3 PR-16 of the post-1.7 audit plan (F-14).**
