@@ -38,8 +38,8 @@
     background: var(--bg);
     color: var(--text);
     font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: 12px;
+    line-height: 1.55;
     overflow: hidden;
     -webkit-font-smoothing: subpixel-antialiased;
   }
@@ -67,12 +67,12 @@
   /* Top status bar: terminal window-chrome look. */
   #status-bar {
     flex: 0 0 auto;
-    padding: 8px 14px;
+    padding: 7px 14px;
     background: var(--bg-2);
     border-bottom: 1px solid var(--rule);
-    font-size: 11px;
+    font-size: 10px;
     color: var(--muted);
-    letter-spacing: 0.1em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     display: flex;
     justify-content: space-between;
@@ -149,59 +149,49 @@
     visibility: hidden;
   }
   #status-bar.working .cursor { visibility: visible; }
-  /* PR-27 (v2.0) — chat font-size toggle. Two-state glyph control
-     (`a` / `A`) at the far right of the status bar; the active size
-     lights up in --accent, the inactive in --muted. Click swaps the
-     size class on <html>; the body has no other knowledge of the
-     toggle, so the rest of the chat keeps its existing scale.
-     Defaults to small (today's behavior) so existing users see no
-     change unless they opt in. */
-  #font-toggle {
+  /* v2.1.0 — quiet-mode toggle replaces the v2.0.0 font-size toggle.
+     Single-button control at the far right of the status bar. When
+     active (filled glyph), the chat hides ALL tool-call / tool-
+     result blocks so the user sees only their prompts + the
+     assistant's text replies + errors. Status bar still shows the
+     agent's working state ("thinking" / "calling tool ...") so
+     there's no progress blackout. Persisted via localStorage. */
+  #quiet-toggle {
     background: transparent;
     border: 1px solid var(--rule);
     color: var(--muted);
     font-family: inherit;
-    padding: 1px 7px 2px;
+    padding: 1px 8px 2px;
     margin-left: 10px;
     cursor: pointer;
     display: inline-flex;
-    align-items: baseline;
-    gap: 3px;
-    letter-spacing: 0;        /* override status-bar uppercase tracking */
-    text-transform: none;     /* lowercase 'a' must stay lowercase */
+    align-items: center;
+    letter-spacing: 0;
+    text-transform: none;
     line-height: 1;
+    font-size: 11px;
   }
-  #font-toggle:hover {
+  #quiet-toggle:hover {
     border-color: var(--accent);
     background: var(--bg-3);
   }
-  /* Keyboard focus matches the project's existing focus pattern
-     (#input:focus uses the same accent ring + glow). Browsers
-     default focus ring would clash with the chat aesthetic. */
-  #font-toggle:focus {
+  #quiet-toggle:focus { outline: none; border-color: var(--accent); }
+  #quiet-toggle:focus:not(:focus-visible) { border-color: var(--rule); }
+  #quiet-toggle:focus-visible {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 1px var(--accent), 0 0 8px -2px rgba(107, 71, 255, 0.4);
   }
-  #font-toggle:focus:not(:focus-visible) {
-    box-shadow: none;
-    border-color: var(--rule);
-  }
-  #font-toggle:focus-visible {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent), 0 0 8px -2px rgba(107, 71, 255, 0.4);
-  }
-  #font-toggle .fs-a { font-size: 9px;  color: var(--muted); }
-  #font-toggle .fs-A { font-size: 13px; color: var(--muted); }
-  :root.fs-small #font-toggle .fs-a { color: var(--accent); }
-  :root.fs-large #font-toggle .fs-A { color: var(--accent); }
-  /* Scales chat content + input only — chrome (status bar, buttons,
-     modal headers, badges) stays fixed at its designed scale so the
-     layout doesn't reflow awkwardly. Tool-call summaries inherit
-     from #history so they scale automatically. */
-  :root.fs-large #history { font-size: 17px; }
-  :root.fs-large #input   { font-size: 17px; }
+  #quiet-toggle .qm-glyph { color: var(--muted); }
+  :root.quiet-mode #quiet-toggle .qm-glyph { color: var(--accent); }
+  /* Quiet-mode hiding: tool_call + tool_result + the collapsible
+     details.tool-pair wrapper all disappear. assistant text, user
+     prompts, errors, and hints stay visible. Status bar at the top
+     shows the agent's per-turn state ("calling td_create_node..."
+     etc.) so the user still has a progress signal. */
+  :root.quiet-mode .msg.tool_call,
+  :root.quiet-mode .msg.tool_result,
+  :root.quiet-mode details.tool-pair { display: none; }
   @keyframes blink {
     0%, 49% { opacity: 1; }
     50%, 100% { opacity: 0; }
@@ -278,6 +268,36 @@
     border-color: var(--accent);
   }
   .msg-copy.copied { color: var(--accent); border-color: var(--accent); }
+
+  /* v2.1.0 — contextual ASCII flourishes appended to assistant
+     messages on turn-end. The pool is keyword-matched against the
+     last user message + last assistant text so geometry / lighting /
+     audio / particle / camera / error / done topics each draw from
+     a small theme-specific glyph set. Flourishes are visually quiet
+     — accent-dim color, lower opacity, centered, generous letter-
+     spacing — so they read as a punctuation mark, not a decoration
+     stealing focus. Default pool is generic geometric glyphs. */
+  .msg-flourish {
+    margin-top: 10px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--rule);
+    text-align: center;
+    color: var(--accent-dim);
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 0.5em;
+    opacity: 0.55;
+    user-select: none;
+    line-height: 1;
+  }
+  .msg-flourish .topic {
+    display: block;
+    margin-top: 4px;
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
 
   /* Phase 2 (1.8.0) — node-path chips inside tool result bodies.
      Inline chips for TD paths (`/project1/noise1`) so the user can
@@ -657,7 +677,7 @@
     border-radius: 0;
     padding: 8px 10px;
     font-family: inherit;
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1.4;
     resize: none;
     outline: none;
@@ -727,11 +747,11 @@
     <span class="rhs">
       <span id="status-text">idle</span><span id="model-badge"></span><span id="token-meter"></span><span class="cursor">█</span>
     </span>
-    <button id="font-toggle" type="button"
-            title="Toggle chat font size (small / large)"
-            aria-label="Toggle chat font size"
+    <button id="quiet-toggle" type="button"
+            title="Quiet mode — hide tool-call detail (Cmd/Ctrl + .)"
+            aria-label="Toggle quiet mode"
             aria-pressed="false">
-      <span class="fs-a">a</span><span class="fs-A">A</span>
+      <span class="qm-glyph">●</span>
     </button>
   </div>
   <!--
@@ -821,31 +841,100 @@
   const $modelBadge = document.getElementById('model-badge');
   const $tokenMeter = document.getElementById('token-meter');
   const $scrollJump = document.getElementById('scroll-jump');
-  const $fontToggle = document.getElementById('font-toggle');
+  const $quietToggle = document.getElementById('quiet-toggle');
 
-  // PR-27 (v2.0) — chat font-size toggle. Two states; the active one
-  // is reflected as a class on <html>. Persisted per-browser via
-  // localStorage so the choice survives reloads. Restored before any
-  // history rendering happens so users with a saved 'large' setting
-  // never see a small-text flash on page load.
-  const FONT_KEY = 'tdpilot.fontMode';
-  function applyFontMode(mode) {
-    if (mode !== 'small' && mode !== 'large') mode = 'small';
-    document.documentElement.classList.remove('fs-small', 'fs-large');
-    document.documentElement.classList.add('fs-' + mode);
-    // aria-pressed reflects "non-default state" — large = pressed,
-    // small = not pressed. Lets screen readers announce the toggle
-    // state ("toggle button, pressed" / "not pressed") on focus.
-    $fontToggle.setAttribute('aria-pressed', mode === 'large' ? 'true' : 'false');
-    try { localStorage.setItem(FONT_KEY, mode); } catch (_) { /* private mode */ }
+  // v2.1.0 — quiet-mode toggle. Replaces the v2.0.0 font-size toggle
+  // (the `aA` glyph control) which had inconsistent scaling and felt
+  // out of place. Quiet mode hides the tool-call / tool-result blocks
+  // so the chat stays readable as a conversation: user prompts +
+  // assistant text + errors only. The agent's per-turn working state
+  // is still surfaced via the status bar at the top, so there's no
+  // progress-blackout. State persists per-browser via localStorage.
+  const QUIET_KEY = 'tdpilot.quietMode';
+  function applyQuietMode(on) {
+    if (on) document.documentElement.classList.add('quiet-mode');
+    else document.documentElement.classList.remove('quiet-mode');
+    $quietToggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+    $quietToggle.querySelector('.qm-glyph').textContent = on ? '●' : '○';
+    try { localStorage.setItem(QUIET_KEY, on ? '1' : '0'); } catch (_) { /* private mode */ }
   }
-  let _savedFontMode = 'small';
-  try { _savedFontMode = localStorage.getItem(FONT_KEY) || 'small'; } catch (_) { /* private mode */ }
-  applyFontMode(_savedFontMode);
-  $fontToggle.addEventListener('click', () => {
-    const cur = document.documentElement.classList.contains('fs-large') ? 'large' : 'small';
-    applyFontMode(cur === 'large' ? 'small' : 'large');
+  let _savedQuiet = false;
+  try { _savedQuiet = localStorage.getItem(QUIET_KEY) === '1'; } catch (_) { /* private mode */ }
+  applyQuietMode(_savedQuiet);
+  $quietToggle.addEventListener('click', () => {
+    applyQuietMode(!document.documentElement.classList.contains('quiet-mode'));
   });
+
+  // v2.1.0 — contextual ASCII flourishes. On agent turn-end (status
+  // transitions to idle after a non-idle state), pick a small glyph
+  // from a topic-matched pool and append it to the latest assistant
+  // message as a quiet visual punctuation. Retro-monochrome aesthetic
+  // — geometric / typographic, no emoji, no color beyond --accent-dim.
+  const ASCII_FLOURISHES = {
+    default: ['▰▰▰', '∴', '◇ ◇ ◇', '═══', '· · ·', '──◆──', '·:·:·', '▱▰▱', '── ✦ ──'],
+    light:    ['✺ ✸ ✺', '\\●/', '─ ✷ ─', '※ ✺ ※'],
+    camera:   ['[◉]', '▤ ▥ ▤', '▣ ─ ▣', '┌─◎─┐'],
+    particle: ['· ∴ · ∴ ·', '⋆ ✦ ⋆', '·:·∴·:·', '∗ ⋆ ∗'],
+    material: ['▓▒░ ░▒▓', '░▒▓▒░', '▓ ─ ▓'],
+    audio:    ['~~~ ∿ ~~~', '∿∿∿∿', '· ∿ · ∿ ·'],
+    geom:     ['◆ ─ ◇ ─ ◆', '△ ▽ △', '□ ▣ □', '◯ ◉ ◯'],
+    error:    ['× × ×', '!? ─ ?!', '× ─ ✗ ─ ×'],
+    success:  ['✓ ✓ ✓', '✦ ─ ▰ ─ ✦', '── ✓ ──', '· · ✦ · ·'],
+  };
+  const TOPIC_RULES = [
+    { topic: 'light',    re: /\b(light|lamp|illuminat|sun|shadow|brightness|expos)/i },
+    { topic: 'camera',   re: /\b(camera|view|render|frame|lens|fov|projection|cam[0-9]?)\b/i },
+    { topic: 'particle', re: /\b(particle|pop|noise|swirl|flow|fluid|sand|spark)/i },
+    { topic: 'material', re: /\b(material|texture|color|paint|pbr|phong|shader)/i },
+    { topic: 'audio',    re: /\b(audio|sound|music|chop|wave|spectrum|fft)/i },
+    { topic: 'geom',     re: /\b(sop|geom|mesh|sphere|box|grid|line|extrude|topo)/i },
+    { topic: 'error',    re: /\b(error|fail|broken|crash|exception|traceback)/i },
+    { topic: 'success',  re: /\b(done|complete|fixed|working|success|ready|shipped|live)/i },
+  ];
+  function pickFlourish(contextText) {
+    const text = String(contextText || '');
+    const matched = ['default'];
+    for (const { topic, re } of TOPIC_RULES) {
+      if (re.test(text)) matched.push(topic);
+    }
+    // Prefer a matched topic over default (skew last) — pick uniform random
+    // from matched, but if any non-default topic matched, weight it 2× by
+    // putting default at the tail of the choice list.
+    const specific = matched.filter((t) => t !== 'default');
+    const pool = specific.length > 0 && Math.random() > 0.25
+      ? ASCII_FLOURISHES[specific[Math.floor(Math.random() * specific.length)]]
+      : ASCII_FLOURISHES.default;
+    const glyph = pool[Math.floor(Math.random() * pool.length)];
+    const topic = specific.length > 0 ? specific[0] : '';
+    return { glyph, topic };
+  }
+  function attachFlourishToLastAssistant() {
+    // Walk backwards through #history children to find the most recent
+    // assistant message that doesn't already carry a flourish.
+    const msgs = $history.querySelectorAll('.msg.assistant');
+    if (msgs.length === 0) return;
+    const last = msgs[msgs.length - 1];
+    if (last.querySelector('.msg-flourish')) return;
+    // Use the last user message as the primary topic source (most
+    // accurate signal of what the turn is about), with the assistant
+    // body as fallback so a generic prompt like "fix it" still picks
+    // up topic from the response.
+    const userMsgs = $history.querySelectorAll('.msg.user .body');
+    const lastUser = userMsgs.length > 0 ? userMsgs[userMsgs.length - 1].textContent : '';
+    const assistantBody = last.querySelector('.body');
+    const ctx = (lastUser || '') + ' ' + (assistantBody ? assistantBody.textContent : '');
+    const { glyph, topic } = pickFlourish(ctx);
+    const f = document.createElement('div');
+    f.className = 'msg-flourish';
+    f.textContent = glyph;
+    if (topic) {
+      const t = document.createElement('span');
+      t.className = 'topic';
+      t.textContent = topic;
+      f.appendChild(t);
+    }
+    last.appendChild(f);
+  }
 
   // Render the initial welcome from the same template fullSync uses, so
   // the wizard DOM is guaranteed present.
@@ -1711,7 +1800,17 @@
   }
 
   function setAgentStatus(text) {
-    agentState = (text || 'idle').toLowerCase();
+    const newState = (text || 'idle').toLowerCase();
+    const wasWorking = isWorkingAgentState(agentState);
+    agentState = newState;
+    // v2.1.0 — when the agent transitions from a working state back
+    // to idle, the assistant has finished responding. Append a
+    // contextual ASCII flourish to the last assistant message as
+    // quiet visual punctuation. Wrapped in try/catch so a flourish
+    // bug never blocks the status transition.
+    if (wasWorking && newState === 'idle') {
+      try { attachFlourishToLastAssistant(); } catch (_) { /* defensive */ }
+    }
     render();
   }
 
@@ -1910,17 +2009,13 @@
       $input.focus();
       return;
     }
-    // PR-27 (v2.0) — Cmd/Ctrl + `+` / `-` toggles chat font size
-    // independently of the browser-native zoom (which still works).
-    // `=` matches `+` for the unshifted keycap on US/EU layouts.
-    if (cmd && (e.key === '+' || e.key === '=')) {
+    // v2.1.0 — Cmd/Ctrl + `.` toggles quiet mode. Discoverable via
+    // the title= tooltip on the toggle button at the far right of
+    // the status bar. Period chosen because `.` evokes "minimal /
+    // condensed" and isn't claimed by browsers.
+    if (cmd && e.key === '.') {
       e.preventDefault();
-      applyFontMode('large');
-      return;
-    }
-    if (cmd && e.key === '-') {
-      e.preventDefault();
-      applyFontMode('small');
+      applyQuietMode(!document.documentElement.classList.contains('quiet-mode'));
       return;
     }
     // End — jump to bottom of history. Useful after scrolling up to
