@@ -12,7 +12,7 @@ For the standalone .tox path, see the [main README](https://github.com/dreamrec/
 
 ---
 
-TDPilot v1.7.0 provides 103 MCP tools for live control of TouchDesigner projects from Claude Code, optimized for DeepSeek v4. The bundled `.tox` includes a one-button installer (drag-drop into TD, click "Bootstrap All", done) — no manual setup script.
+TDPilot v1.9.0 provides 103 MCP tools for live control of TouchDesigner projects from Claude Code, optimized for DeepSeek v4. The bundled `.tox` includes a one-button installer (drag-drop into TD, click "Bootstrap All", done) — no manual setup script.
 
 ## Components
 
