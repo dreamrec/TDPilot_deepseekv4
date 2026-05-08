@@ -22,8 +22,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # Must match _TOX_SOURCE_FILES in td_component/build_export_mcp_tox.py
+# v1.8.3 (PR-16): mcp_webserver_callbacks.py was decomposed into td_component/callbacks/.
+# The hash now covers the split sources and the composer; any byte change in
+# any of these files bumps the hash and forces a .tox rebuild.
 SOURCE_FILES = (
-    "td_component/mcp_webserver_callbacks.py",
+    # mcp/ split package — replaces the pre-1.8.3 mcp_webserver_callbacks.py.
+    "td_component/callbacks/_composer.py",
+    "td_component/callbacks/__init__.py",
+    "td_component/callbacks/_header.py",
+    "td_component/callbacks/router.py",
+    "td_component/callbacks/auth.py",
+    "td_component/callbacks/serializers.py",
+    "td_component/callbacks/handlers/__init__.py",
+    "td_component/callbacks/handlers/nodes.py",
+    "td_component/callbacks/handlers/exec_and_custom_params.py",
+    "td_component/callbacks/handlers/exec_python.py",
+    "td_component/callbacks/handlers/inspect.py",
+    "td_component/callbacks/handlers/search.py",
+    "td_component/callbacks/handlers/lifecycle.py",
+    "td_component/callbacks/handlers/pulse.py",
+    "td_component/callbacks/handlers/monitor.py",
+    "td_component/callbacks/handlers/analyze_frame.py",
     "td_component/event_emitter.py",
     "td_component/ws_callbacks.py",
     "td_component/tdpilot_dpsk4_startup.py",

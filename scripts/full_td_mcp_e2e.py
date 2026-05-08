@@ -259,17 +259,43 @@ class E2ESuite:
             raise TestFailure("Resource templates unexpectedly low")
 
     async def _step_sync_td_component_scripts(self) -> None:
-        """Hot-sync latest TD-side scripts into loaded /project1/mcp_server DATs."""
-        mapping = [
-            ("/project1/mcp_server/callbacks", self.repo_dir / "td_component" / "mcp_webserver_callbacks.py"),
+        """Hot-sync latest TD-side scripts into loaded /project1/mcp_server DATs.
+
+        PR-16 (v1.8.3): the callbacks DAT body is now composed from the
+        td_component/callbacks/ split package rather than read from a single
+        god module file. We import the composer to mirror the .tox-build
+        path exactly.
+        """
+        # Import the composer late so this script doesn't require the rest of
+        # the package to be importable at module load.
+        import sys as _sys
+
+        repo_str = str(self.repo_dir)
+        added = False
+        if repo_str not in _sys.path:
+            _sys.path.insert(0, repo_str)
+            added = True
+        try:
+            from td_component.callbacks._composer import compose as _compose_callbacks
+        finally:
+            if added:
+                _sys.path.remove(repo_str)
+        callbacks_text = _compose_callbacks()
+
+        text_mapping: list[tuple[str, str]] = [
+            ("/project1/mcp_server/callbacks", callbacks_text),
+        ]
+
+        path_mapping = [
             ("/project1/mcp_server/ws_callbacks", self.repo_dir / "td_component" / "ws_callbacks.py"),
             ("/project1/mcp_server/event_emitter", self.repo_dir / "td_component" / "event_emitter.py"),
         ]
-
-        for td_path, file_path in mapping:
+        for td_path, file_path in path_mapping:
             if not file_path.is_file():
                 raise FileNotFoundError(f"Missing file for TD sync: {file_path}")
-            text = file_path.read_text(encoding="utf-8")
+            text_mapping.append((td_path, file_path.read_text(encoding="utf-8")))
+
+        for td_path, text in text_mapping:
             await self._call_tool("td_set_content", {"path": td_path, "text": text})
 
     async def _step_core_info(self) -> None:

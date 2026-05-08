@@ -1,17 +1,10 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
-MODULE_PATH = Path(__file__).resolve().parents[1] / "td_component" / "mcp_webserver_callbacks.py"
+from _callbacks_loader import callbacks_source, load_callbacks_module
 
 
 def _load_callbacks_module():
-    spec = importlib.util.spec_from_file_location("td_cb_ext_test", str(MODULE_PATH))
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    return load_callbacks_module("td_cb_ext_test")
 
 
 class _FakeVec:
@@ -265,7 +258,7 @@ def test_handle_analyze_frame_function_exists():
 
 def test_handle_analyze_frame_registered_in_route_table():
     """'/api/analyze_frame' must appear in the route table source."""
-    source = MODULE_PATH.read_text()
+    source = callbacks_source()
     assert "'/api/analyze_frame'" in source or '"/api/analyze_frame"' in source, (
         "'/api/analyze_frame' not found in route table"
     )
