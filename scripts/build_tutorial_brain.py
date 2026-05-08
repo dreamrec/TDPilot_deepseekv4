@@ -538,10 +538,6 @@ def process_tutorial(
         if not toe_files or not toeexpand_bin:
             return []  # truly nothing to process
 
-    # Count frames for metadata
-    frames_dir = folder_path / "frames"
-    frame_count = len(list(frames_dir.glob("*.png"))) if frames_dir.is_dir() else 0
-
     # Find TOE/TOX files
     toe_files = list(folder_path.glob("*.toe")) + list(folder_path.glob("*.tox"))
 

@@ -104,7 +104,7 @@ def test_doctor_passes_auth_check_when_secret_set(monkeypatch, capsys, tmp_path)
     monkeypatch.setenv("TD_MCP_REQUIRE_AUTH", "1")
     monkeypatch.setenv("TD_MCP_SHARED_SECRET", "x" * 32)
 
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(SystemExit):
         server.main(["doctor", "--skip-td-check"])
     # Exit code is about overall doctor health (tox etc). The auth line itself
     # must not be a FAIL; grep the output.

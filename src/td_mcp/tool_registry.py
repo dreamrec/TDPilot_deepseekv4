@@ -1365,7 +1365,7 @@ async def _build_state_vector(path: str, ctx: Context) -> dict[str, Any]:
         "events": {
             "recent_count": len(recent_events),
             "subscriptions": len(subscriptions),
-            "subscription_paths": sorted(f"{p}:{et}" for p, et in subscriptions.keys()),
+            "subscription_paths": sorted(f"{p}:{et}" for p, et in subscriptions),
         },
         "monitoring": {
             "visual_monitors": len(active_monitors),
@@ -1585,7 +1585,7 @@ async def _apply_optimizer_plan(
             for name, value in adjusted.items():
                 applied.append({"path": path, "param": name, "value": value})
         except Exception as exc:
-            for name in params.keys():
+            for name in params:
                 failed.append({"path": path, "param": name, "error": str(exc)})
 
     return {

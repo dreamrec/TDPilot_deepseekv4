@@ -18,7 +18,7 @@ def test_new_technique_has_candidate_state():
 def test_technique_state_in_summary():
     with tempfile.TemporaryDirectory() as d:
         store = TechniqueStore(base_dir=d)
-        tid = store.add({"recipe": {}}, scope="global", name="test")
+        store.add({"recipe": {}}, scope="global", name="test")
         results = store.list_techniques(scope="global")
         assert results[0]["state"] == "candidate"
 

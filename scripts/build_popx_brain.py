@@ -133,11 +133,10 @@ def normalize_popx_file(filepath: Path, rel_path: str) -> dict[str, Any] | None:
     h1 = content_div.find("h1")
     title = ""
     if h1:
-        # Strip version span
+        # Strip version span — discarded; we only need it removed from the H1
+        # so the title text comes out clean.
         version_span = h1.find("span", class_="operator-version")
-        version = ""
         if version_span:
-            version = version_span.get_text(strip=True)
             version_span.decompose()
         title = h1.get_text(strip=True)
 

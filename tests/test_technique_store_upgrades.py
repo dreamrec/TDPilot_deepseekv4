@@ -46,7 +46,7 @@ def test_compatibility_in_summary():
     with tempfile.TemporaryDirectory() as d:
         store = TechniqueStore(base_dir=d)
         compat = {"min_build": "2025.32460"}
-        tid = store.add({"recipe": {}}, scope="global", name="test", compatibility=compat)
+        store.add({"recipe": {}}, scope="global", name="test", compatibility=compat)
         results = store.list_techniques(scope="global")
         assert results[0].get("compatibility") is not None
 

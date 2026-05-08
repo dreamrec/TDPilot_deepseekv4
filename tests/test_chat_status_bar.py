@@ -71,11 +71,6 @@ def test_agent_loop_invokes_on_usage_per_call(agent_src: str):
     """The per-call usage hook must fire after each ``_call_api``
     return, not just at turn end. Per-call granularity is needed so
     long tool-use chains show progressive token accumulation."""
-    m = re.search(
-        r"response = self\._call_api\(\)(.+?)content = response\.get\(\"content\"",
-        agent_src,
-        re.S,
-    )
     # The usage hook is fired right after we have the response; allow
     # either ordering of content / usage extraction.
     full_block = re.search(
