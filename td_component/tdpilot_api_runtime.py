@@ -1085,6 +1085,37 @@ class AgentRuntime:
             )
 
     # ------------------------------------------------------------------
+    # v2.1.1 — paused-TD probe.
+    #
+    # When TD playback is paused (me.time.play = False), TD's
+    # ``onFrameStart`` callback does NOT fire. The CookThreadDispatcher
+    # pump runs from ``onFrameStart``, so every tool call submitted by
+    # the worker thread blocks until the 60s timeout and returns
+    # ``{"error": "Tool ... timed out after 60.0s"}``. The agent sees
+    # the wall of timeouts and falsely concludes "TD is unresponsive"
+    # and tells the user to restart TouchDesigner — when the actual
+    # fix is one keypress.
+    #
+    # Option A in v2.1.1: detect paused state at start_turn and emit
+    # a soft EV_HINT explaining the symptom. The pump architecture is
+    # untouched; moving pump off ``onFrameStart`` (Option B) is filed
+    # as separate tech debt.
+    # ------------------------------------------------------------------
+
+    def _is_td_paused(self) -> bool:
+        """Return True if TouchDesigner playback is paused.
+
+        Returns False when the play state can't be determined (running
+        outside TD, ``parent()`` raises THREAD CONFLICT, etc.) — never
+        claim paused without proof, or unit-test environments would
+        emit phantom warnings on every turn.
+        """
+        try:
+            return not bool(parent().time.play)  # type: ignore[name-defined]
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
     # Public API used by the COMP extension
     # ------------------------------------------------------------------
 
@@ -1095,6 +1126,21 @@ class AgentRuntime:
             return False
         if self._worker is not None and self._worker.is_alive():
             return False
+        # v2.1.1 — paused-TD UX trap. See _is_td_paused docstring above.
+        # Emit BEFORE any other turn-prep work so the warning lands
+        # in the chat even if a downstream step raises.
+        if self._is_td_paused():
+            self._push(
+                EV_HINT,
+                {
+                    "kind": "paused_td",
+                    "message": (
+                        "TouchDesigner playback is paused — tool calls will time out after 60s "
+                        "because onFrameStart isn't firing. Press the spacebar in TD (or the "
+                        "play button in the timeline) to resume cook-thread tool dispatch."
+                    ),
+                },
+            )
         # v2.1.0 — live-refresh model_tier from the COMP param so users
         # can switch flash ↔ pro ↔ auto mid-session without pulsing
         # Reload Config (which would rebuild the Agent and re-trigger

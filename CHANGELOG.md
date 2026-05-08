@@ -1,5 +1,139 @@
 # Changelog
 
+## 2.1.1 - 2026-05-08
+
+**Two UX patches surfaced from live audits.** A paused-TD trap that
+made tool calls silently 60s-timeout and confused the agent into
+declaring "TD unresponsive", plus four new `recovery_hints` patterns
+harvested from a 184-message lighting-redesign turn (11 tool_result
+errors, all agent-learning, zero TD-side bugs).
+
+### Fix 1 — paused-TD UX trap
+
+When TouchDesigner playback is paused (`me.time.play = False`), TD's
+`onFrameStart` callback does not fire, which means the
+`CookThreadDispatcher` pump never runs. Every tool call submitted by
+the worker thread blocks until its 60s timeout and returns
+`{"error": "Tool ... timed out after 60.0s"}`. The agent saw the
+wall of timeouts and falsely concluded "TouchDesigner is
+unresponsive" and instructed users to restart TD — when the actual
+fix was one keypress.
+
+- New `AgentRuntime._is_td_paused()` probe — wraps
+  `parent().time.play` in a defensive try/except that returns False
+  outside TD (so unit tests / headless runs don't emit phantom
+  warnings).
+- `start_turn` now checks `_is_td_paused()` before any other
+  turn-prep work and emits `EV_HINT(kind="paused_td", message=...)`
+  when paused. The chat UI surfaces the hint as a soft warning
+  pointing at the spacebar / play button. The check is
+  non-blocking — the worker still spawns and the message still
+  reaches the model, so users debugging with TD paused can still
+  ask questions; they just see the explanation upfront.
+
+#### Known limitation (tracked tech debt)
+
+The underlying pump architecture is unchanged: the cook-thread
+dispatcher is still driven by `onFrameStart`, so paused TD will
+still wedge tool calls until the user resumes playback. Moving the
+pump off `onFrameStart` (e.g. via a `chopExecuteDAT` watching a
+`constantCHOP` that ticks regardless of timeline play, or a
+`timerCHOP` parameterCHOP) is the architecturally correct fix and
+is filed for a future minor release.
+
+### Fix 2 — Four new `recovery_hints` patterns
+
+Each pattern targets a specific wrong-API guess observed in
+production turns. Hints follow the v2.0.1 design rules (narrow
+regex, single specific hint, append at end so existing matches keep
+priority).
+
+- `'td.Par' object has no attribute 'rawVal'`
+  → use `par.eval` / `par.val` / `par.expr` (`rawVal` was a
+  TD-2022 name, removed in TD 2025).
+- `'td.renderTOP' object has no attribute '(cooking|numCooks|xres|yres)'`
+  → point at `top.par.resolutionw/h`, `top.cookCount`,
+  `top.cookTime`. Single regex covers all four typo variants.
+- `'tdu.Matrix' object has no attribute 'translation'`
+  → use `.tx` / `.ty` / `.tz` (or `.decompose()` for the full
+  triple). There's no `.translation` field.
+- `'td.ParCollection' object has no attribute 'children'`
+  → that's the parameter list, not the operator children. Use
+  `op.children`; to iterate parameters use `op.pars(page=...)`.
+
+### Chat UI — user-message red mark
+
+User-typed messages were quiet purple in v2.1.0; in a long
+scrollback they were easy to lose. v2.1.1 flips the styling to a
+"terminal LCD stamp" idiom while keeping the existing CRT/ASCII
+vibe (scanlines, monospace, brackets):
+
+- 4px solid red left rule (other roles still use 2px) — the user
+  prompt is the one chunk that should be visible at a glance when
+  scrolling.
+- Red gradient background fading rightward so long prompts don't
+  read as a solid red block.
+- Pure white body text for max contrast against both the dark panel
+  and the new red elements.
+- White-on-red `[ USER ]` role stamp — brackets included, so the
+  whole tag reads as one monospaced block-stamp.
+
+Three new CSS variables (`--user-red`, `--user-red-2`,
+`--user-red-bg`) drive the palette so future tweaks don't touch
+the rules. Pin-tests in `tests/test_chat_html_v211_user_mark.py`
+lock each piece (palette declared, thick rule, gradient bg, white
+body, white-on-red stamp, white brackets, no leakage to other
+roles).
+
+### Build/CI — API .tox freshness gate
+
+Pre-2.1.1 only `tdpilot-dpsk4.tox` had a CI freshness gate; its
+sibling `tdpilot_API.tox` (which embeds `tdpilot_api_*.py`,
+`tdpilot_api_chat.html`, the composed `mcp_webserver_callbacks`
+text, and the build script bytes) went stale silently if a
+contributor edited the API source tree without rebuilding inside
+TD. End users would install the plugin and get an old binary
+while CI stayed green.
+
+- `td_component/build_tdpilot_api_tox.py` now writes
+  `td_component/.tox-api-source-hash.json` at the end of every
+  rebuild, mirroring the dpsk4 hash file. Hash inputs:
+  - All direct embeds from `_SOURCE_FILES` (the `<COMPOSE>`
+    sentinel is skipped — its content is tracked via the
+    callbacks/ files below).
+  - The 16 files of the `callbacks/` split package (composed into
+    the `mcp_webserver_callbacks` textDAT body).
+  - The build script itself, so any change to .tox layout forces
+    a rebuild signal even when no embedded source changed.
+- New `scripts/check_tox_api_freshness.py` — parallel to the
+  existing `check_tox_freshness.py`. Same algorithm, different
+  source list. CI runs it as the new "API .tox freshness check"
+  step right after the dpsk4 gate.
+
+### Tests
+
+- `tests/test_paused_td_warning.py` — four regression tests
+  covering: hint fires when paused, no hint when playing,
+  `_is_td_paused` returns False outside TD, and the hint does not
+  short-circuit a turn.
+- `tests/test_v211_recovery_hints.py` — seven parametrized
+  `recovery.attach_hint` cases (one per pattern, with the
+  `renderTOP` regex exercised across all four typo variants).
+- `tests/test_chat_html_v211_user_mark.py` — seven HTML/CSS
+  pin-tests for the new user-message stamp design.
+
+### Verifying the gate locally
+
+```bash
+# Should pass if everything's in sync:
+uv run python scripts/check_tox_api_freshness.py
+
+# Should fail with a hash mismatch when source has drifted:
+echo "# noqa" >> td_component/tdpilot_api_runtime.py
+uv run python scripts/check_tox_api_freshness.py  # exit 1
+git checkout -- td_component/tdpilot_api_runtime.py
+```
+
 ## 2.1.0 - 2026-05-08
 
 **Chat UI rework + 13 v2.0 audit fixes.** Collapses what was going

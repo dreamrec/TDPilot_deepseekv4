@@ -181,6 +181,48 @@ _RECOVERY_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
             "td_get_params. td_python_help is for type-level docs only."
         ),
     ),
+    # ------------------------------------------------------------------
+    # v2.1.1 — patterns surfaced from a real lighting-redesign turn
+    # (184 messages, 11 tool_result errors, all agent-learning errors —
+    # zero TD-side bugs). Each one is a wrong-API guess for a real
+    # concept; the hint points at the right TD API.
+    # ------------------------------------------------------------------
+    (
+        re.compile(r"'td\.Par' object has no attribute 'rawVal'", re.IGNORECASE),
+        (
+            "Use par.eval (the live-value method, no args), par.val for the "
+            "saved value, or par.expr for the expression text. 'rawVal' was "
+            "a deprecated TD-2022 name and was removed in TD 2025."
+        ),
+    ),
+    (
+        re.compile(
+            r"'td\.renderTOP' object has no attribute '(cooking|numCooks|xres|yres)'",
+            re.IGNORECASE,
+        ),
+        (
+            "renderTOP doesn't expose those as direct attributes. Use "
+            "top.par.resolutionw / top.par.resolutionh for resolution, "
+            "top.cookCount / top.cookTime for cook stats. Call "
+            "td_python_help('renderTOP') for the full attribute surface."
+        ),
+    ),
+    (
+        re.compile(r"'tdu\.Matrix' object has no attribute 'translation'", re.IGNORECASE),
+        (
+            "tdu.Matrix uses .tx / .ty / .tz for the translation row, "
+            ".decompose() returns (translate, rotate, scale) as three "
+            "tuples. There's no '.translation' field."
+        ),
+    ),
+    (
+        re.compile(r"'td\.ParCollection' object has no attribute 'children'", re.IGNORECASE),
+        (
+            "ParCollection is the parameter list, not the operator children. "
+            "For child operators use op.children. To iterate parameters use "
+            "op.pars() or filter by page with op.pars(page='Page Name')."
+        ),
+    ),
 )
 
 

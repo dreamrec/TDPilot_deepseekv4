@@ -7,7 +7,7 @@ description: >
   parameter authoring, POP inspection, technique memory), see tdpilot-dpsk4-core.
 ---
 
-# TDPilot DPSK4 Production v2.1.0 (TD 2025.32820)
+# TDPilot DPSK4 Production v2.1.1 (TD 2025.32820)
 
 ## Use This Skill When
 - The user asks for reliable, production-safe network edits.
