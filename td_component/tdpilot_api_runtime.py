@@ -295,14 +295,19 @@ SYSTEM_PROMPT_BASE = (
     "td_connect_nodes, td_delete_node) over td_exec_python for normal "
     "operations — they're more reliable and don't have scope traps.\n\n"
     "Memory protocol:\n"
-    "  * You have a persistent memory at ~/.tdpilot-api/memory/. The "
+    "  * You have a persistent memory store managed via memory_save / "
+    "memory_get / memory_recall / memory_list / memory_delete. The "
     "MEMORY.md index below this section is auto-injected each turn.\n"
-    "  * SAVE memory whenever you learn something non-obvious — user "
-    "preferences, validated approaches, project context, references. Use "
-    "memory_save with the right type (user/feedback/project/reference). "
-    "Record from BOTH corrections AND successes: if you only save "
-    "corrections you'll drift away from approaches the user has already "
-    "validated.\n"
+    "  * SAVE memory only when the user explicitly asks ('remember this', "
+    "'save a memory about X', 'note this for next time') OR when the "
+    "user has just given you a clearly-stated rule / preference / fact "
+    "that should outlive the session. Do NOT save reflections about your "
+    "own behaviour or self-improvement notes uninvited — those are noise "
+    "in the user's MEMORY.md index. When unsure, ask first.\n"
+    "  * When you DO save: pick the right type (user/feedback/project/"
+    "reference). Record from BOTH corrections AND successes — if you "
+    "only save corrections you'll drift away from approaches the user "
+    "has already validated.\n"
     "  * RECALL memory when relevant — call memory_get on a specific "
     "indexed entry, or memory_recall(query) for BM25 search. Do this "
     "BEFORE asking the user clarifying questions when you suspect the "
@@ -314,15 +319,15 @@ SYSTEM_PROMPT_BASE = (
     "version with the same name — same name overwrites.\n\n"
     "Knowledge protocol:\n"
     "  * You have a bundled TD knowledge corpus (operator families, "
-    "Python idioms, common pitfalls) plus user-added entries in "
-    "~/.tdpilot-api/knowledge/. The list below this section is the index.\n"
+    "Python idioms, common pitfalls) plus a user pool managed via "
+    "knowledge_add. The list below this section is the index.\n"
     "  * SEARCH knowledge BEFORE guessing on TD specifics — operator-type "
     "capitalisation, type names, Python idioms, threading rules, pull-"
     "cooking gotchas. Call knowledge_search(query) first; if a hit looks "
     "promising, knowledge_get(name) for full content.\n"
     "  * If you discover a TD specific that's NOT in the corpus and "
     "would be valuable for future sessions, save it via knowledge_add "
-    "(persists in ~/.tdpilot-api/knowledge/, NOT in memory).\n"
+    "(persists separately from memory).\n"
     "  * Trust order on search hits (every match carries a "
     "`trust_tier` field): official > bundled > personal > community > "
     "transcript > experimental. Official docs and live TD state "
@@ -569,9 +574,9 @@ class AgentRuntime:
 
         # Phase 4.1 — per-turn observability traces. Records turn
         # timing + every tool call's name/args_hash/latency/ok into
-        # ~/.tdpilot-api/traces/<YYYY-MM-DD>.jsonl. Async writer so
-        # the cook thread never blocks. Disable via
-        # ``config["trace_logging"] = False``.
+        # the resolved traces directory (see DEFAULT_TRACES_DIR in
+        # tdpilot_api_tracing). Async writer so the cook thread never
+        # blocks. Disable via ``config["trace_logging"] = False``.
         self._tool_call_starts: dict[str, float] = {}
         # Phase 2 (1.8.0) — always-on per-tool latency clock for the
         # chat UI's "(123ms)" badge. Lives independently of the tracer

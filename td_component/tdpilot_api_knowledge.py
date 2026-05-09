@@ -46,7 +46,14 @@ from typing import Any
 # Storage layout
 # ---------------------------------------------------------------------------
 
-USER_KNOWLEDGE_DIR = Path.home() / ".tdpilot-api" / "knowledge"
+# 2.1.3 — namespaced under ~/.tdpilot-dpsk4/api/knowledge with legacy
+# ~/.tdpilot-api/knowledge fallback (see tdpilot_api_config.resolve_user_dir).
+try:
+    from tdpilot_api_config import resolve_user_dir  # type: ignore[import-not-found]
+
+    USER_KNOWLEDGE_DIR = resolve_user_dir("knowledge")
+except ImportError:
+    USER_KNOWLEDGE_DIR = Path.home() / ".tdpilot-api" / "knowledge"
 KB_CONTAINER_NAME = "kb"
 KB_DAT_PREFIX = "kb_"
 

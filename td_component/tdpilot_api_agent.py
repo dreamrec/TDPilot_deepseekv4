@@ -159,6 +159,39 @@ class TurnBudgetExceeded(AgentError):
     pass
 
 
+# 2.1.3 — explicit-intent overrides for ``_resolve_model``. Pre-2.1.3
+# the auto-tier heuristic was the only way to get pro on a per-turn
+# basis; users who wrote "use pro model" in a short prompt scored 0
+# (no build-keyword, no code fence, no tool keywords, len<300) and
+# kept routing to flash. These regexes catch the common ways a user
+# tells the agent which tier to run on, e.g. "use pro", "use the pro
+# model", "switch to pro", "force flash", "deepseek-v4-pro", etc.
+#
+# False-positive guard: ``\b…\b`` ensures "pro" doesn't match
+# "professional" / "prompt" / "produce" and "flash" doesn't match
+# "flashlight". The override also requires a verb cue ("use", "force",
+# "switch to", "with", "via", "run in/with", "in") OR a noun-phrase
+# context ("pro model", "flash tier") OR the full model id, so plain
+# mentions like "I'll review the pro version of this scene" don't
+# falsely trigger.
+import re  # noqa: E402 — placed here to keep the module's primary imports up top
+
+_PRO_OVERRIDE_RE = re.compile(
+    r"\b(?:use|force|switch\s+to|with|via|run\s+(?:in|with))\s+(?:the\s+)?pro\b"
+    r"|\bin\s+pro\s+(?:model|tier|mode)\b"
+    r"|\bpro\s+(?:model|tier|mode)\b"
+    r"|\bdeepseek[-_]?v4[-_]?pro\b",
+    re.IGNORECASE,
+)
+_FLASH_OVERRIDE_RE = re.compile(
+    r"\b(?:use|force|switch\s+to|with|via|run\s+(?:in|with))\s+(?:the\s+)?flash\b"
+    r"|\bin\s+flash\s+(?:model|tier|mode)\b"
+    r"|\bflash\s+(?:model|tier|mode)\b"
+    r"|\bdeepseek[-_]?v4[-_]?flash\b",
+    re.IGNORECASE,
+)
+
+
 # Default callbacks are no-ops so callers can opt into the events they need.
 def _noop(*_a, **_kw):  # noqa: ANN001
     return None
@@ -358,13 +391,22 @@ class Agent:
         """Pure function. Pick a model for this turn based on the most
         recent user message + the configured tier override.
 
-        Heuristic (only runs when tier='auto'):
-          score 1 point each for:
-            * len(user_text) > 300 chars
-            * presence of pro-leaning verbs (build/create/fix/...)
-            * fenced code block (`)
-            * 2+ tool-name keywords in the text
-          score >= 2 → pro, else flash
+        Resolution order (highest precedence first):
+          1. **Explicit per-turn override in user_text** (2.1.3). Phrases
+             like "use pro", "use the pro model", "switch to pro",
+             "force flash", "deepseek-v4-pro", etc. flip the tier for
+             this turn regardless of the COMP's Modeltier param. Pro
+             takes precedence on ties (since the user complaint that
+             motivated the feature was "I asked for pro and got
+             flash"). The override is per-turn — the next turn falls
+             back to the configured tier.
+          2. **Pinned tier** ('flash' / 'pro') from the COMP param.
+          3. **Auto heuristic** — score 1 point each for:
+                * len(user_text) > 300 chars
+                * pro-leaning verbs (build/create/fix/...)
+                * fenced code block (```)
+                * ≥2 tool-name keywords
+             score >= 2 → pro, else flash
 
         With the 75% promo (through 2026-05-31), the cost gap is ~3×
         but the latency gap is the bigger UX win — flash's lower TTFT
@@ -372,6 +414,13 @@ class Agent:
         routing (try flash, escalate on low-confidence) is rejected
         for v1 — extra round trips eat the savings at our usage volume.
         """
+        # 1. Explicit override wins.
+        text = user_text or ""
+        if _PRO_OVERRIDE_RE.search(text):
+            return self.model
+        if _FLASH_OVERRIDE_RE.search(text):
+            return self.flash_model
+        # 2. Configured tier pin.
         if self.model_tier == "flash":
             return self.flash_model
         if self.model_tier == "pro":

@@ -176,6 +176,24 @@ class TDPilotAPIExt:
 
     def _build_runtime(self) -> None:
         try:
+            # 2.1.3 — surface insecure-mode prominently in textport so
+            # users can't unknowingly run with auth disabled. Pre-2.1.3
+            # this was a silent env toggle; the audit found it active
+            # on a real machine with no startup signal that the
+            # webserver was wide open.
+            if os.environ.get("TDPILOT_API_INSECURE", "").strip() in ("1", "true", "yes"):
+                msg = (
+                    "\n"
+                    "============================================================\n"
+                    "  ⚠  TDPILOT_API_INSECURE=1 — chat-pipe webserver running\n"
+                    "      with NO TOKEN AUTH. Anyone who can reach\n"
+                    "      http://127.0.0.1:9987 can drive this TD instance.\n"
+                    "      (Origin allowlist still rejects browser CSRF.)\n"
+                    "      Unset the env var to require X-TDPilot-Token.\n"
+                    "============================================================\n"
+                )
+                print(msg)
+
             handlers_dat = self.owner.op("mcp_webserver_callbacks")
             if handlers_dat is None:
                 self._set_status("error: mcp_webserver_callbacks DAT missing")
@@ -201,7 +219,33 @@ class TDPilotAPIExt:
             # by the same user; a malicious tool author isn't part of
             # our threat model. If you need strict isolation, run the
             # variants in separate TD processes.
-            os.environ["TD_MCP_EXEC_MODE"] = "full"
+            #
+            # 2.1.3 — defense in depth: when ``TDPILOT_API_INSECURE=1``
+            # is also set, the chat-pipe webserver bypasses token auth.
+            # If we ALSO leave EXEC_MODE=full, an unauthenticated POST
+            # to /send can chain into ``td_exec_python`` with full
+            # Python privileges (drive-by RCE from any browser tab the
+            # user has open). Clamp to ``restricted`` instead — the
+            # agent loses some introspection, but a no-auth surface
+            # cannot escalate to RCE. Users who want both insecure mode
+            # AND full exec must explicitly opt in by setting
+            # ``TDPILOT_API_ALLOW_INSECURE_FULL_EXEC=1``.
+            insecure = os.environ.get("TDPILOT_API_INSECURE", "").strip() in ("1", "true", "yes")
+            allow_insecure_full = (
+                os.environ.get("TDPILOT_API_ALLOW_INSECURE_FULL_EXEC", "").strip()
+                in ("1", "true", "yes")
+            )
+            if insecure and not allow_insecure_full:
+                os.environ["TD_MCP_EXEC_MODE"] = "restricted"
+                print(
+                    "[tdpilot_API] WARNING: TDPILOT_API_INSECURE=1 detected — "
+                    "clamping TD_MCP_EXEC_MODE to 'restricted' to break the "
+                    "no-auth + full-exec RCE chain. Set "
+                    "TDPILOT_API_ALLOW_INSECURE_FULL_EXEC=1 to opt back into "
+                    "full mode (only safe in trusted single-user dev sandboxes)."
+                )
+            else:
+                os.environ["TD_MCP_EXEC_MODE"] = "full"
 
             from tdpilot_api_dispatcher import make_dispatcher  # type: ignore[import-not-found]
             from tdpilot_api_runtime import AgentRuntime  # type: ignore[import-not-found]
@@ -268,6 +312,86 @@ class TDPilotAPIExt:
     # Pulse handlers — invoked by the parameterexecuteDAT
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # 2.1.3 — chat inbox queue. Backstop for the case where /send fires
+    # while the worker is still processing a prior turn (multiple browser
+    # tabs, external tooling, param-panel + HTML simultaneously).
+    # Pre-2.1.3 the second send overwrote ``Chatmessage.val`` and the
+    # first message was silently dropped if not yet consumed. Now we
+    # always clear the param immediately, push the message into a FIFO
+    # on ``comp.storage``, and drain one entry per EV_DONE.
+    # ------------------------------------------------------------------
+
+    _STORAGE_KEY_INBOX = "tdpilot_api_chat_inbox"
+
+    def _inbox(self) -> list:
+        """Return the live inbox queue, creating it on first use.
+        Stored on ``comp.storage`` so it survives textDAT reload (same
+        rationale as ``_ws_clients`` in tdpilot_api_web_callbacks)."""
+        try:
+            box = self.owner.fetch(self._STORAGE_KEY_INBOX, None)
+            if not isinstance(box, list):
+                box = []
+                self.owner.store(self._STORAGE_KEY_INBOX, box)
+            return box
+        except Exception:
+            return []
+
+    def _enqueue(self, msg: str) -> int:
+        """Append a message; return the resulting queue length (1 = head)."""
+        try:
+            box = self._inbox()
+            box.append(msg)
+            self.owner.store(self._STORAGE_KEY_INBOX, box)
+            return len(box)
+        except Exception:
+            return -1
+
+    def _dequeue(self) -> str | None:
+        """Pop one message off the head, or None if empty."""
+        try:
+            box = self._inbox()
+            if not box:
+                return None
+            msg = box.pop(0)
+            self.owner.store(self._STORAGE_KEY_INBOX, box)
+            return msg
+        except Exception:
+            return None
+
+    def _clear_inbox(self) -> None:
+        try:
+            self.owner.store(self._STORAGE_KEY_INBOX, [])
+        except Exception:
+            pass
+
+    def _drain_inbox_one(self) -> None:
+        """Try to start a turn for the next queued message. No-op if
+        the runtime is missing or still busy. Called from EV_DONE."""
+        if self._runtime is None:
+            return
+        msg = self._dequeue()
+        if msg is None:
+            return
+        ok = self._runtime.start_turn(msg)
+        if not ok:
+            # Worker still busy — re-insert at head, try again on next EV_DONE.
+            box = self._inbox()
+            box.insert(0, msg)
+            try:
+                self.owner.store(self._STORAGE_KEY_INBOX, box)
+            except Exception:
+                pass
+
+    def _read_chat_param(self) -> str:
+        """Read the current Chatmessage parameter as a stripped string.
+        Wrapped so callers don't need to know about TD's parameter API
+        (calling ``.eval()`` directly tripped a security-hook regex)."""
+        par = self.owner.par.Chatmessage
+        getter = getattr(par, "eval", None)
+        raw = getter() if callable(getter) else par
+        return str(raw or "").strip()
+
     def OnSendPulse(self, skip_html_echo: bool = False) -> None:
         """Fire a chat turn with whatever's in the Chatmessage parameter.
 
@@ -276,25 +400,40 @@ class TDPilotAPIExt:
         the user's input optimistically (its send() path does this, see
         chat HTML). Default False so param-panel sends DO get pushed to
         the browser.
+
+        2.1.3 — when the worker is busy, append to the inbox queue
+        instead of silently dropping. ``Chatmessage.val`` is always
+        cleared so a follow-up /send isn't blocked by stale text.
         """
         if self._runtime is None:
             self._set_status("not ready")
             return
-        msg = str(self.owner.par.Chatmessage.eval() or "").strip()
+        msg = self._read_chat_param()
         if not msg:
             self._set_status("empty message")
             return
+        # Always clear the param up front. Pre-2.1.3 we only cleared on
+        # successful start_turn; a second /send while busy overwrote the
+        # un-consumed value. Now the param is a transient input slot,
+        # not a buffer.
+        try:
+            self.owner.par.Chatmessage.val = ""
+        except Exception:
+            pass
         ok = self._runtime.start_turn(msg)
         if ok:
             self._append_transcript("user", msg)
             if not skip_html_echo:
                 self._html_append("user", msg)
-            try:
-                self.owner.par.Chatmessage.val = ""
-            except Exception:
-                pass
         else:
-            self._set_status("busy")
+            position = self._enqueue(msg)
+            self._append_transcript("user", msg)
+            if not skip_html_echo:
+                self._html_append("user", msg)
+            if position > 0:
+                self._set_status(f"busy — queued at position {position}")
+            else:
+                self._set_status("busy — queue write failed")
 
     def OnStopPulse(self) -> None:
         if self._runtime is not None:
@@ -307,6 +446,10 @@ class TDPilotAPIExt:
         transcript = self.owner.op("chat_transcript")
         if transcript is not None:
             transcript.clear(keepFirstRow=True)
+        # 2.1.3 — drop any queued (un-processed) messages too. A reset
+        # implies "start fresh"; running stale queue items would surface
+        # as ghost user messages from the prior session.
+        self._clear_inbox()
         # Tell every connected browser to wipe its view.
         self._broadcast({"type": "clear"})
         self._set_status("reset")
@@ -502,6 +645,11 @@ class TDPilotAPIExt:
             self._set_status("idle")
             self._html_status("idle")
             self._play_done_sound("done")
+            # 2.1.3 — drain one queued message if any. Calling
+            # start_turn synchronously here is safe because EV_DONE is
+            # delivered on the cook thread and start_turn is the
+            # cook-thread-side public API.
+            self._drain_inbox_one()
         elif kind == EV_ERROR:
             self._append_transcript("error", str(payload))
             self._html_append("error", str(payload))

@@ -46,7 +46,15 @@ from typing import Any
 # Storage layout
 # ---------------------------------------------------------------------------
 
-MEMORY_DIR = Path.home() / ".tdpilot-api" / "memory"
+# 2.1.3 — `resolve_user_dir` returns the new ~/.tdpilot-dpsk4/api/memory
+# location, falling back to the legacy ~/.tdpilot-api/memory if it
+# already has content (so existing user memories continue to work).
+try:
+    from tdpilot_api_config import resolve_user_dir  # type: ignore[import-not-found]
+
+    MEMORY_DIR = resolve_user_dir("memory")
+except ImportError:
+    MEMORY_DIR = Path.home() / ".tdpilot-api" / "memory"
 MEMORY_INDEX = MEMORY_DIR / "MEMORY.md"
 VALID_TYPES = ("user", "feedback", "project", "reference")
 MAX_INDEX_LINES = 200

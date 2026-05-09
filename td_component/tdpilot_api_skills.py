@@ -77,7 +77,17 @@ try:
 except ImportError:
     yaml = None  # type: ignore[assignment]
 
-USER_SKILLS_DIR = Path.home() / ".tdpilot-api" / "skills"
+# 2.1.3 — namespaced under ~/.tdpilot-dpsk4/api/skills with legacy fallback.
+# Pre-2.1.3 user skills landed at ~/.tdpilot-api/skills/ — the audit
+# found that directory never existed on the dpsk4 fork's typical install
+# (the variant uses ~/.tdpilot-dpsk4/* for everything else), so user-side
+# skill overrides silently failed to load.
+try:
+    from tdpilot_api_config import resolve_user_dir  # type: ignore[import-not-found]
+
+    USER_SKILLS_DIR = resolve_user_dir("skills")
+except ImportError:
+    USER_SKILLS_DIR = Path.home() / ".tdpilot-api" / "skills"
 SKILLS_CONTAINER_NAME = "skills"
 SKILL_DAT_PREFIX = "skill_"
 

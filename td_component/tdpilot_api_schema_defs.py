@@ -653,7 +653,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     # ---------------------------------------------------------------------
-    # Memory tools — persistent markdown notes in ~/.tdpilot-api/memory/.
+    # Memory tools — persistent markdown notes in ~/.tdpilot-dpsk4/api/memory/.
     # Pattern matches Claude Code's memory system; files survive across
     # sessions and are auto-indexed via MEMORY.md (loaded into the
     # system prompt at session start).
@@ -661,7 +661,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "memory_save",
         "description": (
-            "Save a memory file to ~/.tdpilot-api/memory/ for future sessions. "
+            "Save a memory file to ~/.tdpilot-dpsk4/api/memory/ for future sessions. "
             "Use whenever you learn something non-obvious about the user, the "
             "project, or how to do something — corrections, preferences, "
             "validated approaches, decisions, key references. Each memory is a "
@@ -781,14 +781,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     # ---------------------------------------------------------------------
     # Knowledge tools — bundled TD reference corpus + user additions in
-    # ~/.tdpilot-api/knowledge/. BM25 search over both pools combined.
+    # ~/.tdpilot-dpsk4/api/knowledge/. BM25 search over both pools combined.
     # ---------------------------------------------------------------------
     {
         "name": "knowledge_search",
         "description": (
             "BM25 search the TouchDesigner knowledge corpus — bundled "
             "reference docs (operator families, Python idioms, common "
-            "pitfalls), user-added .md files in ~/.tdpilot-api/knowledge/, "
+            "pitfalls), user-added .md files in ~/.tdpilot-dpsk4/api/knowledge/, "
             "AND any external docsbrain corpora found at "
             "~/.tdpilot/data/normalized/<name>/pages.jsonl (e.g. 'popx' "
             "= 58 pages of POPx library docs, 'derivative' = 2478 pages "
@@ -858,7 +858,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "knowledge_add",
         "description": (
-            "Add a new knowledge entry to the user pool (~/.tdpilot-api/"
+            "Add a new knowledge entry to the user pool (~/.tdpilot-dpsk4/api/"
             "knowledge/). Bundled entries are read-only — to override a "
             "bundled entry, save a user entry with the same `name` field "
             "and it will take precedence. Use this to teach the agent "
@@ -1021,7 +1021,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     # Skills tools — on-demand behaviour modulators. Each skill is a
     # markdown doc with discipline rules for a specific workflow (POPs,
     # performance optimization, glsl, etc.). Bundled defaults plus user
-    # additions in ~/.tdpilot-api/skills/.
+    # additions in ~/.tdpilot-dpsk4/api/skills/.
     # ---------------------------------------------------------------------
     {
         "name": "skill_list",
@@ -1075,7 +1075,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "now they're listed with specific error messages. Pass `name` to "
             "validate one skill, omit to get the list of all currently "
             "invalid skills. Use after editing a skill in "
-            "~/.tdpilot-api/skills/ to confirm it parses correctly."
+            "~/.tdpilot-dpsk4/api/skills/ to confirm it parses correctly."
         ),
         "input_schema": {
             "type": "object",
@@ -1090,7 +1090,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     # ---------------------------------------------------------------------
     # Snapshot + Patch session tools — safety mechanisms for risky builds.
-    # Snapshots are full .toe saves to ~/.tdpilot-api/snapshots/ (heavy).
+    # Snapshots are full .toe saves to ~/.tdpilot-dpsk4/api/snapshots/ (heavy).
     # Patch sessions wrap operations in TD's native undo block API
     # (lightweight, atomic rollback). Sprint 3.3.
     # ---------------------------------------------------------------------
@@ -1098,7 +1098,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "snapshot_save",
         "description": (
             "Save the current TD project to a .toe file in "
-            "~/.tdpilot-api/snapshots/. Use BEFORE risky multi-step builds "
+            "~/.tdpilot-dpsk4/api/snapshots/. Use BEFORE risky multi-step builds "
             "you can't easily reproduce. Snapshot restore is NOT exposed "
             "as a tool (project.load() would destroy the agent COMP "
             "mid-call) — users restore manually via TD's File > Open. "
@@ -1123,7 +1123,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "snapshot_list",
-        "description": "List saved snapshots in ~/.tdpilot-api/snapshots/, newest first.",
+        "description": "List saved snapshots in ~/.tdpilot-dpsk4/api/snapshots/, newest first.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -1199,7 +1199,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     # ---------------------------------------------------------------------
     # User-pluggable tools (Sprint 4.2)
     # The agent's tool surface can be extended at runtime by dropping
-    # Python files in ~/.tdpilot-api/tools/<name>.py with a SCHEMA dict
+    # Python files in ~/.tdpilot-dpsk4/api/tools/<name>.py with a SCHEMA dict
     # + handle(args) function. These two MANAGEMENT tools let the user
     # see what's loaded and validate edits before reload.
     # ---------------------------------------------------------------------
@@ -1207,7 +1207,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "tool_list_user",
         "description": (
             "List user-pluggable tools loaded from "
-            "~/.tdpilot-api/tools/. Returns metadata for each — both "
+            "~/.tdpilot-dpsk4/api/tools/. Returns metadata for each — both "
             "successfully active tools AND files that failed to load "
             "(with the validation error so the user can fix them). "
             "Useful for diagnosing 'I dropped a tool but it's not in "
@@ -1225,7 +1225,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "Dry-validate a Python file as a user tool WITHOUT "
             "registering it. Use this to check schema validity before "
             "the user pulses Reload Config. Path can be absolute OR "
-            "relative to ~/.tdpilot-api/tools/. Returns ok=true with "
+            "relative to ~/.tdpilot-dpsk4/api/tools/. Returns ok=true with "
             "schema summary, or ok=false with the specific error "
             "(missing SCHEMA, missing handle(), bad name regex, "
             "wrong input_schema shape, etc.)."
@@ -1236,7 +1236,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "path": {
                     "type": "string",
                     "description": (
-                        "File path. Absolute or relative to ~/.tdpilot-api/tools/. e.g. 'my_tool.py'."
+                        "File path. Absolute or relative to ~/.tdpilot-dpsk4/api/tools/. e.g. 'my_tool.py'."
                     ),
                 },
             },
@@ -1354,7 +1354,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     # Macros (Sprint 4.4) — parametrized network templates.
     # 5 bundled: feedback_loop, post_processing, audio_reactive,
     # particle_gpu, feedback_displacement. User templates in
-    # ~/.tdpilot-api/macros/*.json layer over bundled.
+    # ~/.tdpilot-dpsk4/api/macros/*.json layer over bundled.
     # ---------------------------------------------------------------------
     {
         "name": "macro_list",
@@ -1364,7 +1364,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "(macro_run). 5 bundled: feedback_loop, post_processing, "
             "audio_reactive, particle_gpu, feedback_displacement. "
             "Users can add custom macros as JSON files in "
-            "~/.tdpilot-api/macros/ which override bundled by name."
+            "~/.tdpilot-dpsk4/api/macros/ which override bundled by name."
         ),
         "input_schema": {
             "type": "object",
@@ -1779,7 +1779,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "td_get_recent_traces",
         "description": (
             "Return the most recent per-turn observability traces "
-            "written to ~/.tdpilot-api/traces/. Each trace is a dict "
+            "written to ~/.tdpilot-dpsk4/api/traces/. Each trace is a dict "
             "with ts, session_id, turn_id, user_text_hash, model_tier, "
             "model_used, total_tokens, tool_calls (list of {name, "
             "args_hash, latency_ms, ok, error}), outcome, "

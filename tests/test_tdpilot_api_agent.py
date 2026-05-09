@@ -493,6 +493,90 @@ def test_resolve_model_pinned_in_loop():
 
 
 # ---------------------------------------------------------------------------
+# 2.1.3 — explicit per-turn model override in user text
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_model_explicit_pro_override_beats_flash_pin():
+    """User pinned tier=flash but writes 'use pro' — override flips to pro
+    for this turn. Reproduces the v2.1.3 bug report: 'I'm prompting it to
+    use pro model and he still uses flash.'"""
+    a = _make_agent_for_routing("flash")
+    assert a._resolve_model("use pro model for this one") == "deepseek-v4-pro"
+    assert a._resolve_model("please use the pro model") == "deepseek-v4-pro"
+    assert a._resolve_model("switch to pro and rebuild") == "deepseek-v4-pro"
+    assert a._resolve_model("force pro tier please") == "deepseek-v4-pro"
+    assert a._resolve_model("run this in pro mode") == "deepseek-v4-pro"
+    assert a._resolve_model("via deepseek-v4-pro thanks") == "deepseek-v4-pro"
+
+
+def test_resolve_model_explicit_flash_override_beats_pro_pin():
+    """Reverse direction: user pinned pro but writes 'use flash' — drops
+    to flash for this turn (cheap quick lookup)."""
+    a = _make_agent_for_routing("pro")
+    assert a._resolve_model("use flash for this lookup") == "deepseek-v4-flash"
+    assert a._resolve_model("switch to flash model") == "deepseek-v4-flash"
+    assert a._resolve_model("force flash tier") == "deepseek-v4-flash"
+    assert a._resolve_model("run in flash mode") == "deepseek-v4-flash"
+
+
+def test_resolve_model_explicit_override_in_auto_short_text():
+    """Auto tier + short text would normally route to flash. Explicit
+    'use pro' lifts even a 5-word lookup to pro."""
+    a = _make_agent_for_routing("auto")
+    # Without override: short lookup → flash.
+    assert a._resolve_model("what is a noiseTOP") == "deepseek-v4-flash"
+    # With explicit override: pro, even for the same short lookup.
+    assert a._resolve_model("use pro: what is a noiseTOP") == "deepseek-v4-pro"
+
+
+def test_resolve_model_pro_wins_when_both_keywords_present():
+    """If a turn happens to mention BOTH 'use pro' and 'use flash'
+    (probably the user revising mid-message), pro wins. Rationale: the
+    motivating bug was 'I asked for pro and got flash', so we bias the
+    tie-break toward pro to fail safe."""
+    a = _make_agent_for_routing("auto")
+    assert a._resolve_model("use flash, no wait use pro") == "deepseek-v4-pro"
+    assert a._resolve_model("use pro then use flash later") == "deepseek-v4-pro"
+
+
+def test_resolve_model_override_false_positive_guard():
+    """The override must NOT trigger on common substrings.
+
+    Words that contain 'pro' or 'flash' as a substring but aren't a
+    real tier directive: 'professional', 'professionally', 'prompt',
+    'production', 'process', 'flashlight', 'flashy', 'flashed'.
+    Word boundaries in the regex protect against these.
+    """
+    a = _make_agent_for_routing("auto")
+    # All of these should follow the auto heuristic (short lookup → flash),
+    # NOT trigger the pro override.
+    assert a._resolve_model("the professional tools section") == "deepseek-v4-flash"
+    assert a._resolve_model("show me the prompt syntax") == "deepseek-v4-flash"
+    assert a._resolve_model("a production-ready setup") == "deepseek-v4-flash"
+    assert a._resolve_model("the flashlight effect") == "deepseek-v4-flash"
+    assert a._resolve_model("a flashy intro") == "deepseek-v4-flash"
+    # 'pro' / 'flash' appearing without a verb cue or model-noun
+    # context is also not enough — needs 'use', 'force', 'switch to',
+    # 'with', 'via', 'run in/with', 'in', or a noun like 'pro model'.
+    assert a._resolve_model("pro tip: noise wraps") == "deepseek-v4-flash"
+    assert a._resolve_model("flash of insight") == "deepseek-v4-flash"
+
+
+def test_resolve_model_explicit_override_pinned_in_loop():
+    """When the override fires, ``_active_model`` should pin to the
+    overridden choice for the whole tool-use chain (cache stability).
+    Tested by calling _resolve_model twice with the same text — should
+    return the same answer both times."""
+    a = _make_agent_for_routing("flash")  # pinned to flash
+    text = "use pro for this build"
+    first = a._resolve_model(text)
+    second = a._resolve_model(text)
+    assert first == "deepseek-v4-pro"
+    assert second == "deepseek-v4-pro"
+
+
+# ---------------------------------------------------------------------------
 # Phase 0.1 — cache-stable dynamic-context slot.
 #
 # Contract: the system prompt prefix MUST be byte-identical across every

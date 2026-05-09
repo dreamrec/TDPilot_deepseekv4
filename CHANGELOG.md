@@ -1,5 +1,150 @@
 # Changelog
 
+## 2.1.3 - 2026-05-09
+
+**Security hardening + chat-pipe queue + path harmonization for
+`tdpilot_API.tox`.** A fresh deep-debug audit of the chat-pipe found
+a CSRF / drive-by-RCE chain plus a silent-message-drop bug. Both
+closed in this release; storage is also unified under the dpsk4
+variant root.
+
+### Security fixes
+
+- **Bug #1 — `TDPILOT_API_INSECURE` no longer bypasses origin
+  checks.** Pre-2.1.3 the insecure-mode env var bypassed BOTH the
+  token AND the origin gate, leaving the chat-pipe wide open to
+  cross-origin browser CSRF. Now insecure-mode bypasses **only** the
+  token check; the origin allowlist + `Sec-Fetch-Site` checks always
+  fire. Legitimate non-browser tooling (curl, Python `requests`)
+  sends no `Origin` header so it still passes the same-origin gate.
+  See `_check_auth` in `td_component/tdpilot_api_web_callbacks.py`.
+- **Bug #3 — `EXEC_MODE` clamps to `restricted` in insecure mode.**
+  Pre-2.1.3 the API tox unconditionally set
+  `TD_MCP_EXEC_MODE=full` at COMP load, so an unauthenticated POST
+  to `/send` could chain into `td_exec_python` with full Python
+  privileges. Now the clamp triggers whenever `TDPILOT_API_INSECURE`
+  is truthy. Users who genuinely need full mode for trusted local
+  scripting can opt back in by setting
+  `TDPILOT_API_ALLOW_INSECURE_FULL_EXEC=1`. See
+  `_build_runtime` in `td_component/tdpilot_api_extension.py`.
+- **`/send` now requires `Content-Type: application/json`.** The
+  pre-2.1.3 plain-text body was a CORS "simple request" that
+  bypassed preflight, letting cross-origin pages POST into the
+  chat-pipe without the browser checking `Access-Control-Allow-
+  Origin`. JSON triggers a preflight, which the origin gate
+  rejects. The chat HTML's `send()` was migrated to the
+  `{"message": "<text>"}` envelope.
+- **Loud startup banner when insecure-mode is active** — pre-2.1.3
+  the bypass was a silent env toggle and the audit found it active
+  on a real machine with no startup signal. The banner prints to
+  textport on every COMP load and lists the secure-mode opt-in
+  path.
+
+### Reliability fixes
+
+- **Bug #2 — rapid `/send` no longer drops messages.** Pre-2.1.3 a
+  follow-up `/send` while the worker was still busy overwrote
+  `comp.par.Chatmessage.val` before the prior message was consumed,
+  so the prior message was silently dropped. New behaviour: the
+  param is always cleared up front; messages that arrive while the
+  worker is alive are appended to a FIFO inbox queue on
+  `comp.storage` (`tdpilot_api_chat_inbox` key) and drained one at
+  a time on each `EV_DONE`. The `/reset` path clears the queue.
+  - **Chat HTML send-button gate.** The send button now stays
+    disabled until the runtime emits a non-working agent state
+    (`idle`, `ready`, `reset`, `error`, `send failed`) over the
+    WebSocket, not just until the `/send` fetch resolves.
+    Re-enabling on the fetch (which returns `queued` instantly)
+    was the surface symptom of the queue-drop bug.
+
+### Path harmonization
+
+- **Chat-pipe storage moved under `~/.tdpilot-dpsk4/api/<subdir>`**
+  with transparent legacy `~/.tdpilot-api/<subdir>` fallback. The
+  dpsk4 fork now uses a single variant root for all its state
+  (matching the MCP-side layout). New helper
+  `tdpilot_api_config.resolve_user_dir(subdir)` returns the new
+  location by default, falling back to the legacy path if it has
+  content (per-subdir, not bulk-migrated). All 9 chat-pipe modules
+  with hardcoded path constants (`memory`, `knowledge`, `recipes`,
+  `skills`, `snapshots`, `traces`, `macros`, `tools`, `history`)
+  now route through `resolve_user_dir`. Tool descriptions in
+  `tdpilot_api_schema_defs.py` were swept to point at the new
+  default — the LLM-facing copy and the runtime resolution are now
+  consistent.
+- The legacy `~/.tdpilot-api/` is still used by users who have
+  data there; no automatic migration runs on import. To move data,
+  manually `mv ~/.tdpilot-api/* ~/.tdpilot-dpsk4/api/` after
+  closing TD.
+
+### Tone / politeness
+
+- **Memory protocol updated.** The system prompt now instructs the
+  agent NOT to save reflections about its own behaviour uninvited —
+  only when the user explicitly asks ("remember this", "save a
+  memory") or has just stated a clear rule / preference / fact
+  worth keeping. Auto-saved meta-feedback memories were noise in
+  the user's MEMORY.md index.
+
+### Model routing
+
+- **Bug — explicit "use pro" / "use flash" in user text was
+  ignored.** Pre-2.1.3 the auto-tier heuristic was the only way to
+  flip pro/flash on a per-turn basis. Users who set the COMP's
+  `Modeltier` to `flash` (or left it at `auto` with a short
+  prompt) and wrote "use pro model" in their message kept routing
+  to flash because the heuristic scored 0 (no build-keyword, no
+  code fence, no tool keywords, len < 300). Now `_resolve_model`
+  checks `_PRO_OVERRIDE_RE` / `_FLASH_OVERRIDE_RE` against the
+  user text BEFORE the tier-pin or auto heuristic. Phrases that
+  trigger the override:
+  - `use pro` / `use the pro model` / `switch to pro` / `force pro`
+  - `with pro` / `via pro` / `run in pro` / `run with pro`
+  - `pro model` / `pro tier` / `pro mode` / `in pro mode`
+  - `deepseek-v4-pro` / `deepseekv4pro` / `deepseek_v4_pro`
+
+  Same pattern set applies to flash. Pro takes precedence on ties
+  (since the motivating bug was "I asked for pro and got flash").
+  The override is per-turn only — the next turn falls back to the
+  configured tier.
+
+  False-positive guard via `\b…\b` word boundaries: the override
+  does NOT trigger on `professional`, `professionally`, `prompt`,
+  `production`, `process`, `flashlight`, `flashy`, `flashed`, or
+  bare `pro` / `flash` mentions without a verb cue. Tests at
+  `tests/test_tdpilot_api_agent.py::test_resolve_model_*_override_*`.
+
+### Files touched
+
+Source files (all in API tox source list — `.tox` rebuild required
+in TD; CI will reject this branch until `.tox-source-hash.json`
+is regenerated):
+
+```
+td_component/tdpilot_api_web_callbacks.py     # Bug #1 server side
+td_component/tdpilot_api_chat.html            # Bug #1 client + Bug #2 client
+td_component/tdpilot_api_extension.py         # Bug #3 + Bug #2 server + banner
+td_component/tdpilot_api_runtime.py           # system-prompt politeness + path-string sweep
+td_component/tdpilot_api_config.py            # resolve_user_dir
+td_component/tdpilot_api_memory.py            # path constant
+td_component/tdpilot_api_knowledge.py         # path constant
+td_component/tdpilot_api_recipes.py           # path constant
+td_component/tdpilot_api_skills.py            # path constant
+td_component/tdpilot_api_patches.py           # path constant
+td_component/tdpilot_api_tracing.py           # path constant
+td_component/tdpilot_api_user_tools.py        # path constant
+td_component/tdpilot_api_macros.py            # path constant
+td_component/tdpilot_api_compaction.py        # path constant
+td_component/tdpilot_api_introspect.py        # firstrun memory probe
+td_component/tdpilot_api_schema_defs.py       # tool-description path sweep
+td_component/tdpilot_api_recovery.py          # error-message path
+td_component/callbacks/_header.py             # API_VERSION bump
+```
+
+Tests `tests/test_standalone_csrf.py::test_insecure_mode_bypasses_token_and_origin`
+was renamed/updated to assert the new contract (insecure-mode
+bypasses token only, not origin).
+
 ## 2.1.2 - 2026-05-09
 
 **Patch: opt-in MCP auth.** Pre-2.1.2 the dpsk4 COMP's

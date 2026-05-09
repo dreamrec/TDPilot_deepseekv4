@@ -51,7 +51,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_HISTORY_DIR = Path.home() / ".tdpilot-api" / "history"
+# 2.1.3 — namespaced under ~/.tdpilot-dpsk4/api/history with legacy fallback.
+try:
+    from tdpilot_api_config import resolve_user_dir  # type: ignore[import-not-found]
+
+    DEFAULT_HISTORY_DIR = resolve_user_dir("history")
+except ImportError:
+    DEFAULT_HISTORY_DIR = Path.home() / ".tdpilot-api" / "history"
 DEFAULT_THRESHOLD = 20
 DEFAULT_KEEP_RECENT = 10
 

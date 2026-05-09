@@ -1001,6 +1001,14 @@
   let turnOutputTokens = 0;
   let turnCachedTokens = 0;
   let lastWorking = false;
+  // 2.1.3 — gate the send button on the runtime's turn-end signal,
+  // not on the /send fetch resolution. /send returns 'queued' instantly
+  // (the worker may still be running on the previous turn), so
+  // re-enabling on .finally() let the user fire a follow-up that
+  // overwrote the still-pending Chatmessage param. The flag is set on
+  // send() and cleared in setAgentStatus when the agent transitions
+  // back to a non-working state.
+  let awaitingTurnEnd = false;
 
   function isWorkingAgentState(s) {
     const t = String(s || '').toLowerCase();
@@ -1844,6 +1852,14 @@
     if (wasWorking && newState === 'idle') {
       try { attachFlourishToLastAssistant(); } catch (_) { /* defensive */ }
     }
+    // 2.1.3 — re-enable the send button only when the agent reports a
+    // non-working state. ``isWorkingAgentState`` returns false for
+    // 'idle', 'ready', 'reset', 'connected', 'error*', 'send failed*'
+    // — i.e. anything where the user can safely fire a new turn.
+    if (awaitingTurnEnd && !isWorkingAgentState(newState)) {
+      awaitingTurnEnd = false;
+      $send.disabled = false;
+    }
     render();
   }
 
@@ -1907,25 +1923,41 @@
       return;
     }
     $input.value = '';
+    // 2.1.3 — keep the send button disabled until the runtime emits
+    // the matching turn-end status ('idle' / 'stopped' / 'error') over
+    // the WebSocket. Re-enabling on fetch resolution (which returns
+    // 'queued' instantly) used to let the user fire a follow-up while
+    // the worker was still busy; the Chatmessage param then got
+    // overwritten and the prior message was silently dropped. The
+    // status-bus listener (see setAgentStatus) lifts the disable.
     $send.disabled = true;
+    awaitingTurnEnd = true;
     setAgentStatus('sending…');
     appendMessage('user', trimmed);
     recordSent(trimmed);
+    // 2.1.3 — JSON envelope. Pre-2.1.3 used plain text body, but
+    // ``Content-Type: text/plain`` is a CORS "simple request" that
+    // bypasses preflight; combined with ``TDPILOT_API_INSECURE`` this
+    // exposed a drive-by-RCE vector. JSON forces CORS preflight which
+    // the server's origin gate then rejects for cross-origin calls.
     fetch(SEND_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8', ...AUTH_HEADERS },
-      body: trimmed,
+      headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
+      body: JSON.stringify({ message: trimmed }),
     })
       .then((r) => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         setAgentStatus('thinking…');
       })
       .catch((err) => {
+        // Fetch failed — restore button immediately, clear awaiting
+        // flag so a retry isn't blocked.
+        awaitingTurnEnd = false;
+        $send.disabled = false;
         setAgentStatus('send failed: ' + err.message);
         appendMessage('error', 'Could not reach TD WebServer at ' + SEND_URL + ': ' + err.message);
       })
       .finally(() => {
-        $send.disabled = false;
         $input.focus();
       });
   }
