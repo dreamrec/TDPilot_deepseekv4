@@ -1,5 +1,66 @@
 # Changelog
 
+## 2.1.2 - 2026-05-09
+
+**Patch: opt-in MCP auth.** Pre-2.1.2 the dpsk4 COMP's
+`autostart.onStart()` unconditionally popped `TD_MCP_SHARED_SECRET`
+and forced `TD_MCP_REQUIRE_AUTH=0` on every project load, so any
+persistent secret a user wrote to
+`~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` got wiped before the
+webserverDAT could see it. Single-user local-dev users got
+zero-config drag-and-go behaviour; anyone wanting persistent MCP
+auth had no path that survived TD restart.
+
+### Fix
+
+- `td_component/autostart.py` — `_disable_auth()` now checks for
+  `TDPILOT_DISABLE_AUTH_BYPASS=1` (or `true`/`yes`/`on`) before
+  wiping the secret. Default behaviour unchanged: a fresh drag-in
+  with no env file still gets unauthenticated MCP access. Setting
+  the flag in `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` opts into
+  persistent shared-secret auth, which the env file's
+  `TD_MCP_SHARED_SECRET=...` line then drives.
+- New `_is_truthy_env()` helper accepts `"1"` / `"true"` / `"yes"`
+  / `"on"` (case-insensitive, whitespace-trimmed). Anything else —
+  including `"0"`, `"false"`, blank, or a typo — falls through to
+  the legacy bypass, which keeps users from accidentally enabling
+  auth via a commented-out env line.
+
+### How to opt into persistent MCP auth
+
+```bash
+# Generate a paired secret + write the canonical env file:
+uv run python scripts/render_mcp_config.py        # writes .mcp.json.local
+SECRET=$(grep -oE '"TD_MCP_SHARED_SECRET":\s*"[a-f0-9]+"' .mcp.json.local | grep -oE '[a-f0-9]{64}')
+mkdir -p ~/.tdpilot-dpsk4
+cat > ~/.tdpilot-dpsk4/.tdpilot-dpsk4.env <<EOF
+TDPILOT_DISABLE_AUTH_BYPASS=1
+TD_MCP_REQUIRE_AUTH=1
+TD_MCP_SHARED_SECRET=$SECRET
+EOF
+chmod 0600 ~/.tdpilot-dpsk4/.tdpilot-dpsk4.env
+```
+
+Restart TD. The dpsk4 startup module loads the env file, autostart
+sees the flag and skips the bypass, the webserverDAT validates
+incoming requests against `$SECRET`, and the CLI in `.mcp.json.local`
+sends the matching value. Cross-launch persistent auth.
+
+### Tests
+
+- `tests/test_v212_autostart_opt_in_auth.py` — 21 parametrised
+  cases covering: default (legacy bypass) preserved, every
+  truthy variant of the flag opts out cleanly, every falsy /
+  typo'd variant still bypasses, and the helper handles
+  whitespace + missing env vars defensively.
+
+### .tox impact
+
+`autostart.py` is in `_TOX_SOURCE_FILES` for the dpsk4 build
+script — the rebuilt `tdpilot-dpsk4.tox` is required to ship this
+change. The API .tox is unaffected (autostart isn't in its
+source list). Both freshness gates verify cleanly post-rebuild.
+
 ## 2.1.1 - 2026-05-08
 
 **Two UX patches surfaced from live audits.** A paused-TD trap that
