@@ -317,7 +317,13 @@ def _build_default_templates() -> dict[str, MacroTemplate]:
 # ===========================================================================
 
 
-USER_MACROS_DIR = Path.home() / ".tdpilot-api" / "macros"
+# 2.1.3 — namespaced under ~/.tdpilot-dpsk4/api/macros with legacy fallback.
+try:
+    from tdpilot_api_config import resolve_user_dir  # type: ignore[import-not-found]
+
+    USER_MACROS_DIR = resolve_user_dir("macros")
+except ImportError:
+    USER_MACROS_DIR = Path.home() / ".tdpilot-api" / "macros"
 
 
 def _load_user_templates(directory: str | Path | None = None) -> tuple[dict[str, MacroTemplate], list[str]]:

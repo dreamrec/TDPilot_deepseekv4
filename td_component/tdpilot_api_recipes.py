@@ -79,7 +79,13 @@ from typing import Any
 # Storage layout
 # ---------------------------------------------------------------------------
 
-RECIPES_DIR = Path.home() / ".tdpilot-api" / "recipes"
+# 2.1.3 — namespaced under ~/.tdpilot-dpsk4/api/recipes with legacy fallback.
+try:
+    from tdpilot_api_config import resolve_user_dir  # type: ignore[import-not-found]
+
+    RECIPES_DIR = resolve_user_dir("recipes")
+except ImportError:
+    RECIPES_DIR = Path.home() / ".tdpilot-api" / "recipes"
 RECIPES_INDEX = RECIPES_DIR / "INDEX.md"
 MAX_INDEX_LINES = 200
 

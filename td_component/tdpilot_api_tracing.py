@@ -42,7 +42,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_TRACES_DIR = Path.home() / ".tdpilot-api" / "traces"
+# 2.1.3 — namespaced under ~/.tdpilot-dpsk4/api/traces with legacy fallback.
+try:
+    from tdpilot_api_config import resolve_user_dir  # type: ignore[import-not-found]
+
+    DEFAULT_TRACES_DIR = resolve_user_dir("traces")
+except ImportError:
+    DEFAULT_TRACES_DIR = Path.home() / ".tdpilot-api" / "traces"
 RETENTION_DAYS = 30
 HASH_PREFIX_LEN = 12
 

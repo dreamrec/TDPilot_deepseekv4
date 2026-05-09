@@ -103,9 +103,21 @@ def _headers(request):
     if not isinstance(raw, dict):
         raw = {}
     out = {str(k).lower(): str(v) for k, v in raw.items()}
-    # Some builds put 'origin' / 'sec-fetch-site' on the request dict
-    # directly. Only adopt them when not already in the headers map.
-    for k in ("origin", "sec-fetch-site", "x-tdpilot-token", "authorization"):
+    # Some builds put origin / sec-fetch-site / etc. on the request
+    # dict directly instead of nesting under 'headers'. Adopt them
+    # only when not already in the headers map.
+    #
+    # 2.1.3 — ``content-type`` was added to this fallback list so the
+    # JSON envelope check on /send works on builds that flatten
+    # headers. Without it, ``headers["content-type"]`` was empty and
+    # the route 415'd every request that came in via the flatten path.
+    for k in (
+        "origin",
+        "sec-fetch-site",
+        "x-tdpilot-token",
+        "authorization",
+        "content-type",
+    ):
         if k not in out and k in request:
             out[k] = str(request.get(k) or "")
     return out
@@ -178,9 +190,17 @@ def _check_auth(method: str, path: str, headers: dict) -> tuple[int, str] | None
         present — older browsers / non-browser clients omit it, which
         is fine because they're already filtered by the token check).
       * X-TDPilot-Token header matches the session token.
+
+    Insecure mode (``TDPILOT_API_INSECURE=1``) bypasses ONLY the token
+    check — it does NOT bypass the origin / sec-fetch-site checks.
+    Pre-2.1.3 the bypass was total, which let any browser tab the user
+    had open issue cross-origin CSRF POSTs; combined with the
+    ``EXEC_MODE=full`` default, this exposed a drive-by-RCE chain via
+    ``td_exec_python``. The token bypass alone preserves the legitimate
+    "external local script with no browser context" use case (curl,
+    Python ``requests``, etc. send no Origin header so they continue
+    to pass the same-origin gate).
     """
-    if _insecure_mode():
-        return None
     if method == "OPTIONS":
         return None
     if method == "GET" and path in ("/", "/index.html", "/health"):
@@ -190,6 +210,8 @@ def _check_auth(method: str, path: str, headers: dict) -> tuple[int, str] | None
     sec_fetch = headers.get("sec-fetch-site", "").strip().lower()
     if sec_fetch and sec_fetch not in ("same-origin", "none"):
         return (403, f"cross-site fetch blocked (Sec-Fetch-Site={sec_fetch})")
+    if _insecure_mode():
+        return None
     expected = _session_token()
     got = headers.get("x-tdpilot-token", "").strip()
     if not expected:
@@ -315,7 +337,47 @@ def onHTTPRequest(webServerDAT, request, response):
         return response
 
     if method == "POST" and path == "/send":
-        body = _read_body(request).strip()
+        # 2.1.3 — JSON envelope ``{"message": "<text>"}`` is REQUIRED for
+        # browser requests. Pre-2.1.3 we accepted plain-text bodies, but
+        # ``Content-Type: text/plain`` is a CORS "simple request" that
+        # bypasses preflight; combined with insecure_mode this exposed a
+        # drive-by-RCE vector via ``td_exec_python`` from any browser
+        # tab the user had open. Forcing JSON triggers preflight for
+        # cross-origin POSTs, which the origin gate then rejects.
+        #
+        # Local tooling (curl, Python ``requests``, internal scripts)
+        # sends no Origin header, so it's NOT the CSRF threat we're
+        # defending against — it gets backwards-compat text/plain
+        # support so existing automation keeps working. Browsers
+        # ALWAYS send Origin on cross-origin POSTs, so the contract
+        # binds where it matters.
+        ctype = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        origin_lower = (request_origin or "").strip().lower()
+        is_browser_request = bool(origin_lower) and origin_lower != "null"
+        raw = _read_body(request)
+        if ctype == "application/json":
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError as exc:
+                _text(response, 400, f"invalid JSON body: {exc}", request_origin=request_origin)
+                return response
+            if not isinstance(payload, dict):
+                _text(response, 400, "JSON body must be an object", request_origin=request_origin)
+                return response
+            body = str(payload.get("message", "")).strip()
+        elif is_browser_request:
+            # Browser caller MUST use JSON — preflight + origin check is
+            # the CSRF guard.
+            _text(
+                response,
+                415,
+                'Browser requests must use Content-Type: application/json with body {"message": "..."}',
+                request_origin=request_origin,
+            )
+            return response
+        else:
+            # Non-browser (no Origin header): legacy plain-text body.
+            body = str(raw or "").strip()
         if not body:
             _text(response, 400, "empty message", request_origin=request_origin)
             return response

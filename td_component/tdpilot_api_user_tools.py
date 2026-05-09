@@ -45,7 +45,13 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-USER_TOOLS_DIR = Path.home() / ".tdpilot-api" / "tools"
+# 2.1.3 — namespaced under ~/.tdpilot-dpsk4/api/tools with legacy fallback.
+try:
+    from tdpilot_api_config import resolve_user_dir  # type: ignore[import-not-found]
+
+    USER_TOOLS_DIR = resolve_user_dir("tools")
+except ImportError:
+    USER_TOOLS_DIR = Path.home() / ".tdpilot-api" / "tools"
 
 # Per-runtime registry — populated by _load_user_tools(); read by the
 # tool_list_user handler. Cleared on every runtime rebuild.
