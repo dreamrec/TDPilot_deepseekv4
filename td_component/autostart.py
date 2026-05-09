@@ -22,8 +22,32 @@ INSTALLER_REFRESH_EVERY_N_FRAMES = 60 * 60  # 1×/min — installer state change
 INSTALLER_PROGRESS_EVERY_N_FRAMES = 6  # 10Hz — show live progress during a job
 
 
+_AUTH_BYPASS_OPT_OUT_VAR = "TDPILOT_DISABLE_AUTH_BYPASS"
+
+
+def _is_truthy_env(name):
+    """Treat presence of common truthy strings as opt-in. Empty / unset / "0" /
+    "false" / "no" all count as not-set so users don't accidentally re-enable
+    auth by leaving a stale comment in the env file.
+    """
+    val = os.environ.get(name, "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
 def _disable_auth():
-    """See comment in plan §8 risk #1 — bypass auth for single-user local mode."""
+    """Default-bypass for single-user local mode.
+
+    Pre-2.1.2 this unconditionally popped ``TD_MCP_SHARED_SECRET`` and forced
+    ``TD_MCP_REQUIRE_AUTH=0`` on every COMP load — so any persistent secret
+    written to ``~/.tdpilot-dpsk4/.tdpilot-dpsk4.env`` got wiped before the
+    webserverDAT could see it. v2.1.2 makes this opt-out: set
+    ``TDPILOT_DISABLE_AUTH_BYPASS=1`` in the env file (or as a process env
+    var) to keep whatever ``TD_MCP_SHARED_SECRET`` / ``TD_MCP_REQUIRE_AUTH``
+    the env file installed. Default behavior unchanged — a fresh drag-in
+    still gets unauthenticated MCP access for zero-config local dev.
+    """
+    if _is_truthy_env(_AUTH_BYPASS_OPT_OUT_VAR):
+        return
     os.environ.pop("TD_MCP_SHARED_SECRET", None)
     os.environ["TD_MCP_REQUIRE_AUTH"] = "0"
 
