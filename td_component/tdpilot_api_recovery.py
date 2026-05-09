@@ -111,8 +111,8 @@ _RECOVERY_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"Permission denied|read-only file system|EACCES", re.IGNORECASE),
         (
             "Filesystem permission error. The default state dir is "
-            "~/.tdpilot-api/ — verify it exists and is writable by the "
-            "TouchDesigner process owner."
+            "~/.tdpilot-dpsk4/api/ (legacy fallback ~/.tdpilot-api/) — verify "
+            "it exists and is writable by the TouchDesigner process owner."
         ),
     ),
     (

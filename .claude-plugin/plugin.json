@@ -1,6 +1,6 @@
 {
   "name": "tdpilot-dpsk4",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "TDPilot DPSK4 \u2014 AI copilot for TouchDesigner (DeepSeek v4 optimized). 103 MCP tools for live node graph control, parameter management, diagnostics, safety, streaming, knowledge corpus, focus + locations, hint injection, component notes, technique memory, and typed patch sessions.",
   "author": {
     "name": "silviu"

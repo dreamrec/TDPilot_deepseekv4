@@ -243,20 +243,42 @@ def test_stop_and_reset_require_token(web_module):
 
 
 # ---------------------------------------------------------------------------
-# Insecure bypass (TDPILOT_API_INSECURE=1) — escape hatch for external tools
+# Insecure bypass (TDPILOT_API_INSECURE=1) — escape hatch for external tools.
+# 2.1.3 contract: insecure mode bypasses ONLY the token check; origin
+# allowlist + Sec-Fetch-Site stay enforced so a malicious browser tab
+# can't drive the chat-pipe even when insecure mode is on. See
+# CHANGELOG.md's 2.1.3 Security fixes for the audit narrative.
 # ---------------------------------------------------------------------------
 
 
-def test_insecure_mode_bypasses_token_and_origin(web_module, monkeypatch):
+def test_insecure_mode_bypasses_token_only_not_origin(web_module, monkeypatch):
     module, _ = web_module
     monkeypatch.setenv("TDPILOT_API_INSECURE", "1")
-    # Same request that's normally rejected with 403/401 must pass.
+
+    # Tokenless request with NO Origin header — emulates curl / Python
+    # ``requests`` from local tooling. Should pass.
+    err = module._check_auth("POST", "/send", {})
+    assert err is None
+
+    # Tokenless request with cross-origin Origin header — emulates a
+    # malicious browser tab CSRF attempt. Must be rejected.
     err = module._check_auth(
         "POST",
         "/send",
         {"origin": "https://attacker.example.com"},
     )
-    assert err is None
+    assert err is not None
+    assert err[0] == 403
+    assert "cross-origin" in err[1].lower()
+
+    # Tokenless request with cross-site Sec-Fetch-Site — also blocked.
+    err = module._check_auth(
+        "POST",
+        "/send",
+        {"origin": "http://127.0.0.1:9987", "sec-fetch-site": "cross-site"},
+    )
+    assert err is not None
+    assert err[0] == 403
 
 
 # ---------------------------------------------------------------------------

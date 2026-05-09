@@ -3,12 +3,25 @@ TDPilot API — config resolution for the standalone (in-TD) agent.
 
 Resolution order for the API key (first hit wins):
   1. Process env: DEEPSEEK_API_KEY  (or TDPILOT_API_KEY override)
-  2. ~/.tdpilot-api/config.json     (chmod 600 expected; first-run UI writes here)
-  3. ~/.tdpilot-api/.env            (KEY=VALUE format, mirrors .tdpilot-dpsk4.env)
+  2. <CONFIG_DIR>/config.json       (chmod 600 expected; first-run UI writes here)
+  3. <CONFIG_DIR>/.env              (KEY=VALUE format, mirrors .tdpilot-dpsk4.env)
 
 The key MUST never be saved into the .toe file. The COMP's parameter for
 the key is intended to hold an EXPRESSION that calls fetch_api_key() at
 cook time, so saving the .toe persists the expression, not the value.
+
+Storage roots
+-------------
+2.1.3 — chat-pipe storage moved under the dpsk4 variant root so the
+distribution is self-contained. New default is::
+
+    ~/.tdpilot-dpsk4/api/<subdir>
+
+Pre-2.1.3 the chat-pipe wrote to ``~/.tdpilot-api/<subdir>``. To avoid
+breaking existing user data, ``resolve_user_dir`` falls back to the
+legacy path when it exists with content. Tools (``memory_save``,
+``recipe_save``, etc.) that imported the path constants from this
+module pick up the new location automatically.
 """
 
 from __future__ import annotations
@@ -17,7 +30,59 @@ import json
 import os
 from pathlib import Path
 
-CONFIG_DIR = Path.home() / ".tdpilot-api"
+# 2.1.3 — namespaced storage roots. The legacy `~/.tdpilot-api/` path
+# remains supported for backwards compatibility. These constants are
+# kept as module-level exports for cosmetic backwards-compat, but the
+# canonical resolver is ``resolve_user_dir`` (which re-evaluates
+# ``Path.home()`` on every call so test monkey-patches and dynamic
+# HOME changes are honoured).
+USER_BASE_NEW = Path.home() / ".tdpilot-dpsk4" / "api"
+USER_BASE_LEGACY = Path.home() / ".tdpilot-api"
+
+
+def resolve_user_dir(subdir: str = "") -> Path:
+    """Return the storage directory for ``subdir`` (or the root when
+    empty). Prefers the new ``~/.tdpilot-dpsk4/api/<subdir>`` location;
+    falls back to ``~/.tdpilot-api/<subdir>`` when that legacy path
+    already exists with content (so existing user data keeps working).
+
+    Per-subdir resolution is deliberate — a user can have
+    ``~/.tdpilot-api/memory/`` populated but no ``~/.tdpilot-api/recipes/``;
+    memory continues to read/write the legacy location while recipes
+    starts fresh under the new root. No bulk migration runs at import
+    time (filesystem moves should be a user-driven choice).
+
+    ``Path.home()`` is re-evaluated on every call so test monkey-
+    patches (e.g. ``test_firstrun.py``'s ``_stub_pristine_home``) take
+    effect even though this module was already imported.
+    """
+    home = Path.home()
+    new_root = home / ".tdpilot-dpsk4" / "api"
+    legacy_root = home / ".tdpilot-api"
+    new = new_root / subdir if subdir else new_root
+    legacy = legacy_root / subdir if subdir else legacy_root
+    if legacy.exists():
+        try:
+            if any(legacy.iterdir()):
+                return legacy
+        except OSError:
+            pass
+    try:
+        new.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # If we can't create the new dir (read-only home, weird perms),
+        # fall back to whatever legacy returned. The caller may still
+        # error on its first write, but at least we don't crash at
+        # import time.
+        return legacy
+    return new
+
+
+# CONFIG_DIR / CONFIG_JSON / ENV_FILE — stable names used across the
+# codebase and tests. Resolved lazily-once at import time so existing
+# callers don't need to change. The API key file naturally stays at
+# the legacy path for users who set it up before 2.1.3.
+CONFIG_DIR = resolve_user_dir("")
 CONFIG_JSON = CONFIG_DIR / "config.json"
 ENV_FILE = CONFIG_DIR / ".env"
 
@@ -118,19 +183,26 @@ def redact_paths(s: str) -> str:
 
     Replaces (in order):
       * The session-token file path (if present in the message body).
-      * The TDPilot config dir (``~/.tdpilot-api``).
+      * The TDPilot config dir (``<CONFIG_DIR>``).
       * The user's home dir (``$HOME``).
 
-    Each replacement uses a stable token (``~/.tdpilot-api``, ``~``)
-    so the redacted message is still useful for debugging.
+    Each replacement uses a stable placeholder so the redacted message
+    is still useful for debugging.
     """
     if not isinstance(s, str) or not s:
         return s
     out = s
     home = str(Path.home()) if Path else ""
-    config_dir = str(CONFIG_DIR)
-    if config_dir and config_dir in out:
-        out = out.replace(config_dir, "~/.tdpilot-api")
+    # Replace BOTH the active config dir AND the legacy one — even after
+    # 2.1.3 a user may still have files in ~/.tdpilot-api/, and a leaked
+    # absolute path would fail to round-trip cleanly without this pair.
+    for src, token in (
+        (str(CONFIG_DIR), "<CONFIG_DIR>"),
+        (str(USER_BASE_NEW), "<TDPILOT_API_HOME>"),
+        (str(USER_BASE_LEGACY), "<TDPILOT_API_HOME>"),
+    ):
+        if src and src in out:
+            out = out.replace(src, token)
     if home and home in out:
         out = out.replace(home, "~")
     return out

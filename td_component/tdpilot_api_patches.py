@@ -45,7 +45,13 @@ from typing import Any
 # Storage
 # ---------------------------------------------------------------------------
 
-SNAPSHOTS_DIR = Path.home() / ".tdpilot-api" / "snapshots"
+# 2.1.3 — namespaced under ~/.tdpilot-dpsk4/api/snapshots with legacy fallback.
+try:
+    from tdpilot_api_config import resolve_user_dir  # type: ignore[import-not-found]
+
+    SNAPSHOTS_DIR = resolve_user_dir("snapshots")
+except ImportError:
+    SNAPSHOTS_DIR = Path.home() / ".tdpilot-api" / "snapshots"
 PATCH_STATE_KEY = "tdpilot_api_active_patch"
 
 

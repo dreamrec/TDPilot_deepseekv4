@@ -228,11 +228,11 @@ def firstrun_status() -> dict:
     Returns a dict with three booleans matching the canonical
     setup steps the chat UI walks the user through:
 
-      - has_api_key:   ``~/.tdpilot-api/config.json`` carries a
+      - has_api_key:   ``<CONFIG_DIR>/config.json`` carries a
                        non-empty ``api_key`` field.
-      - has_memory:    at least one ``*.md`` lives in
-                       ``~/.tdpilot-api/memory/`` (i.e. the user
-                       has asked the agent to remember anything yet).
+      - has_memory:    at least one ``*.md`` lives in the resolved
+                       memory directory (i.e. the user has asked the
+                       agent to remember anything yet).
       - has_brains:    at least one external corpus is discoverable
                        (jsonl OR brain.db) under any of the
                        documented data roots.
@@ -256,7 +256,16 @@ def firstrun_status() -> dict:
         import os as _os
         from pathlib import Path as _Path
 
-        memory_dir = _Path.home() / ".tdpilot-api" / "memory"
+        # 2.1.3 — resolve via tdpilot_api_config so the new
+        # ~/.tdpilot-dpsk4/api/memory and legacy ~/.tdpilot-api/memory
+        # are both checked. Falls back to the legacy path if the
+        # config module isn't importable.
+        try:
+            from tdpilot_api_config import resolve_user_dir as _resolve  # type: ignore[import-not-found]
+
+            memory_dir = _resolve("memory")
+        except ImportError:
+            memory_dir = _Path.home() / ".tdpilot-api" / "memory"
         if memory_dir.is_dir():
             for entry in _os.scandir(memory_dir):
                 if entry.is_file() and entry.name.endswith(".md"):
