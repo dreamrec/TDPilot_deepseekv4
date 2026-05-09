@@ -371,7 +371,7 @@ def onHTTPRequest(webServerDAT, request, response):
             _text(
                 response,
                 415,
-                "Browser requests must use Content-Type: application/json with body {\"message\": \"...\"}",
+                'Browser requests must use Content-Type: application/json with body {"message": "..."}',
                 request_origin=request_origin,
             )
             return response

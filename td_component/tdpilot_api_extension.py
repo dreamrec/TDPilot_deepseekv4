@@ -231,9 +231,10 @@ class TDPilotAPIExt:
             # AND full exec must explicitly opt in by setting
             # ``TDPILOT_API_ALLOW_INSECURE_FULL_EXEC=1``.
             insecure = os.environ.get("TDPILOT_API_INSECURE", "").strip() in ("1", "true", "yes")
-            allow_insecure_full = (
-                os.environ.get("TDPILOT_API_ALLOW_INSECURE_FULL_EXEC", "").strip()
-                in ("1", "true", "yes")
+            allow_insecure_full = os.environ.get("TDPILOT_API_ALLOW_INSECURE_FULL_EXEC", "").strip() in (
+                "1",
+                "true",
+                "yes",
             )
             if insecure and not allow_insecure_full:
                 os.environ["TD_MCP_EXEC_MODE"] = "restricted"
