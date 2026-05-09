@@ -1,4 +1,4 @@
-# TDPilot v2.1.1 — TouchDesigner AI Assistant Plugin
+# TDPilot v2.1.2 — TouchDesigner AI Assistant Plugin
 
 This plugin installs the **DPSK4 (Claude Code CLI) variant** of TDPilot.
 Two variants ship in the same repo:
@@ -12,7 +12,7 @@ For the standalone .tox path, see the [main README](https://github.com/dreamrec/
 
 ---
 
-TDPilot v2.1.1 provides 103 MCP tools for live control of TouchDesigner projects from Claude Code, optimized for DeepSeek v4. The bundled `.tox` includes a one-button installer (drag-drop into TD, click "Bootstrap All", done) — no manual setup script.
+TDPilot v2.1.2 provides 103 MCP tools for live control of TouchDesigner projects from Claude Code, optimized for DeepSeek v4. The bundled `.tox` includes a one-button installer (drag-drop into TD, click "Bootstrap All", done) — no manual setup script.
 
 ## Components
 
