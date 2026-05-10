@@ -1,5 +1,54 @@
 # Changelog
 
+## 2.1.4 - 2026-05-10
+
+**Patch: Codex review follow-ups on v2.1.3 (PR #28).** Two real
+reliability holes that the automated Codex bot caught right after
+v2.1.3 merged.
+
+### Fixes
+
+- **P1 — drain inbox queue on `EV_ERROR`**, not just `EV_DONE`.
+  v2.1.3 added a FIFO inbox queue on `comp.storage` so messages
+  that arrive while a turn is in flight aren't lost. The queue
+  drained one entry per `EV_DONE`, but failed turns emit
+  `EV_ERROR` (and `EV_STATE: idle`) without calling
+  `_drain_inbox_one()`. So a queued message after an errored turn
+  sat in storage indefinitely until a later successful turn
+  happened to fire `EV_DONE`. Fix in
+  `td_component/tdpilot_api_extension.py::_handle_event` —
+  `EV_ERROR` now drains too. Tests:
+  `tests/test_v214_codex_followups.py::test_p1_*`.
+- **P2 — safety net for the send-button gate when WS drops.**
+  v2.1.3 moved the send-button re-enable from the `/send` fetch
+  resolution onto the WebSocket-driven `setAgentStatus()` call.
+  If the WS dropped between `/send` and the terminal status
+  event, `awaitingTurnEnd` stayed `true` and the button was
+  permanently disabled — the user was locked out of the chat
+  until they reloaded the page. Fix in
+  `td_component/tdpilot_api_chat.html`:
+  - **90s safety timer** (`TURN_END_SAFETY_MS`) — a hard cap on
+    how long the gate can pin the button. If the timer fires
+    before a status event arrives, the button re-enables and the
+    UI surfaces "idle (timeout)".
+  - **`ws.onopen` reset** — every reconnect clears
+    `awaitingTurnEnd` so a turn that was in flight when the WS
+    dropped doesn't keep the button locked. If the runtime is
+    genuinely still busy, the next status event re-disables;
+    if the user fires a message while the runtime is busy, the
+    v2.1.3 FIFO inbox queue catches it (no message lost).
+  - Centralised `clearAwaitingTurnEnd()` helper — resets the
+    flag, the timer, AND the button's `disabled` attribute in
+    one call so future call sites can't forget the timer.
+  Tests: `tests/test_v214_codex_followups.py::test_p2_*`.
+
+### Context
+
+Both bugs were caught by [Codex's automated review on PR #28](https://github.com/dreamrec/TDPilot_deepseekv4/pull/28).
+Both were graded P1/P2 by the bot and both are real — the
+v2.1.3 fixes regressed reliability on edge paths that the new
+queue + gate introduced. v2.1.4 closes them.
+
 ## 2.1.3 - 2026-05-09
 
 **Security hardening + chat-pipe queue + path harmonization for
