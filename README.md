@@ -7,7 +7,7 @@
    ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝
 ```
 
-# TDPilot — DeepSeek v4 · v2.1.3
+# TDPilot — DeepSeek v4 · v2.1.4
 
 [![CI](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/tdpilot-dpsk4?label=npm)](https://www.npmjs.com/package/tdpilot-dpsk4)
@@ -20,7 +20,7 @@
 
 An AI assistant that lives inside TouchDesigner. It can inspect your network, build new operators, wire them up, debug errors, take screenshots, remember things between sessions, replay successful patterns, surface relevant memories before each turn, batch tool calls, recover from failures with actionable hints, and survive long conversations via context compaction.
 
-> **v2.1.3 just shipped (May 9, 2026)** — security hardening + chat-pipe queue + path harmonization. CSRF / drive-by RCE chain in `tdpilot_API.tox` closed (origin gate now enforced even in `TDPILOT_API_INSECURE` mode; `EXEC_MODE=full` clamped to `restricted` when insecure-mode is on; `/send` requires `application/json` to force CORS preflight). Rapid-`/send` message-drop bug fixed via FIFO inbox queue; chat HTML disables send button until the runtime emits turn-end. Storage moved under `~/.tdpilot-dpsk4/api/` with transparent legacy `~/.tdpilot-api/` fallback. See [What's new since v1.5.x](#whats-new-since-v15x) below for the full timeline, or [CHANGELOG](CHANGELOG.md#213---2026-05-09) for the v2.1.3 details.
+> **v2.1.4 just shipped (May 10, 2026)** — patch on top of v2.1.3 closing two reliability holes that Codex's automated review caught on PR #28. The new inbox queue now drains on `EV_ERROR` (not just `EV_DONE`) so a queued message after a failed turn doesn't sit in storage forever. The chat HTML's send-button gate now has a 90s safety timer + a `ws.onopen` reset so a dropped WS connection mid-turn no longer locks the user out of the chat. See [CHANGELOG](CHANGELOG.md#214---2026-05-10) for the v2.1.4 details, or [v2.1.3 below](#whats-new-since-v15x) for the underlying security/queue/path-harmonization release.
 
 There are two ways to run it. Pick whichever fits — they coexist in the same TD project if you want both.
 
@@ -210,10 +210,11 @@ The standalone has 91 tools that cover the everyday inspect → build → wire �
 
 ## What's new since v1.5.x
 
-The line from v1.5.0 (Apr 25, 2026) to v2.1.3 (May 9, 2026) shipped in tight bursts. Most important updates, newest first:
+The line from v1.5.0 (Apr 25, 2026) to v2.1.4 (May 10, 2026) shipped in tight bursts. Most important updates, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| **v2.1.4** | May 10 | **Codex follow-ups on v2.1.3.** Two reliability holes the automated Codex review caught on PR #28: (P1) the new inbox queue now drains on `EV_ERROR` too — pre-2.1.4 a queued message after an errored turn sat in storage forever until a later successful turn happened to fire `EV_DONE`; (P2) the chat HTML's send-button gate now has a 90s safety timer + a `ws.onopen` reset, so a dropped WS connection between `/send` and the terminal status event no longer locks the user out of the chat permanently. |
 | **v2.1.3** | May 9 | **Security hardening + chat-pipe queue + path harmonization.** Audit found a CSRF / drive-by RCE chain in `tdpilot_API.tox` (insecure-mode bypassed origin checks AND `EXEC_MODE=full` was hardcoded). Closed by always-on origin enforcement (insecure-mode bypasses only the token check), `EXEC_MODE` clamp to `restricted` whenever insecure-mode is active (opt back into full with `TDPILOT_API_ALLOW_INSECURE_FULL_EXEC=1`), `application/json` requirement on `/send` (forces CORS preflight for cross-origin POSTs), and a loud textport banner when insecure-mode is on. Rapid-`/send` message-drop bug fixed via FIFO inbox queue on `comp.storage` + chat HTML send-button gate on the runtime's turn-end signal (not on the fetch resolution). Chat-pipe storage namespaced under `~/.tdpilot-dpsk4/api/` with `~/.tdpilot-api/` legacy fallback in `resolve_user_dir`. |
 | **v2.1.2** | May 9 | **Opt-in MCP auth.** `autostart.onStart()` no longer wipes persistent secrets; `TDPILOT_DISABLE_AUTH_BYPASS=1` opts into the env-file-driven shared-secret flow. |
 | **v2.1.1** | May 9 | **Paused-TD UX trap + recovery hints + chat red mark.** `start_turn` now warns when `me.time.play=False` so a paused TD doesn't look like the agent is wedged on 60s tool-call timeouts. 4 new `recovery_hints` (`td.Par.rawVal`, renderTOP attr typos, `tdu.Matrix.translation`, `ParCollection.children`) harvested from a 184-message lighting-redesign turn. User messages in the chat now render with a high-contrast white-on-red `[USER]` stamp + thick red rule + red gradient. Parallel CI freshness gate added for `tdpilot_API.tox` so it can no longer silently go stale. |

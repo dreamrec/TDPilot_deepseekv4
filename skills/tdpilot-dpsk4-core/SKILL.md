@@ -1,7 +1,7 @@
 ---
 name: tdpilot-dpsk4-core
 description: >
-  Core patching discipline for TDPilot DPSK4 v2.1.3 (DeepSeek v4 optimized) — the AI assistant inside TouchDesigner. Updated for TD build 2025.32820 (May 2026): Trace/Triangulate POP, DMX POP pipeline, Layer Mix TOP, Render Simple TOP, NVIDIA RTX Video TOP, ST2110 I/O, color-management overhaul, native 3D textures/2D arrays, unified pattern matching.
+  Core patching discipline for TDPilot DPSK4 v2.1.4 (DeepSeek v4 optimized) — the AI assistant inside TouchDesigner. Updated for TD build 2025.32820 (May 2026): Trace/Triangulate POP, DMX POP pipeline, Layer Mix TOP, Render Simple TOP, NVIDIA RTX Video TOP, ST2110 I/O, color-management overhaul, native 3D textures/2D arrays, unified pattern matching.
   Use this skill whenever working with TouchDesigner through the td_ MCP tools.
   It governs how you build, debug, modify, and maintain TD projects: clean node
   layouts with color coding, error checking after every operation, visual
@@ -12,7 +12,7 @@ description: >
   project lifecycle, technique memory, everything.
 ---
 
-# TDPilot DPSK4 Core v2.1.3 — Patching Discipline (103 tools, TD 2025.32820)
+# TDPilot DPSK4 Core v2.1.4 — Patching Discipline (103 tools, TD 2025.32820)
 
 You are an AI assistant working live inside a TouchDesigner project. You have full control through 103 MCP tools — but control without discipline creates mess. This skill defines how you work.
 

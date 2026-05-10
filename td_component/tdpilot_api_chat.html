@@ -1008,7 +1008,31 @@
   // overwrote the still-pending Chatmessage param. The flag is set on
   // send() and cleared in setAgentStatus when the agent transitions
   // back to a non-working state.
+  //
+  // 2.1.4 — Codex P2 review on PR #28: the WS-driven status path is
+  // load-bearing for re-enabling the button. If the WS drops between
+  // /send and the terminal status event, ``awaitingTurnEnd`` stays
+  // true forever and the user is locked out. ``pendingTurnEndTimer``
+  // is a safety net that re-enables the button after a hard cap so
+  // the chat never gets stuck. ``ws.onopen`` also resets it on every
+  // reconnect — if a turn was actually still running server-side,
+  // the next status event will re-disable correctly; if the user
+  // fires a message while the runtime is busy, the FIFO inbox queue
+  // catches it (no message lost).
   let awaitingTurnEnd = false;
+  let pendingTurnEndTimer = null;
+  // 90s — covers slow DeepSeek turns + tool chains; a stuck button
+  // beyond this is the worse failure mode.
+  const TURN_END_SAFETY_MS = 90000;
+
+  function clearAwaitingTurnEnd() {
+    if (pendingTurnEndTimer !== null) {
+      clearTimeout(pendingTurnEndTimer);
+      pendingTurnEndTimer = null;
+    }
+    awaitingTurnEnd = false;
+    $send.disabled = false;
+  }
 
   function isWorkingAgentState(s) {
     const t = String(s || '').toLowerCase();
@@ -1857,8 +1881,7 @@
     // 'idle', 'ready', 'reset', 'connected', 'error*', 'send failed*'
     // — i.e. anything where the user can safely fire a new turn.
     if (awaitingTurnEnd && !isWorkingAgentState(newState)) {
-      awaitingTurnEnd = false;
-      $send.disabled = false;
+      clearAwaitingTurnEnd();
     }
     render();
   }
@@ -1932,6 +1955,17 @@
     // status-bus listener (see setAgentStatus) lifts the disable.
     $send.disabled = true;
     awaitingTurnEnd = true;
+    // 2.1.4 — safety timer. If the WS drops between /send and the
+    // turn-end status event, the button would otherwise stay disabled
+    // forever. After TURN_END_SAFETY_MS the flag self-clears so the
+    // user can retry. Cleared in setAgentStatus on the happy path.
+    if (pendingTurnEndTimer !== null) clearTimeout(pendingTurnEndTimer);
+    pendingTurnEndTimer = setTimeout(() => {
+      if (awaitingTurnEnd) {
+        clearAwaitingTurnEnd();
+        setAgentStatus('idle (timeout)');
+      }
+    }, TURN_END_SAFETY_MS);
     setAgentStatus('sending…');
     appendMessage('user', trimmed);
     recordSent(trimmed);
@@ -1951,9 +1985,8 @@
       })
       .catch((err) => {
         // Fetch failed — restore button immediately, clear awaiting
-        // flag so a retry isn't blocked.
-        awaitingTurnEnd = false;
-        $send.disabled = false;
+        // flag + safety timer so a retry isn't blocked.
+        clearAwaitingTurnEnd();
         setAgentStatus('send failed: ' + err.message);
         appendMessage('error', 'Could not reach TD WebServer at ' + SEND_URL + ': ' + err.message);
       })
@@ -2137,6 +2170,15 @@
     ws.onopen = () => {
       reconnectDelay = 500;
       setWsStatus('connected');
+      // 2.1.4 — Codex P2: if a turn was in flight when the WS dropped,
+      // ``awaitingTurnEnd`` is still true and the button is locked
+      // out. Reset on every reconnect — if the runtime is genuinely
+      // still busy, the next status event will re-disable. If the
+      // user fires a message while the runtime is busy, the FIFO
+      // inbox queue catches it (so nothing is lost).
+      if (awaitingTurnEnd) {
+        clearAwaitingTurnEnd();
+      }
     };
     ws.onmessage = (ev) => {
       try { applyMessage(JSON.parse(ev.data)); }
