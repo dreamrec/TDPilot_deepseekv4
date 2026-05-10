@@ -181,3 +181,38 @@ def test_p2_set_agent_status_uses_clear_helper(chat_html_src: str):
         "timer fires after a normal turn end and re-clears state mid-"
         "next-turn."
     )
+
+
+# ---------------------------------------------------------------------------
+# v2.1.5 — Codex P2 follow-up on PR #29
+# ---------------------------------------------------------------------------
+
+
+def test_p2_v215_idle_suffix_treated_as_non_working(chat_html_src: str):
+    """``isWorkingAgentState`` must classify ``'idle (timeout)'`` and
+    similar ``'idle <suffix>'`` / ``'idle(<suffix>)'`` strings as
+    non-working.
+
+    Pre-2.1.5 the v2.1.4 safety timer's ``setAgentStatus('idle
+    (timeout)')`` was classified as working (only exact 'idle'/'ready'
+    /'reset'/'connected' or 'error*'/'send failed*' were non-working).
+    The pulse animation + Stop button stayed visible until a real
+    status arrived — which may never come if the WS is gone.
+    Codex P2 review on PR #29.
+    """
+    m = re.search(
+        r"function isWorkingAgentState\(s\)\s*\{(.+?)^\s{2}\}",
+        chat_html_src,
+        re.S | re.M,
+    )
+    assert m, "isWorkingAgentState() not found"
+    body = m.group(1)
+    # Must explicitly recognise 'idle ' (with trailing space — covers
+    # 'idle (timeout)', 'idle (paused)', etc.) AND 'idle(' (covers
+    # 'idle(timeout)' if anyone drops the space).
+    assert "startsWith('idle ')" in body, (
+        "isWorkingAgentState must classify 'idle <suffix>' as non-working "
+        "(Codex P2 fix on PR #29). Pre-2.1.5 the v2.1.4 'idle (timeout)' "
+        "from the safety timer kept the UI in working state."
+    )
+    assert "startsWith('idle(')" in body, "Defensive — also handle 'idle(<suffix>)' without a space."
