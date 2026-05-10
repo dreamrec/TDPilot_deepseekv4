@@ -657,6 +657,13 @@ class TDPilotAPIExt:
             self._set_status("error")
             self._html_status("error")
             self._play_done_sound("error")
+            # 2.1.4 — drain inbox on error too, not just EV_DONE. Pre-2.1.4
+            # a failed turn left queued messages stranded in
+            # comp.storage["tdpilot_api_chat_inbox"] until a later
+            # successful turn happened to fire EV_DONE. (Codex review on
+            # PR #28, P1.) The runtime is now idle either way, so the
+            # next message can start.
+            self._drain_inbox_one()
         elif kind == EV_HINT:
             # Phase 1.3 — soft validation nudge. Rendered as a "hint"
             # role; the chat HTML / textTable show it dimmer than the
