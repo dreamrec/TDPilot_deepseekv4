@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.1.5 - 2026-05-10
+
+**Patch: Codex P2 follow-up on v2.1.4 (PR #29).** A cosmetic-but-real
+UI bug in the v2.1.4 send-button safety timer.
+
+### Fix
+
+- **`isWorkingAgentState` now treats `'idle <suffix>'` as
+  non-working.** v2.1.4's safety timer fires
+  `setAgentStatus('idle (timeout)')` after the 90s cap. The
+  predicate only treated exact `'idle'` (and `'ready'` / `'reset'`
+  / `'connected'`) as non-working, so `'idle (timeout)'` was
+  classified as **working** — the pulse animation + Stop button
+  stayed visible until a real status event arrived (which may
+  never come if the WS is unavailable). The functional path was
+  fine because `clearAwaitingTurnEnd()` ran first, but the UI
+  lied about the agent's state.
+
+  Fix in `td_component/tdpilot_api_chat.html`: the predicate now
+  also returns `false` when `t.startsWith('idle ')` or
+  `t.startsWith('idle(')`. This covers any future
+  `'idle (<context>)'` variant. Test:
+  `tests/test_v214_codex_followups.py::test_p2_v215_idle_suffix_treated_as_non_working`.
+
+### Context
+
+Codex's automated review on PR #29 caught this as a P2 right
+after v2.1.4 merged. Pattern: each Codex pass on a recent
+release tends to catch one or two real edge-case regressions in
+the new fixes themselves. v2.1.3 → v2.1.4 → v2.1.5 chains three
+of these in a single afternoon.
+
 ## 2.1.4 - 2026-05-10
 
 **Patch: Codex review follow-ups on v2.1.3 (PR #28).** Two real
