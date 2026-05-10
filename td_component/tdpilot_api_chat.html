@@ -1037,6 +1037,14 @@
   function isWorkingAgentState(s) {
     const t = String(s || '').toLowerCase();
     if (!t || t === 'idle' || t === 'ready' || t === 'reset' || t === 'connected') return false;
+    // 2.1.5 — idle with a contextual suffix (e.g. ``idle (timeout)``
+    // emitted by the v2.1.4 send-button safety timer, or any future
+    // ``idle (<context>)`` variants) must also be classified as
+    // non-working. Otherwise the pulse animation + Stop button stay
+    // visible and the UI keeps lying about the agent's state until a
+    // real status event arrives — which may never happen if the WS is
+    // unavailable. (Codex P2 review on PR #29.)
+    if (t.startsWith('idle ') || t.startsWith('idle(')) return false;
     if (t.startsWith('error') || t.startsWith('send failed')) return false;
     return true;
   }
