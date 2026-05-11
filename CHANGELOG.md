@@ -7,6 +7,93 @@
 multiple PRs; v2.2.0 cuts when the whole phase is in. Until then,
 "Unreleased" tracks the in-progress work.
 
+### Added — Feature 1.2: Cycle detection in tool chains (chat-pipe / `tdpilot_API.tox`)
+
+Pairs with 1.1 auto-rollback to cover the second high-impact reliability gap:
+**"the agent is stuck in a loop"**. Where auto-rollback catches "agent broke
+things", cycle detection catches "agent keeps asking the same question and
+not progressing".
+
+How it works: a per-turn ledger tracks `(tool_name, args_hash) -> count`.
+When the count reaches the threshold (default 3), the next dispatch raises
+`CycleDetected` BEFORE invoking the tool. `run_turn`'s catch-all routes
+that to `on_error` → `EV_ERROR` + `EV_STATE: idle` → red banner in the
+chat UI. The user sees exactly which tool was stuck and the args (truncated
+preview) — useful for both debugging and for the LLM's next turn if the
+user chooses to retry.
+
+Default threshold (3) means 2 identical dispatches happen before the 3rd
+attempt blocks — one re-attempt is allowed in case of a transient blip.
+Args identity is JSON-based with `sort_keys=True` so `{"a":1,"b":2}` and
+`{"b":2,"a":1}` collapse to the same key; nested dicts hash recursively.
+
+**Implementation:**
+
+- New `td_component/tdpilot_api_cycle_detector.py` (~210 lines, pure-Python):
+  - `args_hash(args)` — order-independent stable hash for tool args.
+  - `CycleLedger` class — per-turn counter; `record(name, args)` increments
+    and returns new count; `peek` and `reset` for tests + future
+    introspection.
+  - `CycleDetected(AgentError)` — exception carries `tool_name`, `count`,
+    `args_summary` so the on_error handler can build a rich payload.
+  - `is_disabled_via_env` + `ENV_DISABLE = "TDPILOT_DISABLE_CYCLE_DETECTION"`.
+  - `build_cycle_ledger_factory(threshold=None, env=None)` — wires it all
+    together for AgentRuntime; returns `None` when disabled.
+
+- `td_component/tdpilot_api_agent.py`:
+  - New `cycle_ledger_factory` constructor kwarg.
+  - `_loop` builds one ledger per turn (right after model resolution).
+  - Inner `for tu in tool_uses` loop checks `ledger.record(name, args)`
+    BEFORE calling `on_tool_call` or the dispatcher; raises `CycleDetected`
+    when count reaches threshold.
+  - The raise propagates through the existing per-batch `try/finally`
+    around `rollback_guard.__exit__`, so the rollback guard's exit path
+    still runs and can clean up its undo block before the exception
+    reaches `run_turn`'s catch-all.
+  - `CycleDetected` is **late-imported** from cycle_detector inside `_loop`
+    to avoid a circular import (cycle_detector imports `AgentError` from
+    agent at top-level).
+
+- `td_component/tdpilot_api_runtime.py`:
+  - New `_build_cycle_ledger_factory` method honours
+    `TDPILOT_DISABLE_CYCLE_DETECTION=1`.
+  - `AgentRuntime._build_agent` passes the factory into the `Agent` ctor.
+
+- 49 new tests in `tests/test_tdpilot_api_cycle_detector.py`:
+  - **TestArgsHash** (8) — order independence, normalization (None vs {}),
+    nested-dict ordering, list-order sensitivity, compact-separators
+    invariant, defensive path for non-JSON values.
+  - **TestCycleLedger** (10) — threshold validation, increment behaviour,
+    per-key isolation, peek-doesn't-increment, reset clears, len semantics.
+  - **TestCycleDetectedException** (3) — carries metadata, message
+    formatting, AgentError membership (so run_turn catches it).
+  - **TestEnvVarGate** (3) — truthy/falsy classification.
+  - **TestBuildCycleLedgerFactory** (3) — env-disable, fresh instances
+    per call, custom threshold propagation.
+  - **TestUsagePattern** (4) — the canonical "check then dispatch"
+    flow including alternating-calls and custom-threshold variants.
+  - **TestFormatArgsSummary** (3) — render rules.
+  - **TestAgentLoopCycleIntegration** (3) — end-to-end with mocked
+    `urlopen` proving the late-import + raise + on_error path actually
+    works in `Agent.run_turn`. Includes the disabled-factory and
+    distinct-args negative cases.
+
+**Standdowns / disabled mode:** set
+`TDPILOT_DISABLE_CYCLE_DETECTION=1` in the TD process environment. The
+runtime's factory then returns `None` and the agent loop's `if
+cycle_ledger is not None` check makes the whole path a literal no-op.
+
+**Files baked into the API .tox** (rebuild required):
+
+- `td_component/tdpilot_api_cycle_detector.py` (new)
+- `td_component/tdpilot_api_agent.py` (modified — ctor kwarg + per-turn
+  build + pre-dispatch check)
+- `td_component/tdpilot_api_runtime.py` (modified — factory builder)
+- `td_component/build_tdpilot_api_tox.py` (modified — adds module to
+  `_SOURCE_FILES`)
+
+Phase 1.3 (mid-turn integrity check) and the rest of Phase 1 follow.
+
 ### Added — Feature 1.1: Auto-rollback on error regression (chat-pipe / `tdpilot_API.tox`)
 
 Each LLM tool batch is now wrapped with a baseline-and-diff check
