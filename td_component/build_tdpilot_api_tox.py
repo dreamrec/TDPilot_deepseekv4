@@ -213,6 +213,11 @@ _SOURCE_FILES = (
     # directly; the AutoRollbackGuard invokes them internally around
     # each tool-batch in tdpilot_api_agent._loop.
     ("tdpilot_api_rollback", "textDAT", "td_component/tdpilot_api_rollback.py"),
+    # Phase 1.2 (v2.2.0) — cycle detection in tool chains. Pure-Python
+    # ledger keyed on (tool_name, args_hash). Agent._loop late-imports
+    # CycleDetected from this module on the first turn (avoiding the
+    # circular import — cycle_detector imports AgentError from agent).
+    ("tdpilot_api_cycle_detector", "textDAT", "td_component/tdpilot_api_cycle_detector.py"),
     ("tdpilot_api_tracing", "textDAT", "td_component/tdpilot_api_tracing.py"),
     ("tdpilot_api_compaction", "textDAT", "td_component/tdpilot_api_compaction.py"),
     ("tdpilot_api_chat_html", "textDAT", "td_component/tdpilot_api_chat.html"),
