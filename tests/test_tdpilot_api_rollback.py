@@ -334,6 +334,120 @@ class TestAutoRollbackGuard:
 
 
 # ---------------------------------------------------------------------------
+# Codex P1 regression — rollback_fired must reflect actual undo success
+# ---------------------------------------------------------------------------
+#
+# PR #34's auto-rollback code set rollback_fired=True unconditionally any
+# time it attempted the undo dispatch, even if the dispatcher raised or
+# returned an error/non-success payload. That meant a failed undo() (e.g.
+# ui.undo.undo raised; TD's undo stack was empty; the COMP got nuked
+# mid-flight) was reported back to the user + LLM as a successful
+# rollback while the network stayed corrupted. Codex review on PR #34
+# flagged this as P1 — the chain of correctness for downstream tool
+# decisions is built on top of this signal.
+#
+# The fix inspects the dispatcher's response: rollback_fired = True only
+# when ``end_result.get("ok") and end_result.get("rolled_back") is True``.
+# Every other outcome (raise, {"error": ...}, {"ok": False, ...}, even
+# {"ok": True, "rolled_back": False}) keeps rollback_fired = False and
+# produces the degraded "could not be applied" hint.
+
+
+class TestCodexP1RollbackFiredAccuracy:
+    """If auto_rollback_end fails for any reason, the guard MUST NOT
+    claim a successful rollback. Otherwise the agent + user get told
+    the network is restored while it's actually still broken."""
+
+    def _setup(self, end_response):
+        """Build a dispatcher where the post-batch td_get_errors call
+        returns a regression and auto_rollback_end returns ``end_response``."""
+        baseline = _err_doc([])
+        current = _err_doc([{"path": "/p1/x", "name": "x", "errors": "Compile error: bad"}])
+        return MockDispatcher(
+            responses={
+                "td_get_errors": [baseline, current],
+                "auto_rollback_begin": [{"ok": True, "name": "tdpilot_auto_rollback"}],
+                "auto_rollback_end": [end_response],
+            }
+        )
+
+    def test_end_returns_explicit_failure_keeps_rollback_fired_false(self):
+        # Dispatcher returns the post-PR#34 internal-handler error shape.
+        d = self._setup({"ok": False, "endblock_ok": True, "undo_error": "stack empty"})
+        guard = ar.AutoRollbackGuard(d, ["td_create_node"])
+        with guard:
+            pass
+        assert guard.new_critical_count == 1
+        assert guard.rollback_fired is False
+        # Hint must NOT claim "reverted" — must reflect the failure.
+        assert "could not be applied" in guard.hint_text
+        # The dispatcher's failure detail should be surfaced so the LLM
+        # can decide whether to retry or escalate.
+        assert "undo raised" in guard.hint_text
+        assert "stack empty" in guard.hint_text
+
+    def test_end_returns_endblock_error_keeps_rollback_fired_false(self):
+        # endBlock() itself raised. Different code path than undo_error.
+        d = self._setup({"error": "ui.undo.endBlock failed: detached panel"})
+        guard = ar.AutoRollbackGuard(d, ["td_create_node"])
+        with guard:
+            pass
+        assert guard.rollback_fired is False
+        assert "could not be applied" in guard.hint_text
+        assert "endBlock raised" in guard.hint_text
+
+    def test_end_dispatcher_raises_keeps_rollback_fired_false(self):
+        # Dispatcher itself raises (network drop, dispatcher bug). Pre-fix
+        # this hit `except Exception: pass` and then set rollback_fired
+        # = True regardless.
+        class HalfRaisingDispatcher:
+            def __init__(self):
+                self.calls = []
+                self._errors = [
+                    _err_doc([]),
+                    _err_doc([{"path": "/p1/x", "name": "x", "errors": "Compile error"}]),
+                ]
+
+            def __call__(self, name, args):
+                self.calls.append((name, dict(args or {})))
+                if name == "td_get_errors":
+                    return self._errors.pop(0)
+                if name == "auto_rollback_begin":
+                    return {"ok": True}
+                if name == "auto_rollback_end":
+                    raise RuntimeError("simulated dispatcher crash")
+                return {"ok": True}
+
+        d = HalfRaisingDispatcher()
+        guard = ar.AutoRollbackGuard(d, ["td_create_node"])
+        with guard:
+            pass
+        assert guard.rollback_fired is False
+        assert "could not be applied" in guard.hint_text
+
+    def test_end_success_payload_does_set_rollback_fired(self):
+        # The happy path must STILL work — full success payload
+        # produces rollback_fired = True and the "reverted" wording.
+        d = self._setup({"ok": True, "rolled_back": True})
+        guard = ar.AutoRollbackGuard(d, ["td_create_node"])
+        with guard:
+            pass
+        assert guard.rollback_fired is True
+        assert "reverted" in guard.hint_text
+        assert "could not be applied" not in guard.hint_text
+
+    def test_end_returns_partial_ok_does_not_claim_success(self):
+        # Defensive: a partial payload like {"ok": True} without
+        # "rolled_back": True should NOT count as success either.
+        d = self._setup({"ok": True})
+        guard = ar.AutoRollbackGuard(d, ["td_create_node"])
+        with guard:
+            pass
+        assert guard.rollback_fired is False
+        assert "could not be applied" in guard.hint_text
+
+
+# ---------------------------------------------------------------------------
 # format_hint
 # ---------------------------------------------------------------------------
 
@@ -371,6 +485,165 @@ class TestFormatHint:
         out = ar.format_hint(diff, rolled_back=False)
         assert "could not be applied" in out
         assert "remain" in out
+
+
+# ---------------------------------------------------------------------------
+# Codex P2 regression — Agent._apply_rollback_hint surfaces hint even when
+# rollback_fired is False (degraded-mode path).
+#
+# PR #34's inline hint-append condition was:
+#
+#     if (rollback_guard is not None
+#         and getattr(rollback_guard, "rollback_fired", False)
+#         and getattr(rollback_guard, "hint_text", "")
+#         and results_block): ...
+#
+# The middle clause dropped the hint in exactly the degraded path where
+# the guard had built one specifically to flag "rollback couldn't apply"
+# (e.g. undo block never opened). That left the LLM continuing from a
+# corrupted graph with zero feedback. Codex P2 review flagged this.
+#
+# Fix: extracted into Agent._apply_rollback_hint, condition now keys on
+# hint_text presence — covering BOTH the success and degraded paths.
+# ---------------------------------------------------------------------------
+
+
+class _StubGuard:
+    """Minimal stand-in for AutoRollbackGuard for unit-testing the agent
+    hook. Only carries the attributes Agent._apply_rollback_hint reads."""
+
+    def __init__(self, hint_text="", rollback_fired=False):
+        self.hint_text = hint_text
+        self.rollback_fired = rollback_fired
+
+
+def _make_minimal_agent(on_text_calls):
+    """Build an Agent just barely enough to exercise _apply_rollback_hint.
+    No urlopen mocking needed — we don't run a turn, just call the method
+    directly. Dispatcher gets a stub that should never be called."""
+    from tdpilot_api_agent import Agent  # noqa: PLC0415 — local import keeps test isolated
+
+    def never_called(name, args):
+        raise AssertionError(f"dispatcher should not fire in hint-append unit test (got {name})")
+
+    return Agent(
+        api_key="sk-fake",
+        dispatcher=never_called,
+        tools=[],
+        on_text=on_text_calls.append,
+    )
+
+
+class TestCodexP2HintAppendInDegradedPath:
+    """When the guard couldn't actually roll back but DID populate a
+    hint, the agent loop must still append it to the last tool_result
+    and call on_text — same as the rollback-succeeded path."""
+
+    def _results_block(self, content="ok"):
+        return [
+            {
+                "type": "tool_result",
+                "tool_use_id": "tu_1",
+                "content": content,
+                "is_error": False,
+            }
+        ]
+
+    def test_hint_appends_even_when_rollback_fired_false(self):
+        """The P2 regression itself: rollback_fired=False, hint_text=set
+        → hint must still reach the LLM (via results_block) AND the UI
+        (via on_text)."""
+        on_text_calls: list[str] = []
+        agent = _make_minimal_agent(on_text_calls)
+        guard = _StubGuard(
+            hint_text="[tdpilot_auto_rollback] rollback could not be applied",
+            rollback_fired=False,  # ← this is the pre-fix-bug-trigger
+        )
+        results = self._results_block(content="raw result")
+        agent._apply_rollback_hint(guard, results)
+        # LLM-side: hint appended to last tool_result's content.
+        assert "could not be applied" in results[-1]["content"]
+        # UI-side: hint surfaced via on_text.
+        assert on_text_calls == ["[tdpilot_auto_rollback] rollback could not be applied"]
+
+    def test_hint_appends_when_rollback_fired_true(self):
+        """The happy path must STILL work — rollback_fired=True + hint
+        set → same dual-routing."""
+        on_text_calls: list[str] = []
+        agent = _make_minimal_agent(on_text_calls)
+        guard = _StubGuard(
+            hint_text="[tdpilot_auto_rollback] reverted",
+            rollback_fired=True,
+        )
+        results = self._results_block()
+        agent._apply_rollback_hint(guard, results)
+        assert "reverted" in results[-1]["content"]
+        assert on_text_calls == ["[tdpilot_auto_rollback] reverted"]
+
+    def test_no_hint_text_skips_silently(self):
+        """Pure-read batch / non-guarded batch: hint_text is empty,
+        nothing should happen."""
+        on_text_calls: list[str] = []
+        agent = _make_minimal_agent(on_text_calls)
+        guard = _StubGuard(hint_text="", rollback_fired=False)
+        results = self._results_block(content="untouched")
+        agent._apply_rollback_hint(guard, results)
+        assert results[-1]["content"] == "untouched"
+        assert on_text_calls == []
+
+    def test_none_guard_is_noop(self):
+        """If the feature is disabled (rollback_guard_factory returned
+        None), the agent loop hands None — must not crash."""
+        on_text_calls: list[str] = []
+        agent = _make_minimal_agent(on_text_calls)
+        results = self._results_block(content="untouched")
+        agent._apply_rollback_hint(None, results)
+        assert results[-1]["content"] == "untouched"
+        assert on_text_calls == []
+
+    def test_empty_results_block_is_noop(self):
+        """Belt-and-suspenders: no tool_result to attach to, skip."""
+        on_text_calls: list[str] = []
+        agent = _make_minimal_agent(on_text_calls)
+        guard = _StubGuard(hint_text="should not surface anywhere", rollback_fired=True)
+        agent._apply_rollback_hint(guard, [])
+        assert on_text_calls == []
+
+    def test_list_content_gets_text_block_appended(self):
+        """tool_result.content can already be a list of blocks (e.g.
+        when the handler returned structured content). Append a new
+        text block rather than concatenating strings."""
+        on_text_calls: list[str] = []
+        agent = _make_minimal_agent(on_text_calls)
+        guard = _StubGuard(hint_text="hint!", rollback_fired=True)
+        results = [
+            {
+                "type": "tool_result",
+                "tool_use_id": "tu_1",
+                "content": [
+                    {"type": "text", "text": "original"},
+                ],
+                "is_error": False,
+            }
+        ]
+        agent._apply_rollback_hint(guard, results)
+        content = results[-1]["content"]
+        assert isinstance(content, list)
+        assert len(content) == 2
+        assert content[0]["text"] == "original"
+        assert content[1]["text"] == "hint!"
+
+    def test_on_text_raising_does_not_break_agent_loop(self):
+        """Chat-side callback must never propagate up — a bug in the
+        UI path shouldn't prevent the LLM from receiving the hint."""
+        agent = _make_minimal_agent([])
+        agent.on_text = lambda s: (_ for _ in ()).throw(RuntimeError("ui dropped"))
+        guard = _StubGuard(hint_text="hint", rollback_fired=False)
+        results = self._results_block()
+        # Should not raise.
+        agent._apply_rollback_hint(guard, results)
+        # LLM-side still happened.
+        assert "hint" in results[-1]["content"]
 
 
 # ---------------------------------------------------------------------------

@@ -599,34 +599,11 @@ class Agent:
                     except Exception as exc:  # noqa: BLE001
                         print(f"[tdpilot_API/agent] rollback_guard.__exit__ raised: {exc}")
 
-            # Phase 1.1 — if the guard fired a rollback, append a hint to
-            # the LAST tool_result so the LLM sees the regression context
-            # on its next API call. The hint goes in the tool_result's
-            # content (which can be a list of blocks) — keeps the
-            # alternating user/assistant constraint intact and pairs the
-            # hint with the failing batch's results.
-            if (
-                rollback_guard is not None
-                and getattr(rollback_guard, "rollback_fired", False)
-                and getattr(rollback_guard, "hint_text", "")
-                and results_block
-            ):
-                hint = rollback_guard.hint_text
-                last = results_block[-1]
-                existing = last.get("content")
-                if isinstance(existing, str):
-                    last["content"] = existing + "\n\n" + hint
-                elif isinstance(existing, list):
-                    last["content"] = list(existing) + [{"type": "text", "text": hint}]
-                else:
-                    last["content"] = hint
-                # Surface to the chat UI too — same callback the agent's
-                # natural-language text uses, so the user sees a yellow
-                # inline notice in the assistant bubble.
-                try:
-                    self.on_text(hint)
-                except Exception:  # noqa: BLE001
-                    pass
+            # Phase 1.1 — append any rollback hint emitted by the guard
+            # onto the last tool_result + surface it through on_text.
+            # Logic extracted into ``_apply_rollback_hint`` for direct
+            # unit-testing (Codex P2 followup on PR #34).
+            self._apply_rollback_hint(rollback_guard, results_block)
 
             self.messages.append({"role": "user", "content": results_block})
 
@@ -636,6 +613,51 @@ class Agent:
                 continue
 
         raise TurnBudgetExceeded(f"Tool-use loop exceeded turn_budget={self.turn_budget}")
+
+    # ------------------------------------------------------------------
+    # Phase 1.1 — auto-rollback hint plumbing
+    # ------------------------------------------------------------------
+
+    def _apply_rollback_hint(self, rollback_guard: Any, results_block: list[dict]) -> None:
+        """Append a rollback hint to the last tool_result + surface via
+        ``on_text``. No-op if ``rollback_guard`` is None, has no
+        ``hint_text``, or ``results_block`` is empty.
+
+        Codex P2 review on PR #34 (2026-05-11) flagged that the prior
+        in-line condition keyed on ``rollback_fired`` — which is False
+        in the degraded path where the guard detected a regression but
+        couldn't actually open / undo the block. The bug dropped the
+        only signal the LLM would receive about that failure mode,
+        leaving it to continue from a broken graph state with no
+        feedback. Keying on ``hint_text`` (which the guard populates in
+        BOTH the success and the degraded paths) surfaces both.
+
+        Insertion strategy: the hint text-block gets appended to the
+        LAST tool_result's content (which may be a string or a list of
+        blocks). This preserves Anthropic's alternating user/assistant
+        constraint AND pairs the hint with the failing batch's
+        results — exactly where the LLM is most likely to attend on
+        its next API call. Also surfaced to the chat UI via the
+        ``on_text`` callback so the user sees a yellow inline notice
+        in the assistant bubble.
+        """
+        if rollback_guard is None:
+            return
+        hint = getattr(rollback_guard, "hint_text", "")
+        if not hint or not results_block:
+            return
+        last = results_block[-1]
+        existing = last.get("content")
+        if isinstance(existing, str):
+            last["content"] = existing + "\n\n" + hint
+        elif isinstance(existing, list):
+            last["content"] = list(existing) + [{"type": "text", "text": hint}]
+        else:
+            last["content"] = hint
+        try:
+            self.on_text(hint)
+        except Exception:  # noqa: BLE001 — chat-side callback must never break the agent loop
+            pass
 
     # ------------------------------------------------------------------
     # Dynamic context (Phase 0.1)
