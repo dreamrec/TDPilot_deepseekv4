@@ -117,7 +117,7 @@ Next steps:
   5. To uninstall:
 
          claude plugin uninstall tdpilot-dpsk4@dreamrec-TDPilot_deepseekv4
-         claude plugin marketplace remove dreamrec-TDPilot
+         claude plugin marketplace remove dreamrec-TDPilot_deepseekv4
 
 Docs: https://github.com/dreamrec/TDPilot_deepseekv4
 
