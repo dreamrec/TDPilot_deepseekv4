@@ -2243,14 +2243,37 @@
       if (awaitingTurnEnd) {
         clearAwaitingTurnEnd();
       }
+      // 2026-05-11 — keepalive pings. TD 2025/macOS's webSocketSendText
+      // is silently best-effort against dead sockets, so the server-side
+      // reaper can't detect dropped clients via send-failure alone.
+      // Solution: client sends a {"type":"ping"} every 5s; server's
+      // onWebSocketReceiveText updates last_seen for this client; the
+      // reaper evicts handles whose last_seen is older than 15s
+      // (3 missed pings). Clears any existing timer first so reconnects
+      // don't multiply.
+      if (keepaliveTimer) { clearInterval(keepaliveTimer); }
+      keepaliveTimer = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: 'ping' })); }
+          catch (err) { /* readyState lied; let onclose handle it */ }
+        }
+      }, 5000);
     };
     ws.onmessage = (ev) => {
       try { applyMessage(JSON.parse(ev.data)); }
       catch (err) { console.error('[tdpilot] bad WS payload', err, ev.data); }
     };
     ws.onerror = (err) => { console.warn('[tdpilot] WS error', err); };
-    ws.onclose = () => { ws = null; scheduleReconnect(); };
+    ws.onclose = () => {
+      // Stop keepalive so reconnect's onopen doesn't end up with two
+      // overlapping timers ping-flooding the new socket.
+      if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+      ws = null;
+      scheduleReconnect();
+    };
   }
+  // Keepalive timer handle — survives ws drops; cleared on close + open.
+  let keepaliveTimer = null;
 
   function scheduleReconnect() {
     // Pre-1.7.1 this called setStatus() which routed through

@@ -262,7 +262,16 @@ def _check_auth(method: str, path: str, headers: dict) -> tuple[int, str] | None
     """
     if method == "OPTIONS":
         return None
-    if method == "GET" and path in ("/", "/index.html", "/health"):
+    # 2026-05-11 — /favicon.ico added to bootstrap allowlist. Chromium
+    # (and the in-TD webRenderTOP's embedded engine) auto-fetches it
+    # on every page load WITHOUT the auth header — even though the
+    # HTML doesn't reference it. Pre-fix the route hit _check_auth,
+    # missed the token, returned 401 with no Content-Type body, and
+    # the embedded Chromium reported "page can't be found / HTTP
+    # ERROR 404" as a misleading fallback (the actual page load
+    # succeeded, but Chromium's favicon error path doesn't cleanly
+    # distinguish 401 from 404).
+    if method == "GET" and path in ("/", "/index.html", "/health", "/favicon.ico"):
         return None
     if not _allowed_origin(headers.get("origin", "")):
         return (403, "cross-origin request blocked")
@@ -364,6 +373,17 @@ def onHTTPRequest(webServerDAT, request, response):
         _json(response, 200, {"ok": True}, request_origin=request_origin)
         return response
 
+    if method == "GET" and path == "/favicon.ico":
+        # 2026-05-11 — silence Chromium's auto-fetch with a 204 No
+        # Content. We don't ship an icon (the chat panel renders
+        # inside the webRenderTOP, not in a browser-tab-favicon
+        # context), so the empty body keeps payload + token cost zero.
+        _cors(response, request_origin)
+        response["statusCode"] = 204
+        response["statusReason"] = "No Content"
+        response["data"] = b""
+        return response
+
     if method == "GET" and path == "/history":
         comp = _comp()
         t = comp.op("chat_transcript")
@@ -431,7 +451,25 @@ def onHTTPRequest(webServerDAT, request, response):
             try:
                 payload = json.loads(raw_stripped)
                 if isinstance(payload, dict) and "message" in payload:
-                    body = str(payload.get("message", "")).strip()
+                    # 2026-05-11 — strict type check on "message". Pre-fix
+                    # the extraction did ``str(payload.get("message", ""))``
+                    # which coerced None→"None", dict→"{'nested': 1}",
+                    # int→"0", bool→"True" — all silently accepted as
+                    # the user prompt. Agent received garbage. Now: only
+                    # str values pass; everything else 400s with a clear
+                    # error so the client knows the envelope is wrong.
+                    msg_val = payload.get("message")
+                    if not isinstance(msg_val, str):
+                        _text(
+                            response,
+                            400,
+                            '"message" must be a string (got '
+                            + type(msg_val).__name__
+                            + ")",
+                            request_origin=request_origin,
+                        )
+                        return response
+                    body = msg_val.strip()
                     parsed_as_json = True
             except json.JSONDecodeError:
                 pass
@@ -518,6 +556,12 @@ def onHTTPRequest(webServerDAT, request, response):
 # read/write the SAME underlying set.
 _STORAGE_KEY_CLIENTS = "tdpilot_api_ws_clients"
 _STORAGE_KEY_WARN = "tdpilot_api_ws_warned_no_clients"
+# 2026-05-11 — per-client last-seen timestamps for the keepalive reaper.
+# Map: client-handle -> absTime.seconds at last incoming WS frame from
+# that handle. The HTML chat sends {"type":"ping"} every 5s; the reaper
+# evicts handles whose last_seen is older than _WS_STALE_S.
+_STORAGE_KEY_LAST_SEEN = "tdpilot_api_ws_last_seen"
+_WS_STALE_S = 15.0  # 3 missed pings @ 5s cadence
 
 
 def _ws_clients():
@@ -532,6 +576,27 @@ def _ws_clients():
     return s
 
 
+def _ws_last_seen():
+    """Per-client last-seen timestamp dict, in comp.storage for the same
+    module-reload reasons as ``_ws_clients``."""
+    comp = _comp()
+    m = comp.fetch(_STORAGE_KEY_LAST_SEEN, None)
+    if not isinstance(m, dict):
+        m = {}
+        comp.store(_STORAGE_KEY_LAST_SEEN, m)
+    return m
+
+
+def _now_seconds() -> float:
+    """absTime.seconds when available (cook thread), else 0.0. Using TD's
+    own clock matches the executor's cadence and keeps timestamps stable
+    across the COMP — no monotonic vs wall-clock confusion."""
+    try:
+        return float(absTime.seconds)  # type: ignore[name-defined]
+    except Exception:
+        return 0.0
+
+
 def _warn_state():
     comp = _comp()
     w = comp.fetch(_STORAGE_KEY_WARN, None)
@@ -542,41 +607,61 @@ def _warn_state():
 
 
 def reap_dead_ws_clients(webServerDAT) -> int:
-    """Send a no-op heartbeat to each registered WS client and remove
-    any handle whose ``webSocketSendText`` raises.
+    """Reap WS client handles whose connection is dead.
 
-    2026-05-11 — backstop for a real leak observed during bilateral
-    audit: ``comp.storage['tdpilot_api_ws_clients']`` had 5 zombie
-    handles with 0 actual TCP connections. Root cause: TD's
-    ``onWebSocketClose`` callback doesn't always fire for closed
-    sockets (browser-kill, TCP reset), so the registry is append-only
-    between broadcasts. The existing ``broadcast()`` already prunes
-    on raise, but broadcasts only happen during turns — when chat is
-    idle, leaked handles accumulate. This function exists to be
-    called periodically (every ~5s from ``DrainEvents``) so the
-    registry stays clean even during idle stretches.
+    Mechanism: keepalive age-out. The HTML chat sends a
+    ``{"type":"ping"}`` every 5s; ``onWebSocketReceiveText`` updates
+    ``last_seen`` per client. Any client whose last_seen is older
+    than ``_WS_STALE_S`` (15s = 3 missed pings) is evicted.
 
-    Returns the number of handles reaped (0 on healthy state).
+    2026-05-11 — pre-fix this function ALSO sent a server-side ping
+    to each client as a raise-on-send backstop. That worked in
+    theory but TD 2025.32820/macOS's ``webSocketSendText`` is
+    silently best-effort against dead sockets so the backstop never
+    fired AND every healthy client received a noisy ``{"type":"ping"}``
+    in its event stream every 5s. Now: age-out only. Client-driven
+    keepalive is the canonical liveness signal; no server-side ping.
+
+    Returns total number of handles reaped.
     """
     clients = _ws_clients()
     if not clients:
         return 0
-    # Lightweight ping payload — clients can ignore. We deliberately
-    # don't use TD's webSocketPing (frame type 0x9) because some TD
-    # builds don't expose it; webSocketSendText is universally
-    # available and TD raises on dead sockets either way.
-    ping = json.dumps({"type": "ping"})
+    last_seen = _ws_last_seen()
+    now = _now_seconds()
     dead = []
+    # Clients without a last_seen entry get one set to NOW — grace
+    # period for a freshly-opened connection that hasn't yet sent
+    # its first ping. After that, the 15s stale window applies.
     for client in list(clients):
-        try:
-            webServerDAT.webSocketSendText(client, ping)
-        except Exception:
+        ts = last_seen.get(client)
+        if ts is None:
+            last_seen[client] = now
+            continue
+        if now > 0.0 and (now - float(ts)) > _WS_STALE_S:
             dead.append(client)
     for d in dead:
         clients.discard(d)
+        last_seen.pop(d, None)
+    # 2026-05-11 — also sweep stale last_seen entries that no longer
+    # correspond to a registered client. These can accumulate when
+    # onWebSocketClose races with a late ping, or when a reload re-
+    # constructs the clients set but not last_seen. Tiny memory leak
+    # otherwise — sweep is O(len(last_seen)) and runs at the same
+    # 5s cadence as the rest of the reaper.
+    orphans = [c for c in list(last_seen.keys()) if c not in clients]
+    for o in orphans:
+        last_seen.pop(o, None)
     if dead:
         print(f"[tdpilot_API/web] reaped {len(dead)} dead WS client(s); {len(clients)} remain")
     return len(dead)
+
+
+def _mark_ws_seen(client) -> None:
+    """Refresh last_seen for a client — called from onWebSocketOpen +
+    onWebSocketReceiveText. Idempotent."""
+    last_seen = _ws_last_seen()
+    last_seen[client] = _now_seconds()
 
 
 def _send_full_history(webServerDAT, client):
@@ -709,6 +794,9 @@ def onWebSocketOpen(webServerDAT, client, uri):
             return
     clients = _ws_clients()
     clients.add(client)
+    # Seed last_seen so the keepalive reaper doesn't immediately age
+    # this client out before its first ping arrives.
+    _mark_ws_seen(client)
     print(f"[tdpilot_API/web] WS open uri={redacted!r} total={len(clients)}")
     _send_full_history(webServerDAT, client)
 
@@ -716,14 +804,25 @@ def onWebSocketOpen(webServerDAT, client, uri):
 def onWebSocketClose(webServerDAT, client):
     clients = _ws_clients()
     clients.discard(client)
+    _ws_last_seen().pop(client, None)
     print(f"[tdpilot_API/web] WS close total={len(clients)}")
 
 
 def onWebSocketReceiveText(webServerDAT, client, data):
+    # 2026-05-11 — keepalive ping handler. The HTML chat sends
+    # {"type":"ping"} every 5s; we just refresh last_seen for this
+    # client so the reaper knows the connection is alive. Don't parse
+    # the payload aggressively — any incoming frame is evidence of
+    # liveness. Future room for client-driven commands here if
+    # needed.
+    _mark_ws_seen(client)
     return
 
 
 def onWebSocketReceiveBinary(webServerDAT, client, data):
+    # Same liveness signal as text frames; not currently used by the
+    # HTML chat but worth refreshing if any future client sends binary.
+    _mark_ws_seen(client)
     return
 
 
@@ -732,14 +831,22 @@ def onServerStart(webServerDAT):
     "the .tox finished loading" hook we have, and it works on both build-
     script-driven installs AND on plain drag-and-drop.
 
-    We use it to force-cook the executor, which is the canonical fix for
-    TD 2025.32460's pull-cooking quirk: programmatically-created
-    executeDATs don't fire onFrameStart until something pulls them into
-    the cook chain at least once. Without this, drag-dropping the .tox
-    into a fresh project would land you with a dead drain (chat UI
-    stuck on "thinking…" forever, even though tools execute). The build
-    script does the same force-cook at build time for the live install
-    path; doing it again here covers .tox-load for everyone else.
+    Two things happen here:
+
+    1. Force-cook the executor so onFrameStart starts firing (TD 2025
+       pull-cooking quirk fix — programmatically-created executeDATs
+       don't fire onFrameStart until pulled into the cook chain at
+       least once).
+
+    2. Restart the in-TD ``chat_web`` webRenderTOP's Chromium engine
+       and re-fetch its URL. Pre-fix, rebuilding the .tox left
+       Chromium showing a cached error page (the brief window during
+       rebuild where the old webserverDAT was down + the new one not
+       yet up returned 404/timeout to Chromium, and Chromium retained
+       the error indefinitely even after the server came back up).
+       The autorestart pulse nukes the Chromium process and the
+       reloadsrc pulse re-fetches the URL — between them, the panel
+       is always clean after a rebuild.
     """
     try:
         comp = _comp()
@@ -749,6 +856,25 @@ def onServerStart(webServerDAT):
             print("[tdpilot_API/web] onServerStart -> executor.cook(force=True)")
     except Exception as exc:
         print(f"[tdpilot_API/web] onServerStart force-cook failed: {exc}")
+    # 2026-05-11 — chat_web auto-recovery on .tox rebuild.
+    try:
+        comp = _comp()
+        chat_web = comp.op("chat_web")
+        if chat_web is not None:
+            # Restart pulse first — nukes the Chromium process if it was
+            # holding a stale error page from a transient rebuild
+            # window. Then reloadsrc forces a fresh GET of the URL.
+            try:
+                chat_web.par.autorestartpulse.pulse()
+            except Exception:
+                pass
+            try:
+                chat_web.par.reloadsrc.pulse()
+            except Exception:
+                pass
+            print("[tdpilot_API/web] onServerStart -> chat_web restart + reload")
+    except Exception as exc:
+        print(f"[tdpilot_API/web] onServerStart chat_web reload failed: {exc}")
     return
 
 
