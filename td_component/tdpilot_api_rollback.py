@@ -358,13 +358,43 @@ class AutoRollbackGuard:
         self.new_critical_count = int(diff.get("count", 0))
 
         if self.new_critical_count > 0 and self._undo_block_opened:
-            # Roll back the entire batch atomically.
+            # Attempt the rollback and **inspect the dispatcher's return
+            # value** before claiming success. Codex P1 review on PR #34
+            # (2026-05-11): the prior version set rollback_fired = True
+            # unconditionally when undo was attempted, so if ui.undo.undo()
+            # raised or returned an error payload the user + LLM were
+            # both told "reverted" while the network stayed broken — a
+            # silent-correctness bug, not a crash.
+            #
+            # ``auto_rollback_end`` returns one of:
+            #   * {"ok": True, "rolled_back": True}   -> revert succeeded
+            #   * {"ok": True, "rolled_back": False}  -> we asked not to undo
+            #   * {"ok": False, ...}                  -> undo() raised
+            #   * {"error": "..."}                    -> endBlock() raised
+            # …or raises (network drop, dispatcher bug). Only the first
+            # shape counts as a successful rollback.
+            end_result: Any = None
             try:
-                self._dispatcher("auto_rollback_end", {"undo": True})
-            except Exception:  # noqa: BLE001
-                pass
-            self.rollback_fired = True
-            self.hint_text = format_hint(diff)
+                end_result = self._dispatcher("auto_rollback_end", {"undo": True})
+            except Exception as exc:  # noqa: BLE001
+                end_result = {"error": f"{type(exc).__name__}: {exc}"}
+            if (
+                isinstance(end_result, dict)
+                and end_result.get("ok") is True
+                and end_result.get("rolled_back") is True
+            ):
+                self.rollback_fired = True
+                self.hint_text = format_hint(diff, rolled_back=True)
+            else:
+                # Rollback was attempted but didn't succeed (handler returned
+                # error/non-success, or raised). Network is still broken;
+                # tell the truth in both signals.
+                self.rollback_fired = False
+                self.hint_text = format_hint(
+                    diff,
+                    rolled_back=False,
+                    end_failure=_format_end_failure(end_result),
+                )
         elif self.new_critical_count > 0:
             # Detected regression but couldn't open the undo block —
             # surface a hint without claiming rollback happened.
@@ -380,10 +410,36 @@ class AutoRollbackGuard:
         return False  # never swallow exceptions from the with-block
 
 
-def format_hint(diff: dict, rolled_back: bool = True) -> str:
+def _format_end_failure(end_result: Any) -> str:
+    """Render a short ``(reason: ...)`` clause for the
+    rollback-could-not-apply branch of ``format_hint``. Used by
+    ``AutoRollbackGuard.__exit__`` when ``auto_rollback_end`` came
+    back without an ``ok: True, rolled_back: True`` payload (Codex
+    P1 finding on PR #34: previously we lied about success in this
+    case)."""
+    if not isinstance(end_result, dict):
+        return ""
+    if end_result.get("undo_error"):
+        return f" (undo raised: {end_result['undo_error']})"
+    if end_result.get("error"):
+        return f" (endBlock raised: {end_result['error']})"
+    return ""
+
+
+def format_hint(
+    diff: dict,
+    rolled_back: bool = True,
+    end_failure: str = "",
+) -> str:
     """Render the hint message appended to the last tool_result on a
     rollback fire. Intentionally short — costs DeepSeek output tokens
-    on the next turn (the model has to read + reason about it)."""
+    on the next turn (the model has to read + reason about it).
+
+    ``end_failure`` is an optional short clause appended to the
+    "could not be applied" message describing what specifically
+    failed (Codex P1 followup — surface enough detail that the LLM
+    can decide whether to retry, abort, or escalate).
+    """
     n = int(diff.get("count", 0))
     items = list(diff.get("new_criticals", []))
     if not items:
@@ -391,11 +447,13 @@ def format_hint(diff: dict, rolled_back: bool = True) -> str:
         return f"[tdpilot_auto_rollback] {n} new critical errors {verb}."
     names = ", ".join(f"{it.get('path')} ({it.get('error_preview')})" for it in items[:3])
     more = "" if len(items) <= 3 else f", +{len(items) - 3} more"
-    action = (
-        "the changes were automatically reverted via TD's undo"
-        if rolled_back
-        else "the rollback could not be applied (undo block not open) so the errors remain"
-    )
+    if rolled_back:
+        action = "the changes were automatically reverted via TD's undo"
+    else:
+        # The "(reason: ...)" detail is what distinguishes "we never
+        # opened the block" from "we opened it but undo() failed".
+        # The LLM can use this to pick a recovery strategy.
+        action = "the rollback could not be applied so the errors remain" + end_failure
     return (
         f"[tdpilot_auto_rollback] This batch introduced {n} new critical "
         f"error(s) so {action}. Errors: {names}{more}. "
