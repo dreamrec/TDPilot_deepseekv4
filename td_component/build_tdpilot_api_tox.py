@@ -143,6 +143,22 @@ _API_PAGE = [
     ("Autoopenpanel", "Toggle", "Auto-open chat in browser on load", True),
     ("Openpanelnow", "Pulse", "Open Chat in Browser", None),
     ("Reloadconfig", "Pulse", "Reload Config", None),
+    # Phase 1.2.1 (v2.2.1) — auth mode toggle.
+    #
+    # "open" (default): no X-TDPilot-Token check on /send. The
+    # origin allowlist still rejects cross-origin browser CSRF, so
+    # this is safe on a single-user dev/perform box. New users
+    # get drag-and-go without an auth dance.
+    #
+    # "token": original v2.1.3 behaviour — every /send POST must
+    # carry a matching X-TDPilot-Token header. Use this if you
+    # expose the chat panel over a LAN or share the machine.
+    #
+    # The webserver's auth check reads this param on every request
+    # (no Reloadconfig required to flip), and the param persists
+    # in the .toe so flipping once is forever.
+    ("Authhdr", "Header", "Auth (chat-pipe webserver)", None),
+    ("Authmode", "Menu", "Auth Mode", ("open", "token")),
 ]
 
 _CHAT_PAGE = [
@@ -440,8 +456,12 @@ def _wire_parexec(parexec_dat, parent_comp):
     _legacy._set_first_par(parexec_dat, ("custom",), 1)
     _legacy._set_first_par(parexec_dat, ("builtin",), 0)
     _legacy._set_first_par(parexec_dat, ("onpulse",), 1)
+    # Phase 1.2.1: turn value-change ON so onValueChange fires for
+    # Apikey / Authmode auto-routing. The handler in
+    # tdpilot_api_parexec.py filters by name — only those two trigger
+    # work; every other value change is a no-op.
+    _legacy._set_first_par(parexec_dat, ("valuechange",), 1)
     for off in (
-        "valuechange",
         "valueschanged",
         "expressionchange",
         "exportchange",

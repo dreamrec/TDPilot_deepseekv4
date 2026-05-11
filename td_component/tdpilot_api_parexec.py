@@ -41,7 +41,47 @@ def onPulse(par):
 
 
 def onValueChange(par, prev):
-    return
+    """Phase 1.2.1 (v2.2.1) — auto-route a tiny set of value changes to
+    the extension so the user doesn't have to manually pulse follow-up
+    actions.
+
+    Currently:
+
+      * ``Apikey`` change → save to disk + Reloadconfig (so the running
+        Agent picks up the new key immediately). Drops the
+        "type key → pulse Saveapikey → pulse Reloadconfig" 3-step
+        ritual to a single param edit.
+      * ``Authmode`` change → log the new value. The webserver's auth
+        check reads this param on every request, so no rebuild is
+        needed; the log is just so the user sees the change land.
+
+    Every other value change is a no-op (cheap early-return) — we
+    deliberately keep this narrow to avoid spurious side effects.
+    """
+    name = par.name
+    if name not in ("Apikey", "Authmode"):
+        return
+
+    comp = par.owner
+    try:
+        ext = comp.op("tdpilot_api_extension").module.get_extension(comp)
+    except Exception as exc:
+        debug(f"[tdpilot_API] extension fetch failed for {name} change: {exc}")
+        return
+    if ext is None:
+        return
+
+    try:
+        if name == "Apikey":
+            handler = getattr(ext, "OnApikeyValueChange", None)
+            if handler is not None:
+                handler(par)
+        elif name == "Authmode":
+            handler = getattr(ext, "OnAuthmodeValueChange", None)
+            if handler is not None:
+                handler(par, prev)
+    except Exception as exc:
+        debug(f"[tdpilot_API] {name} value-change handler error: {exc}")
 
 
 def onValuesChanged(changes):

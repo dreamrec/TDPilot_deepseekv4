@@ -510,6 +510,57 @@ class TDPilotAPIExt:
         except Exception as exc:  # noqa: BLE001
             self._set_status(f"save failed: {exc}")
 
+    # ------------------------------------------------------------------
+    # Phase 1.2.1 (v2.2.1) — value-change auto-routing
+    # ------------------------------------------------------------------
+
+    def OnApikeyValueChange(self, par) -> None:
+        """Auto-save + auto-reload when the user pastes a value into the
+        Apikey COMP param. Drops the previous "type key → pulse
+        Saveapikey → pulse Reloadconfig" 3-step ritual to a single
+        paste.
+
+        Wired via ``tdpilot_api_parexec.onValueChange`` with
+        ``valuechange=1`` enabled on the parameterexecuteDAT (build
+        script change in same release).
+
+        Empty values are no-op'd — this avoids a recursion loop with
+        ``OnSaveApiKeyPulse`` which deliberately wipes ``Apikey.val``
+        back to ``""`` after saving the key to disk (so the key isn't
+        left lurking in a saved .toe). That wipe itself fires
+        onValueChange a second time; the empty-check short-circuits it.
+        """
+        try:
+            value = str(par.val or "").strip()
+        except Exception:  # noqa: BLE001
+            value = ""
+        if not value:
+            return
+        # OnSaveApiKeyPulse handles the rest: write to
+        # ~/.tdpilot-api/config.json, wipe the param, call
+        # self._runtime.reload_config(). We just trigger it.
+        self.OnSaveApiKeyPulse()
+
+    def OnAuthmodeValueChange(self, par, prev) -> None:
+        """Surface the auth-mode flip in the Status field. The
+        webserver's auth gate reads ``Authmode`` on every request
+        (see ``_insecure_mode`` in tdpilot_api_web_callbacks.py), so
+        no rebuild / Reloadconfig is required for the flip to take
+        effect — this handler just gives the user immediate visual
+        feedback that their toggle landed.
+        """
+        try:
+            new_val = str(par.val or "").strip().lower()
+        except Exception:  # noqa: BLE001
+            new_val = "?"
+        if new_val == "open":
+            msg = "auth mode: OPEN (no token required)"
+        elif new_val == "token":
+            msg = "auth mode: TOKEN (X-TDPilot-Token required)"
+        else:
+            msg = f"auth mode: {new_val}"
+        self._set_status(msg)
+
     def OnVerifySetupPulse(self) -> dict:
         """Phase 5.1 — run the install-doctor check registry against
         the current standalone instance and return a JSON-serialisable
