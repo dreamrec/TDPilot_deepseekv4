@@ -1,6 +1,40 @@
 # Changelog
 
-## Unreleased (v2.2.0 — Phase 1 + Phase 1.2.x UX polish in progress)
+## 2.2.0 - 2026-05-11
+
+**Reliability foundation release.** First milestone of the v2.2.0→v3.0 roadmap (see `docs/ROADMAP.md`). Phase 1 ships in full: the chat-pipe agent is now safe to leave unsupervised on complex builds, two failure modes have automatic recovery, and the "drag-and-go" UX finally works for new users out of the box.
+
+**Headline changes from v2.1.5:**
+
+- **Auto-rollback** (1.1): each LLM tool batch is wrapped with a baseline-and-diff check against `td_get_errors` plus a TD `ui.undo.startBlock`. If new critical errors (compile-class) appear after the batch, the changes are atomically reverted via `ui.undo.undo()` and the LLM sees a hint in its next API call's tool-result. The agent self-corrects instead of cascading deeper into a broken state. PR #34 + Codex P1+P2 followup PR #36.
+- **Cycle detection** (1.2): per-turn ledger tracks `(tool_name, args_hash) → count`. When the count reaches the threshold (default 3), `CycleDetected` raises before the next dispatch — `run_turn` catches it, fires `on_error`, the chat UI shows a red banner naming the stuck tool. PR #37.
+- **Drag-and-go UX polish** (1.2.1): new `Authmode` Menu COMP param (default `open`) replaces the env-var auth toggle that didn't survive TD restarts. Auto-save + auto-reload when `Apikey` value changes (drops the manual `Saveapikey` + `Reloadconfig` pulse ritual to zero clicks). Yellow "Reconnect" banner in the chat panel auto-recovers from stale-token 401s after `.tox` rebuilds. PR #38.
+- **Build-script auto-mirror** (1.2.2): rebuilding the `.tox` from a worktree now auto-copies the binary + hash file into the main repo's `td_component/`. End of the stale-symlink-from-rotated-worktree footgun that bit hard in the v2.2.1 debug session. Auto-detect via `git rev-parse --git-common-dir`; opt-out with `TDPILOT_NO_TOX_MIRROR=1`. PR #39.
+- **Paired source-file-list refactor** (PR #35): consolidated the build script's `_TOX_SOURCE_FILES` tuple and the freshness check's `SOURCE_FILES` tuple behind a single source of truth — drift between them was the root cause of PR #34's broken CI.
+
+**Why this matters for end users**: drag in `tdpilot_API.tox` → paste DeepSeek key into `Apikey` param → chat works first try. No env vars. No pulses. The bundled `.tox` in this release has `Authmode=open` as default, so even cold-start drag-and-go from Finder succeeds without any auth dance.
+
+**Why this matters for contributors**: rebuilding from any worktree auto-syncs the main repo's `.tox` files. Drag-from-Finder out of the main repo is always fresh. The chain "rebuild → commit → push → ship" is now safe across the contributor lifecycle.
+
+### Tests
++ 60 in `test_tdpilot_api_rollback.py` (1.1)
++ 49 in `test_tdpilot_api_cycle_detector.py` (1.2)
++ 17 in `test_v221_authmode_and_autoreload.py` (1.2.1)
++ 10 in `test_v222_tox_mirror.py` (1.2.2)
+= **136 new tests** since v2.1.5. Total suite at release: 1848 passing.
+
+### Behaviour changes worth flagging
+
+- **Default chat-pipe webserver auth posture changes** from token-required to origin-allowlist-only (`Authmode=open` default). The origin allowlist still rejects cross-origin browser CSRF, so this is safe on TouchDesigner's typical single-user dev/perform usage profile. Users sharing `.toe` files across machines should set `Authmode=token` on the COMP for that deployment.
+- The MCP-server `tdpilot-dpsk4.tox` (port 9985) auth model is **unchanged** — `TD_MCP_SHARED_SECRET` still required.
+
+### Detailed changelog per phase
+
+(Phase entries kept verbatim below from the Unreleased section so the file remains a faithful per-feature record.)
+
+---
+
+### Added — Phase 1.2.2: build scripts auto-mirror `.tox` to main repo (`td_component/`)
 
 ### Added — Phase 1.2.2: build scripts auto-mirror `.tox` to main repo (`td_component/`)
 
