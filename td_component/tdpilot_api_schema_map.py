@@ -159,6 +159,10 @@ TOOL_TO_HANDLER: dict[str, tuple[str, Callable[[dict], dict]]] = {
     # ---- Snapshot + Patch tools (Sprint 3.3 — handlers in tdpilot_api_patches.py) ----
     "snapshot_save": ("handle_snapshot_save", _id),
     "snapshot_list": ("handle_snapshot_list", _id),
+    # 2026-05-11 — scoped JSON manifest snapshots (Bug 19 fix). Save +
+    # restore at scope-level without touching the agent COMP.
+    "snapshot_save_scoped": ("handle_snapshot_save_scoped", _id),
+    "snapshot_restore_scoped": ("handle_snapshot_restore_scoped", _id),
     "patch_begin": ("handle_patch_begin", _id),
     "patch_validate": ("handle_patch_validate", _id),
     "patch_commit": ("handle_patch_commit", _id),
