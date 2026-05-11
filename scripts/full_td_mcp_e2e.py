@@ -870,7 +870,10 @@ def parse_args() -> argparse.Namespace:
     )
 
     parsed = parser.parse_args()
-    parsed.server_args = ["run", "--directory", parsed.repo_dir, "tdpilot"]
+    # post-v2.1.5 (Codex review on PR #30): use the dpsk4 fork's actual
+    # script name. Pre-fix this launched "tdpilot" (the parent fork's
+    # entrypoint), which fails here with ModuleNotFoundError.
+    parsed.server_args = ["run", "--directory", parsed.repo_dir, "tdpilot-dpsk4"]
     return parsed
 
 

@@ -112,25 +112,37 @@ jobs:
           REF: ${{ steps.resolve.outputs.ref }}
         run: |
           tag_version="${REF#v}"
-          if npm view "tdpilot@${tag_version}" version >/tmp/npm-view-out.txt 2>/tmp/npm-view-err.log; then
+          # Read package name from package.json — pre-v2.1.6 this was
+          # hard-coded as `tdpilot`, but this repo publishes
+          # `tdpilot-dpsk4`. The hard-coded check would either probe
+          # the wrong package's registry data on every run, or falsely
+          # skip publish if `tdpilot` and `tdpilot-dpsk4` ever shared a
+          # version number. Codex review on PR #30 caught this.
+          pkg_name=$(node -p "require('./npm/package.json').name")
+          echo "Probing registry for ${pkg_name}@${tag_version}"
+          if npm view "${pkg_name}@${tag_version}" version >/tmp/npm-view-out.txt 2>/tmp/npm-view-err.log; then
             on_registry="yes"
           else
             on_registry="no"
           fi
           echo "on_registry=$on_registry" >> "$GITHUB_OUTPUT"
           if [ "$on_registry" = "yes" ]; then
-            echo "::notice::tdpilot@${tag_version} is already on the npm registry — skipping publish (likely a re-tag)."
+            echo "::notice::${pkg_name}@${tag_version} is already on the npm registry — skipping publish (likely a re-tag)."
           else
-            echo "tdpilot@${tag_version} not on registry — will publish."
+            echo "${pkg_name}@${tag_version} not on registry — will publish."
           fi
 
       - name: Publish
         if: steps.registry_check.outputs.on_registry != 'yes'
         working-directory: npm
-        # Auth model: this workflow is registered as a Trusted Publisher on
-        # the `tdpilot` npm package (npmjs.com -> Settings -> Trusted Publisher
-        # -> GitHub Actions -> dreamrec/TDPilot, npm-publish.yml). With that
-        # binding, `npm publish --provenance` performs an OIDC handshake
+        # Auth model: this workflow is registered as a Trusted Publisher
+        # on the `tdpilot-dpsk4` npm package (npmjs.com -> Settings ->
+        # Trusted Publisher -> GitHub Actions ->
+        # dreamrec/TDPilot_deepseekv4, npm-publish.yml). Pre-v2.1.6 this
+        # comment misnamed both the package (`tdpilot`) and the repo
+        # (`dreamrec/TDPilot` — the parent fork) — Codex review on PR
+        # #30 caught the drift. With that binding,
+        # `npm publish --provenance` performs an OIDC handshake
         # against npm's registry using the workflow's `id-token: write`
         # permission and uses the resulting short-lived token to publish.
         # NODE_AUTH_TOKEN is intentionally NOT set — when it is present,
