@@ -1,5 +1,69 @@
 # Changelog
 
+## Unreleased (v2.2.0 — Phase 1 + Phase 1.2.1 UX polish in progress)
+
+### Added — Phase 1.2.1 UX polish (chat-pipe / `tdpilot_API.tox`)
+
+Three real friction points the live-debug session exposed:
+
+1. **`TDPILOT_API_INSECURE` was a process env var** — set in Textport, gone on TD restart. Users got 401 after every restart with no clear remedy.
+2. **Pasting a new `Apikey` value required two follow-up pulses** (`Saveapikey` then `Reloadconfig`) — non-obvious; lots of "key is set but the agent doesn't see it" confusion.
+3. **After every `.tox` rebuild the chat panel's token rotated** — every open browser tab 401'd until the user knew to navigate to `http://127.0.0.1:9987/` for a fresh one.
+
+This release addresses all three:
+
+**1. `Authmode` COMP param replaces the env var as source of truth.**
+
+- New `Authmode` Menu param under the API page on `tdpilot_API`. Values: `open` (default) / `token`.
+- `tdpilot_api_web_callbacks._insecure_mode` reads the COMP param first; env-var becomes a fallback for back-compat. Each `/send` request re-reads the param, so flipping it takes effect immediately (no Reloadconfig needed).
+- Persists in the `.toe` → survives every TD restart. **Drag in + paste key + done forever.**
+- **Default is `open`**: the chat-pipe webserver doesn't require `X-TDPilot-Token` on `/send`. The **origin allowlist still enforces single-machine isolation** — a malicious cross-origin browser tab can't drive the chat-pipe even in open mode. Suitable for TouchDesigner's "single-user dev / live performance on a personal box" usage profile.
+- Users who run on a shared / LAN-exposed machine flip `Authmode = token` once in the param panel — the v2.1.3 token security model kicks back in.
+
+**2. Auto-save + auto-reload on `Apikey` value change.**
+
+- `tdpilot_api_parexec` now listens to `valuechange` events (added via `_wire_parexec` in `build_tdpilot_api_tox.py`). Filter is narrow: only `Apikey` and `Authmode` route to the extension; every other value change is a no-op.
+- New `Extension.OnApikeyValueChange(par)` delegates to `OnSaveApiKeyPulse` (which already writes to `~/.tdpilot-api/api_key` + calls `runtime.reload_config()`). User pastes a key → it works. Zero pulses.
+- New `Extension.OnAuthmodeValueChange(par, prev)` updates the status line so the user sees their toggle land ("auth mode: OPEN (no token required)" / "auth mode: TOKEN (X-TDPilot-Token required)").
+- Recursion-safe: the empty-string short-circuit in `OnApikeyValueChange` prevents the value-change-fires-again loop after `OnSaveApiKeyPulse` clears `Apikey.val`.
+
+**3. Stale-token recovery banner in the chat panel.**
+
+- New `appendReconnectBanner()` JS helper in `tdpilot_api_chat.html`. When `fetch('/send')` returns 401 (the canonical "token rotated, panel is stale" signal), the panel renders a yellow message with a real `<button>` that calls `window.location.reload()`.
+- Reload re-fetches `GET /`, which already bakes the current token into the served HTML — bookmark-friendly URL `http://127.0.0.1:9987/` always serves a working panel.
+- Non-401 errors (port closed, TD not running, etc.) still flow through the generic `appendMessage('error', ...)` path.
+
+#### Files
+
+- `td_component/build_tdpilot_api_tox.py` — adds the `Authmode` param under a new `Authhdr` header on the API page; `_wire_parexec` enables `valuechange=1`.
+- `td_component/tdpilot_api_web_callbacks.py` — `_insecure_mode` reads `Authmode` COMP param first; env var becomes fallback.
+- `td_component/tdpilot_api_parexec.py` — `onValueChange` filter routes `Apikey` / `Authmode` to extension methods.
+- `td_component/tdpilot_api_extension.py` — new `OnApikeyValueChange` / `OnAuthmodeValueChange` methods.
+- `td_component/tdpilot_api_chat.html` — new `appendReconnectBanner()` JS helper; `/send` catch branches on `401` substring.
+
+#### Tests (17 new in `tests/test_v221_authmode_and_autoreload.py`)
+
+- **`TestInsecureModeFromAuthmode` (6)** — Authmode=open/token/whitespace+case/unknown-falls-through; COMP param beats env var.
+- **`TestBackwardsCompatibility` (2)** — old .tox (no Authmode param) still works via env var; `_comp()` returning None doesn't raise.
+- **`TestAuthGateEndToEnd` (3)** — Authmode=open lets tokenless `/send` through; Authmode=token blocks; open mode still rejects cross-origin (origin allowlist preserved).
+- **`TestParexecValueChangeRouting` (5)** — Apikey/Authmode route correctly; other params are no-op; missing extension or raising handler doesn't crash the cook thread.
+- **`TestApikeyEmptyShortCircuit` (1)** — verifies the empty-string guard prevents recursion through `OnSaveApiKeyPulse`'s `Apikey.val = ""` wipe.
+
+#### Net user experience
+
+- **Brand-new user**: drag .tox in → paste DeepSeek key into the `Apikey` param → it works. Zero pulses, zero env-var dance.
+- **Returning user** (saved their .toe): open TD → .toe loads → chat works. The Authmode=Open setting + the saved API key on disk both persist.
+- **Dev rebuilding the .tox**: rebuild → old browser tabs get the yellow "Reconnect" banner → click → they're back. No need to know about `Openpanelnow`.
+- **Security-conscious user**: flips `Authmode = token` once in the COMP param. Token-required behaviour kicks back in; persists in the .toe.
+
+#### Migration note
+
+The default chat-pipe webserver auth posture changes from token-required to origin-allowlist-only. Users who shared their `.toe` with a colleague to run on a separate machine and were relying on the v2.1.3 token gate must explicitly flip `Authmode = token` on the COMP for that deployment. The default change is documented under the COMP param's tooltip; the `Authhdr` section title flags "Auth (chat-pipe webserver)" so users see the surface when configuring the COMP.
+
+The MCP-server (`tdpilot-dpsk4.tox`, port 9985) auth is **untouched** by this PR — it continues to require `TD_MCP_SHARED_SECRET`. Phase 1.2.1 is chat-pipe-only.
+
+---
+
 ## Unreleased (v2.2.0 — Phase 1 in progress)
 
 **v2.2.0 will be the first release of the v2.2.0→v3.0 roadmap (see

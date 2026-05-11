@@ -1444,6 +1444,49 @@
     autoScroll();
   }
 
+  // Phase 1.2.1 (v2.2.1) — friendly recovery banner for HTTP 401 on
+  // /send. The chat panel's auth token is server-injected at GET /
+  // time; after a .tox rebuild the server rotates that token, but
+  // the open browser tab still holds the old one — every /send POST
+  // 401s until the user reloads. Pre-1.2.1 they saw a generic
+  // "Could not reach TD WebServer ... HTTP 401" message and had to
+  // know to press Cmd-R themselves. This builds a banner with an
+  // inline "Reconnect" button that calls location.reload() so the
+  // panel re-fetches the current token. DOM-built (not via
+  // appendMessage) because appendMessage textContent-escapes the
+  // 'error' role and we need a real <button>.
+  function appendReconnectBanner() {
+    clearWelcome();
+    const div = document.createElement('div');
+    div.className = 'msg error';
+    const r = document.createElement('div');
+    r.className = 'role';
+    r.textContent = 'connection';
+    div.appendChild(r);
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.textContent =
+      'Connection unauthorized (HTTP 401). The chat-pipe token rotated — most likely a .tox rebuild happened in TouchDesigner. ';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Reconnect (reload this tab)';
+    btn.style.cssText =
+      'margin-left:8px;padding:4px 12px;background:#6B47FF;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;';
+    btn.addEventListener('click', () => {
+      try {
+        window.location.reload();
+      } catch (_e) {
+        // Some restricted contexts disallow reload; fall back to a
+        // hint the user can act on manually.
+        body.append(' (auto-reload blocked — press Cmd-R / F5)');
+      }
+    });
+    body.appendChild(btn);
+    div.appendChild(body);
+    $history.appendChild(div);
+    autoScroll();
+  }
+
   // Best-effort clipboard copy. Modern browsers expose
   // navigator.clipboard.writeText, but it requires a secure context;
   // fall back to a synthetic textarea + execCommand for older WebKit
@@ -1996,7 +2039,20 @@
         // flag + safety timer so a retry isn't blocked.
         clearAwaitingTurnEnd();
         setAgentStatus('send failed: ' + err.message);
-        appendMessage('error', 'Could not reach TD WebServer at ' + SEND_URL + ': ' + err.message);
+        // Phase 1.2.1: split the 401 path off into a dedicated
+        // banner with a reload button. Other failures (port not
+        // listening, TD not running) still flow through the generic
+        // appendMessage error path. The boundary is the bare "401"
+        // token in err.message — set by the !r.ok branch above.
+        const msg = (err && err.message) || '';
+        if (/\b401\b/.test(msg)) {
+          appendReconnectBanner();
+        } else {
+          appendMessage(
+            'error',
+            'Could not reach TD WebServer at ' + SEND_URL + ': ' + msg,
+          );
+        }
       })
       .finally(() => {
         $input.focus();

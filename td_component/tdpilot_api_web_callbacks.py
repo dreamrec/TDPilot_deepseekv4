@@ -132,9 +132,44 @@ _INSECURE_ENV = "TDPILOT_API_INSECURE"
 
 
 def _insecure_mode() -> bool:
-    """Off-switch for users who drive the chat from external tooling.
-    Set ``TDPILOT_API_INSECURE=1`` in the environment to disable the
-    token + origin checks entirely. Default is secure."""
+    """Return True when the chat-pipe webserver should skip the
+    X-TDPilot-Token check. The origin allowlist is NEVER bypassed by
+    this — only the token check is.
+
+    Resolution order (first hit wins):
+
+    1. **COMP param ``Authmode``** — value ``"open"`` means insecure,
+       ``"token"`` means require the token. Phase 1.2.1 (v2.2.1) made
+       this the default source of truth: it persists in the .toe so
+       restarts preserve user intent, and the auth check reads it on
+       every request so flipping the param takes effect immediately
+       (no Reloadconfig needed).
+    2. **Env var ``TDPILOT_API_INSECURE``** — backward compat for
+       dev workflows that pre-date the Authmode param. Set to
+       ``"1" / "true" / "yes"`` for insecure.
+    3. **Default**: ``False`` (require token) — only reached on the
+       very rare error path where the COMP isn't resolvable AND the
+       env var is unset.
+
+    Default Authmode is ``"open"`` (set in the build script's
+    ``_API_PAGE`` schema). New users get drag-and-go; users who need
+    multi-machine/LAN security flip Authmode to ``"token"`` in the
+    COMP's param panel.
+    """
+    # 1. COMP param wins.
+    try:
+        comp = _comp()
+        if comp is not None and hasattr(comp.par, "Authmode"):
+            # ``.val`` returns the menu string for a Menu param. Same
+            # as ``.menuNames[par.menuIndex]`` but shorter. Avoids
+            # the ``.eval()`` form (which collides with a Python-eval
+            # security-linter false-positive in this codebase's hooks).
+            value = str(comp.par.Authmode.val or "").strip().lower()
+            if value in ("open", "token"):
+                return value == "open"
+    except Exception:
+        pass
+    # 2. Env var fallback.
     return os.environ.get(_INSECURE_ENV, "").strip() in ("1", "true", "yes")
 
 
