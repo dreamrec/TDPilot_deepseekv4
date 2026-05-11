@@ -956,7 +956,9 @@ def test_pre_turn_retrieval_handler_failure_is_isolated(monkeypatch):
     )
 
     rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
-    block = rt._run_pre_turn_retrieval("anything")
+    # 2026-05-11 — prompt must clear the 16-char floor (Bug 8 fix gates
+    # retrieval entirely for prompts shorter than that).
+    block = rt._run_pre_turn_retrieval("anything happening with this?")
     assert "good_hit" in block, "knowledge hit must survive memory crash"
 
 

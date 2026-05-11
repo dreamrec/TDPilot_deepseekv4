@@ -116,15 +116,26 @@ def _headers(request):
     # Pass 1 — flattened headers directly on request. We do this FIRST
     # so the nested 'headers' dict (if present) wins on collision (the
     # nested form is more authoritative when both exist).
-    for k, v in (request.items() if hasattr(request, "items") else []):
+    for k, v in request.items() if hasattr(request, "items") else []:
         if v is None:
             continue
         lk = str(k).lower().strip()
         # Skip the obviously-non-header request fields. WebServerDAT's
         # request dict mixes headers with method/uri/data/etc.
-        if lk in ("method", "uri", "data", "body", "headers", "client",
-                  "request", "response", "remoteip", "remoteport", "version",
-                  "secureconnection"):
+        if lk in (
+            "method",
+            "uri",
+            "data",
+            "body",
+            "headers",
+            "client",
+            "request",
+            "response",
+            "remoteip",
+            "remoteport",
+            "version",
+            "secureconnection",
+        ):
             continue
         # Only accept stringly values that look like header values;
         # skip dicts/lists/bytes here (the nested 'headers' dict is
@@ -484,9 +495,7 @@ def onHTTPRequest(webServerDAT, request, response):
                         _text(
                             response,
                             400,
-                            '"message" must be a string (got '
-                            + type(msg_val).__name__
-                            + ")",
+                            '"message" must be a string (got ' + type(msg_val).__name__ + ")",
                             request_origin=request_origin,
                         )
                         return response
