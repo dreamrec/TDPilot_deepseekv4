@@ -98,28 +98,63 @@ def _route(request):
 def _headers(request):
     """Return a lower-cased dict of request headers. WebServer DAT
     keys vary across TD builds — some use ``request['headers']``, some
-    flatten them into the request dict itself. Tolerate both."""
+    flatten them into the request dict itself, AND case-conventions
+    differ (lowercase vs ``X-TDPilot-Token`` vs ``X-Tdpilot-Token``).
+    Tolerate ALL of it.
+
+    2026-05-11 fix — pre-fix the fallback only checked lowercase keys
+    against ``request``, so TD 2025.32820/macOS (which flattens with
+    original case ``X-TDPilot-Token``) was effectively headerless: the
+    auth gate saw ``headers == {}`` for every request, the X-TDPilot-Token
+    check returned 401 regardless of the actual header, and the Origin
+    allowlist was vacuously satisfied. Now we case-fold every direct
+    key on ``request`` itself, then also case-fold whatever's under
+    ``request['headers']``. Net effect: as long as TD surfaces the
+    header by ANY name + any case, we find it.
+    """
+    out = {}
+    # Pass 1 — flattened headers directly on request. We do this FIRST
+    # so the nested 'headers' dict (if present) wins on collision (the
+    # nested form is more authoritative when both exist).
+    for k, v in request.items() if hasattr(request, "items") else []:
+        if v is None:
+            continue
+        lk = str(k).lower().strip()
+        # Skip the obviously-non-header request fields. WebServerDAT's
+        # request dict mixes headers with method/uri/data/etc.
+        if lk in (
+            "method",
+            "uri",
+            "data",
+            "body",
+            "headers",
+            "client",
+            "request",
+            "response",
+            "remoteip",
+            "remoteport",
+            "version",
+            "secureconnection",
+        ):
+            continue
+        # Only accept stringly values that look like header values;
+        # skip dicts/lists/bytes here (the nested 'headers' dict is
+        # picked up in pass 2).
+        if isinstance(v, (str, int, float, bool)):
+            out[lk] = str(v).strip()
+    # Pass 2 — nested headers dict, lower-cased. Overrides pass 1.
     raw = request.get("headers") or {}
-    if not isinstance(raw, dict):
-        raw = {}
-    out = {str(k).lower(): str(v) for k, v in raw.items()}
-    # Some builds put origin / sec-fetch-site / etc. on the request
-    # dict directly instead of nesting under 'headers'. Adopt them
-    # only when not already in the headers map.
-    #
-    # 2.1.3 — ``content-type`` was added to this fallback list so the
-    # JSON envelope check on /send works on builds that flatten
-    # headers. Without it, ``headers["content-type"]`` was empty and
-    # the route 415'd every request that came in via the flatten path.
-    for k in (
-        "origin",
-        "sec-fetch-site",
-        "x-tdpilot-token",
-        "authorization",
-        "content-type",
-    ):
-        if k not in out and k in request:
-            out[k] = str(request.get(k) or "")
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            out[str(k).lower().strip()] = str(v).strip()
+    elif isinstance(raw, list):
+        # Some builds use a list of "Key: Value" lines or tuples.
+        for item in raw:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                out[str(item[0]).lower().strip()] = str(item[1]).strip()
+            elif isinstance(item, str) and ":" in item:
+                k, v = item.split(":", 1)
+                out[k.lower().strip()] = v.strip()
     return out
 
 
@@ -238,7 +273,22 @@ def _check_auth(method: str, path: str, headers: dict) -> tuple[int, str] | None
     """
     if method == "OPTIONS":
         return None
-    if method == "GET" and path in ("/", "/index.html", "/health"):
+    # 2026-05-11 — /favicon.ico added to bootstrap allowlist. Chromium
+    # (and the in-TD webRenderTOP's embedded engine) auto-fetches it
+    # on every page load WITHOUT the auth header — even though the
+    # HTML doesn't reference it. Pre-fix the route hit _check_auth,
+    # missed the token, returned 401 with no Content-Type body, and
+    # the embedded Chromium reported "page can't be found / HTTP
+    # ERROR 404" as a misleading fallback (the actual page load
+    # succeeded, but Chromium's favicon error path doesn't cleanly
+    # distinguish 401 from 404).
+    #
+    # 2026-05-11 — HEAD also accepted for bootstrap paths. Browsers
+    # sometimes HEAD-probe a URL before GETting (cache-revalidation,
+    # link-rel=preload hints). HEAD on a 401 auth-gated route would
+    # confuse client-side caching logic; whitelisting HEAD keeps the
+    # bootstrap surface uniform with GET.
+    if method in ("GET", "HEAD") and path in ("/", "/index.html", "/health", "/favicon.ico"):
         return None
     if not _allowed_origin(headers.get("origin", "")):
         return (403, "cross-origin request blocked")
@@ -264,7 +314,11 @@ def _check_auth(method: str, path: str, headers: dict) -> tuple[int, str] | None
 def _cors(response, request_origin: str = ""):
     """Reflect a known-good origin instead of ``*``. Same-origin
     requests don't need this at all — but the cors header is harmless
-    when echoed back to a same-origin caller."""
+    when echoed back to a same-origin caller. Also sets cache-control
+    so browsers don't retain stale 401/404/error responses across
+    server transitions (the .tox rebuild window briefly returns
+    errors that the browser would otherwise cache and replay even
+    after the server is healthy)."""
     if _insecure_mode():
         # Insecure mode trades safety for tooling compat; widen CORS
         # accordingly so curl / external panels keep working.
@@ -274,8 +328,19 @@ def _cors(response, request_origin: str = ""):
     else:
         response["Access-Control-Allow-Origin"] = "null"
     response["Access-Control-Allow-Headers"] = "Content-Type, X-TDPilot-Token, Authorization"
-    response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response["Access-Control-Allow-Methods"] = "GET, HEAD, POST, OPTIONS"
     response["Vary"] = "Origin"
+    # 2026-05-11 — no-store/no-cache on every response. Pre-fix, browsers
+    # would cache responses from the brief .tox-rebuild window where
+    # the webserverDAT was transitioning (errors, 401s, half-responses)
+    # and then replay that cached state to the user even after the
+    # server came back healthy — manifesting as "the page can't be
+    # found / HTTP ERROR 404" stuck in the browser tab indefinitely.
+    # no-store stops Chrome/Safari/Firefox from caching the response;
+    # no-cache forces revalidation if a cached copy ever exists.
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    response["Expires"] = "0"
 
 
 def _json(response, status, payload, request_origin: str = ""):
@@ -309,7 +374,7 @@ def onHTTPRequest(webServerDAT, request, response):
         _text(response, 200, "", request_origin=request_origin)
         return response
 
-    if method == "GET" and path in ("/", "/index.html"):
+    if method in ("GET", "HEAD") and path in ("/", "/index.html"):
         # Serve the chat HTML so the page + WebSocket share http://host:port
         # origin. Required because Chrome blocks ws:// from file:// origins.
         # Inject the per-launch session token so the same-origin chat can
@@ -338,6 +403,17 @@ def onHTTPRequest(webServerDAT, request, response):
 
     if method == "GET" and path == "/health":
         _json(response, 200, {"ok": True}, request_origin=request_origin)
+        return response
+
+    if method == "GET" and path == "/favicon.ico":
+        # 2026-05-11 — silence Chromium's auto-fetch with a 204 No
+        # Content. We don't ship an icon (the chat panel renders
+        # inside the webRenderTOP, not in a browser-tab-favicon
+        # context), so the empty body keeps payload + token cost zero.
+        _cors(response, request_origin)
+        response["statusCode"] = 204
+        response["statusReason"] = "No Content"
+        response["data"] = b""
         return response
 
     if method == "GET" and path == "/history":
@@ -386,33 +462,72 @@ def onHTTPRequest(webServerDAT, request, response):
         # support so existing automation keeps working. Browsers
         # ALWAYS send Origin on cross-origin POSTs, so the contract
         # binds where it matters.
+        # 2026-05-11 — Content-Type-agnostic JSON envelope extraction.
+        # Some TD builds (observed on 2025.32820/macOS) don't surface
+        # Content-Type into request['headers'] or as a flat key the
+        # _headers() fallback can find. Pre-fix, those builds fell into
+        # the plain-text branch and stored the literal `{"message":"..."}`
+        # string as the user prompt — visible in chat_transcript and
+        # wasting cached-prefix tokens on JSON quoting. Now: peek at the
+        # raw body shape regardless of Content-Type. If it parses as a
+        # JSON object with a "message" string, use that. Otherwise treat
+        # as plain text. Robust to header-flattening quirks.
         ctype = headers.get("content-type", "").split(";", 1)[0].strip().lower()
         origin_lower = (request_origin or "").strip().lower()
         is_browser_request = bool(origin_lower) and origin_lower != "null"
         raw = _read_body(request)
-        if ctype == "application/json":
+        body = ""
+        parsed_as_json = False
+        raw_stripped = (raw or "").strip()
+        if raw_stripped.startswith("{") and raw_stripped.endswith("}"):
             try:
-                payload = json.loads(raw) if raw else {}
-            except json.JSONDecodeError as exc:
-                _text(response, 400, f"invalid JSON body: {exc}", request_origin=request_origin)
+                payload = json.loads(raw_stripped)
+                if isinstance(payload, dict) and "message" in payload:
+                    # 2026-05-11 — strict type check on "message". Pre-fix
+                    # the extraction did ``str(payload.get("message", ""))``
+                    # which coerced None→"None", dict→"{'nested': 1}",
+                    # int→"0", bool→"True" — all silently accepted as
+                    # the user prompt. Agent received garbage. Now: only
+                    # str values pass; everything else 400s with a clear
+                    # error so the client knows the envelope is wrong.
+                    msg_val = payload.get("message")
+                    if not isinstance(msg_val, str):
+                        _text(
+                            response,
+                            400,
+                            '"message" must be a string (got ' + type(msg_val).__name__ + ")",
+                            request_origin=request_origin,
+                        )
+                        return response
+                    body = msg_val.strip()
+                    parsed_as_json = True
+            except json.JSONDecodeError:
+                pass
+        if not parsed_as_json:
+            if ctype == "application/json":
+                # Caller explicitly said JSON but body wasn't a valid
+                # {"message":...} envelope. Reject with a clear error
+                # rather than silently treating the raw body as a prompt.
+                _text(
+                    response,
+                    400,
+                    'JSON body must be an object with a "message" string',
+                    request_origin=request_origin,
+                )
                 return response
-            if not isinstance(payload, dict):
-                _text(response, 400, "JSON body must be an object", request_origin=request_origin)
+            if is_browser_request:
+                # Browser caller MUST use JSON — preflight + origin check
+                # is the CSRF guard. (Same policy as 2.1.3.)
+                _text(
+                    response,
+                    415,
+                    'Browser requests must use Content-Type: application/json with body {"message": "..."}',
+                    request_origin=request_origin,
+                )
                 return response
-            body = str(payload.get("message", "")).strip()
-        elif is_browser_request:
-            # Browser caller MUST use JSON — preflight + origin check is
-            # the CSRF guard.
-            _text(
-                response,
-                415,
-                'Browser requests must use Content-Type: application/json with body {"message": "..."}',
-                request_origin=request_origin,
-            )
-            return response
-        else:
-            # Non-browser (no Origin header): legacy plain-text body.
-            body = str(raw or "").strip()
+            # Non-browser (no Origin header) AND not JSON-shaped: legacy
+            # plain-text body. Backwards compat for curl-style automation.
+            body = raw_stripped
         if not body:
             _text(response, 400, "empty message", request_origin=request_origin)
             return response
@@ -471,6 +586,12 @@ def onHTTPRequest(webServerDAT, request, response):
 # read/write the SAME underlying set.
 _STORAGE_KEY_CLIENTS = "tdpilot_api_ws_clients"
 _STORAGE_KEY_WARN = "tdpilot_api_ws_warned_no_clients"
+# 2026-05-11 — per-client last-seen timestamps for the keepalive reaper.
+# Map: client-handle -> absTime.seconds at last incoming WS frame from
+# that handle. The HTML chat sends {"type":"ping"} every 5s; the reaper
+# evicts handles whose last_seen is older than _WS_STALE_S.
+_STORAGE_KEY_LAST_SEEN = "tdpilot_api_ws_last_seen"
+_WS_STALE_S = 15.0  # 3 missed pings @ 5s cadence
 
 
 def _ws_clients():
@@ -485,6 +606,27 @@ def _ws_clients():
     return s
 
 
+def _ws_last_seen():
+    """Per-client last-seen timestamp dict, in comp.storage for the same
+    module-reload reasons as ``_ws_clients``."""
+    comp = _comp()
+    m = comp.fetch(_STORAGE_KEY_LAST_SEEN, None)
+    if not isinstance(m, dict):
+        m = {}
+        comp.store(_STORAGE_KEY_LAST_SEEN, m)
+    return m
+
+
+def _now_seconds() -> float:
+    """absTime.seconds when available (cook thread), else 0.0. Using TD's
+    own clock matches the executor's cadence and keeps timestamps stable
+    across the COMP — no monotonic vs wall-clock confusion."""
+    try:
+        return float(absTime.seconds)  # type: ignore[name-defined]
+    except Exception:
+        return 0.0
+
+
 def _warn_state():
     comp = _comp()
     w = comp.fetch(_STORAGE_KEY_WARN, None)
@@ -492,6 +634,64 @@ def _warn_state():
         w = {"last_count": -1}
         comp.store(_STORAGE_KEY_WARN, w)
     return w
+
+
+def reap_dead_ws_clients(webServerDAT) -> int:
+    """Reap WS client handles whose connection is dead.
+
+    Mechanism: keepalive age-out. The HTML chat sends a
+    ``{"type":"ping"}`` every 5s; ``onWebSocketReceiveText`` updates
+    ``last_seen`` per client. Any client whose last_seen is older
+    than ``_WS_STALE_S`` (15s = 3 missed pings) is evicted.
+
+    2026-05-11 — pre-fix this function ALSO sent a server-side ping
+    to each client as a raise-on-send backstop. That worked in
+    theory but TD 2025.32820/macOS's ``webSocketSendText`` is
+    silently best-effort against dead sockets so the backstop never
+    fired AND every healthy client received a noisy ``{"type":"ping"}``
+    in its event stream every 5s. Now: age-out only. Client-driven
+    keepalive is the canonical liveness signal; no server-side ping.
+
+    Returns total number of handles reaped.
+    """
+    clients = _ws_clients()
+    if not clients:
+        return 0
+    last_seen = _ws_last_seen()
+    now = _now_seconds()
+    dead = []
+    # Clients without a last_seen entry get one set to NOW — grace
+    # period for a freshly-opened connection that hasn't yet sent
+    # its first ping. After that, the 15s stale window applies.
+    for client in list(clients):
+        ts = last_seen.get(client)
+        if ts is None:
+            last_seen[client] = now
+            continue
+        if now > 0.0 and (now - float(ts)) > _WS_STALE_S:
+            dead.append(client)
+    for d in dead:
+        clients.discard(d)
+        last_seen.pop(d, None)
+    # 2026-05-11 — also sweep stale last_seen entries that no longer
+    # correspond to a registered client. These can accumulate when
+    # onWebSocketClose races with a late ping, or when a reload re-
+    # constructs the clients set but not last_seen. Tiny memory leak
+    # otherwise — sweep is O(len(last_seen)) and runs at the same
+    # 5s cadence as the rest of the reaper.
+    orphans = [c for c in list(last_seen.keys()) if c not in clients]
+    for o in orphans:
+        last_seen.pop(o, None)
+    if dead:
+        print(f"[tdpilot_API/web] reaped {len(dead)} dead WS client(s); {len(clients)} remain")
+    return len(dead)
+
+
+def _mark_ws_seen(client) -> None:
+    """Refresh last_seen for a client — called from onWebSocketOpen +
+    onWebSocketReceiveText. Idempotent."""
+    last_seen = _ws_last_seen()
+    last_seen[client] = _now_seconds()
 
 
 def _send_full_history(webServerDAT, client):
@@ -549,18 +749,37 @@ def broadcast(webServerDAT, payload: dict) -> None:
 
 
 def _ws_token_from_uri(uri: str) -> str:
-    """Pull the ``?t=<token>`` from the WS handshake URI. Browsers
+    """Pull the session token from the WS handshake URI. Browsers
     don't permit custom WebSocket headers, so the token rides on the
-    query string instead."""
-    if "?" not in (uri or ""):
+    URL itself. Supports two encodings:
+
+      * Path-segment form ``ws://host:port/<token>`` — what the live
+        HTML client emits (see ``tdpilot_api_chat.html`` ~line 2228).
+      * Query-string form ``ws://host:port/?t=<token>`` — legacy /
+        external-tool convenience form.
+
+    2026-05-11 fix — pre-fix this only handled query-string form, so the
+    path-segment handshake (every browser client) hit the "no token"
+    branch which only mattered when ``_insecure_mode()`` was False.
+    With Authmode default flipped to "token", path-segment handshakes
+    started getting rejected; restore them by reading the path too.
+    """
+    if not uri:
         return ""
-    qs = uri.split("?", 1)[1]
-    for kv in qs.split("&"):
-        if not kv.startswith("t="):
-            continue
-        # urldecode minimum — tokens are URL-safe base64 already so
-        # %xx escapes are exotic here. Stay stdlib-free for TD compat.
-        return kv[2:].replace("%3D", "=").replace("%2F", "/").replace("%2B", "+")
+    # Query-string form first — wins if both are present.
+    if "?" in uri:
+        qs = uri.split("?", 1)[1]
+        for kv in qs.split("&"):
+            if kv.startswith("t="):
+                return kv[2:].replace("%3D", "=").replace("%2F", "/").replace("%2B", "+")
+    # Path-segment form: ``/<token>`` (single segment, no further slashes).
+    path = uri.split("?", 1)[0]
+    if path.startswith("/"):
+        path = path[1:]
+    # Reject obviously-multi-segment paths and the empty path; a real
+    # session token is a urlsafe-base64 string with no slashes.
+    if path and "/" not in path:
+        return path
     return ""
 
 
@@ -605,6 +824,9 @@ def onWebSocketOpen(webServerDAT, client, uri):
             return
     clients = _ws_clients()
     clients.add(client)
+    # Seed last_seen so the keepalive reaper doesn't immediately age
+    # this client out before its first ping arrives.
+    _mark_ws_seen(client)
     print(f"[tdpilot_API/web] WS open uri={redacted!r} total={len(clients)}")
     _send_full_history(webServerDAT, client)
 
@@ -612,14 +834,25 @@ def onWebSocketOpen(webServerDAT, client, uri):
 def onWebSocketClose(webServerDAT, client):
     clients = _ws_clients()
     clients.discard(client)
+    _ws_last_seen().pop(client, None)
     print(f"[tdpilot_API/web] WS close total={len(clients)}")
 
 
 def onWebSocketReceiveText(webServerDAT, client, data):
+    # 2026-05-11 — keepalive ping handler. The HTML chat sends
+    # {"type":"ping"} every 5s; we just refresh last_seen for this
+    # client so the reaper knows the connection is alive. Don't parse
+    # the payload aggressively — any incoming frame is evidence of
+    # liveness. Future room for client-driven commands here if
+    # needed.
+    _mark_ws_seen(client)
     return
 
 
 def onWebSocketReceiveBinary(webServerDAT, client, data):
+    # Same liveness signal as text frames; not currently used by the
+    # HTML chat but worth refreshing if any future client sends binary.
+    _mark_ws_seen(client)
     return
 
 
@@ -628,14 +861,22 @@ def onServerStart(webServerDAT):
     "the .tox finished loading" hook we have, and it works on both build-
     script-driven installs AND on plain drag-and-drop.
 
-    We use it to force-cook the executor, which is the canonical fix for
-    TD 2025.32460's pull-cooking quirk: programmatically-created
-    executeDATs don't fire onFrameStart until something pulls them into
-    the cook chain at least once. Without this, drag-dropping the .tox
-    into a fresh project would land you with a dead drain (chat UI
-    stuck on "thinking…" forever, even though tools execute). The build
-    script does the same force-cook at build time for the live install
-    path; doing it again here covers .tox-load for everyone else.
+    Two things happen here:
+
+    1. Force-cook the executor so onFrameStart starts firing (TD 2025
+       pull-cooking quirk fix — programmatically-created executeDATs
+       don't fire onFrameStart until pulled into the cook chain at
+       least once).
+
+    2. Restart the in-TD ``chat_web`` webRenderTOP's Chromium engine
+       and re-fetch its URL. Pre-fix, rebuilding the .tox left
+       Chromium showing a cached error page (the brief window during
+       rebuild where the old webserverDAT was down + the new one not
+       yet up returned 404/timeout to Chromium, and Chromium retained
+       the error indefinitely even after the server came back up).
+       The autorestart pulse nukes the Chromium process and the
+       reloadsrc pulse re-fetches the URL — between them, the panel
+       is always clean after a rebuild.
     """
     try:
         comp = _comp()
@@ -645,6 +886,25 @@ def onServerStart(webServerDAT):
             print("[tdpilot_API/web] onServerStart -> executor.cook(force=True)")
     except Exception as exc:
         print(f"[tdpilot_API/web] onServerStart force-cook failed: {exc}")
+    # 2026-05-11 — chat_web auto-recovery on .tox rebuild.
+    try:
+        comp = _comp()
+        chat_web = comp.op("chat_web")
+        if chat_web is not None:
+            # Restart pulse first — nukes the Chromium process if it was
+            # holding a stale error page from a transient rebuild
+            # window. Then reloadsrc forces a fresh GET of the URL.
+            try:
+                chat_web.par.autorestartpulse.pulse()
+            except Exception:
+                pass
+            try:
+                chat_web.par.reloadsrc.pulse()
+            except Exception:
+                pass
+            print("[tdpilot_API/web] onServerStart -> chat_web restart + reload")
+    except Exception as exc:
+        print(f"[tdpilot_API/web] onServerStart chat_web reload failed: {exc}")
     return
 
 

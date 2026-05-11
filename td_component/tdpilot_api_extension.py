@@ -638,6 +638,54 @@ class TDPilotAPIExt:
                 self._handle_event(kind, payload)
             except Exception as exc:  # noqa: BLE001
                 print(f"[tdpilot_API] _handle_event({kind!r}) failed: {type(exc).__name__}: {exc}")
+        # 2026-05-11 — frame-level inbox drain. Pre-fix the EV_DONE handler
+        # called ``_drain_inbox_one`` directly, but EV_DONE fires from the
+        # worker thread BEFORE the worker actually exits — so
+        # ``start_turn``'s ``worker.is_alive()`` check returns True at that
+        # exact moment, drain re-inserts msg to head, and NOTHING ever
+        # retriggers the drain (queue stranded forever). Running drain on
+        # every frame the executor cooks recovers the queue the moment the
+        # worker thread finishes its join. Safe to call even when inbox is
+        # empty (cheap early-return inside ``_drain_inbox_one``).
+        try:
+            self._drain_inbox_one()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API] frame-level drain failed: {type(exc).__name__}: {exc}")
+        # 2026-05-11 — WS dead-client reaper. comp.storage['tdpilot_api_ws_clients']
+        # can accumulate dead handles when ``onWebSocketClose`` doesn't
+        # fire (browser-kill, TCP reset). Pre-fix observed 5 zombies
+        # with 0 actual connections. Every ~5s of cook time (300 frames
+        # at 60fps), ping all registered clients and prune any that
+        # raise. Throttle via comp.storage counter so we don't pay the
+        # iteration cost every frame.
+        self._maybe_reap_ws_clients()
+
+    _REAP_INTERVAL_FRAMES = 300  # ~5s @ 60fps
+
+    def _maybe_reap_ws_clients(self) -> None:
+        """Frame-throttled call to ``reap_dead_ws_clients`` in the
+        callbacks module. Counter in comp.storage so a textDAT reload
+        doesn't reset the throttle (we'd over-reap right after a
+        live-edit otherwise)."""
+        n = self.owner.fetch("tdpilot_api_reap_frame_counter", 0) or 0
+        n += 1
+        if n < self._REAP_INTERVAL_FRAMES:
+            try:
+                self.owner.store("tdpilot_api_reap_frame_counter", n)
+            except Exception:
+                pass
+            return
+        try:
+            self.owner.store("tdpilot_api_reap_frame_counter", 0)
+        except Exception:
+            pass
+        try:
+            ws = self.owner.op("chat_web_server")
+            cb = self.owner.op("tdpilot_api_web_callbacks")
+            if ws is not None and cb is not None:
+                cb.module.reap_dead_ws_clients(ws)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API] WS reaper failed: {type(exc).__name__}: {exc}")
 
     def _handle_event(self, kind: str, payload: Any) -> None:
         # Imports inside method so module-level reload of these textDATs
@@ -1026,6 +1074,21 @@ class TDPilotAPIExt:
         self._broadcast({"type": "append", "role": role, "message": message})
 
     def _html_status(self, status: str) -> None:
+        # 2026-05-11 — dedupe consecutive identical status broadcasts.
+        # Pre-fix every turn-end emitted ``status:idle`` twice — once from
+        # ``EV_STATE("idle")`` (worker thread push), once from the
+        # ``EV_DONE`` branch in ``_handle_event`` (which also calls
+        # ``_html_status("idle")``). Cosmetic but pollutes the WS event
+        # stream and adds work for every connected client. Last-seen
+        # status lives in ``comp.storage`` for the same module-reload
+        # reasons as ``_ws_clients``.
+        prev = self.owner.fetch("tdpilot_api_last_status", None)
+        if prev == status:
+            return
+        try:
+            self.owner.store("tdpilot_api_last_status", status)
+        except Exception:
+            pass
         self._broadcast({"type": "status", "status": status})
 
     def _html_full_sync(self) -> None:

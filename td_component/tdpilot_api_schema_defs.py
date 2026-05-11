@@ -1123,10 +1123,106 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "snapshot_list",
-        "description": "List saved snapshots in ~/.tdpilot-dpsk4/api/snapshots/, newest first.",
+        "description": (
+            "List saved snapshots in ~/.tdpilot-dpsk4/api/snapshots/, newest "
+            "first. Includes both full ``.toe`` snapshots and scoped JSON "
+            "manifests (.scoped.json). Each entry has a ``kind`` field: "
+            "``toe`` (full project, manual restore via File>Open only) or "
+            "``scoped`` (JSON manifest, restorable via snapshot_restore_scoped)."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "snapshot_save_scoped",
+        "description": (
+            "Save a JSON manifest of a TD scope's structural shape — nodes, "
+            "parameters, and connections — EXCLUDING the agent's own COMP and "
+            "any user-listed paths. Use BEFORE risky multi-step builds where "
+            "you want to be able to restore mid-conversation (unlike "
+            "snapshot_save which writes a full .toe and can only be restored "
+            "by closing the project).\n\n"
+            "Captures: node tree (path, type, family, position, custom params, "
+            "non-default standard params, expressions), connections within the "
+            "scope.\n"
+            "Does NOT capture: DAT text contents, extension Python, geometry "
+            "data, animation curves, custom-python on operators. For those use "
+            "snapshot_save (full .toe) and restore manually.\n\n"
+            "Pair with snapshot_restore_scoped to converge the scope back to "
+            "the saved state mid-conversation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "Human-readable label (slugged into the filename). "
+                        "Defaults to scoped_<unix_timestamp>."
+                    ),
+                },
+                "scope": {
+                    "type": "string",
+                    "default": "/project1",
+                    "description": "Absolute TD path to snapshot. Default /project1.",
+                },
+                "excludes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Additional TD paths to exclude. The agent's own COMP, "
+                        "the classic tdpilot COMP, and mcp_server are ALWAYS "
+                        "excluded."
+                    ),
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "snapshot_restore_scoped",
+        "description": (
+            "Restore a scope from a previously saved JSON manifest. "
+            "Computes a diff between the current scope state and the manifest, "
+            "then applies create / delete / param-update / connect / "
+            "disconnect operations to converge the scope back to the snapshot. "
+            "The agent's own COMP is excluded from the restore so the "
+            "operation is safe to call mid-conversation.\n\n"
+            "Pair with snapshot_save_scoped. Use ``dry_run=true`` first to "
+            "preview the diff before applying.\n\n"
+            "Returns a structured report: counts of created / deleted / "
+            "params_updated / connected / disconnected operations plus a "
+            "post-restore td_get_errors result. Read this carefully — partial "
+            "restores can leave the scope in an inconsistent state if some "
+            "operations failed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "Snapshot name (same slugged form used by save). "
+                        "Newest matching .scoped.json is used. Alternative "
+                        "to ``path``."
+                    ),
+                },
+                "path": {
+                    "type": "string",
+                    "description": ("Absolute path to a .scoped.json manifest. Alternative to ``name``."),
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "If true, report the diff (to_create / to_delete / "
+                        "to_update) without applying changes."
+                    ),
+                },
+            },
             "additionalProperties": False,
         },
     },
