@@ -158,7 +158,13 @@ _API_PAGE = [
     # (no Reloadconfig required to flip), and the param persists
     # in the .toe so flipping once is forever.
     ("Authhdr", "Header", "Auth (chat-pipe webserver)", None),
-    ("Authmode", "Menu", "Auth Mode", ("open", "token")),
+    # 2026-05-11 — flipped default to "token" after bilateral audit found
+    # the "open" mode + Authorization header not being surfaced by TD's
+    # webserverDAT meant the origin allowlist (the supposed backstop) was
+    # ALSO bypassable. drag-and-go users can flip to "open" explicitly;
+    # default-secure is the right tradeoff for an agent with td_exec_python
+    # in its toolbelt.
+    ("Authmode", "Menu", "Auth Mode", ("token", "open")),
 ]
 
 _CHAT_PAGE = [

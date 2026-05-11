@@ -638,6 +638,19 @@ class TDPilotAPIExt:
                 self._handle_event(kind, payload)
             except Exception as exc:  # noqa: BLE001
                 print(f"[tdpilot_API] _handle_event({kind!r}) failed: {type(exc).__name__}: {exc}")
+        # 2026-05-11 — frame-level inbox drain. Pre-fix the EV_DONE handler
+        # called ``_drain_inbox_one`` directly, but EV_DONE fires from the
+        # worker thread BEFORE the worker actually exits — so
+        # ``start_turn``'s ``worker.is_alive()`` check returns True at that
+        # exact moment, drain re-inserts msg to head, and NOTHING ever
+        # retriggers the drain (queue stranded forever). Running drain on
+        # every frame the executor cooks recovers the queue the moment the
+        # worker thread finishes its join. Safe to call even when inbox is
+        # empty (cheap early-return inside ``_drain_inbox_one``).
+        try:
+            self._drain_inbox_one()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API] frame-level drain failed: {type(exc).__name__}: {exc}")
 
     def _handle_event(self, kind: str, payload: Any) -> None:
         # Imports inside method so module-level reload of these textDATs
@@ -1026,6 +1039,21 @@ class TDPilotAPIExt:
         self._broadcast({"type": "append", "role": role, "message": message})
 
     def _html_status(self, status: str) -> None:
+        # 2026-05-11 — dedupe consecutive identical status broadcasts.
+        # Pre-fix every turn-end emitted ``status:idle`` twice — once from
+        # ``EV_STATE("idle")`` (worker thread push), once from the
+        # ``EV_DONE`` branch in ``_handle_event`` (which also calls
+        # ``_html_status("idle")``). Cosmetic but pollutes the WS event
+        # stream and adds work for every connected client. Last-seen
+        # status lives in ``comp.storage`` for the same module-reload
+        # reasons as ``_ws_clients``.
+        prev = self.owner.fetch("tdpilot_api_last_status", None)
+        if prev == status:
+            return
+        try:
+            self.owner.store("tdpilot_api_last_status", status)
+        except Exception:
+            pass
         self._broadcast({"type": "status", "status": status})
 
     def _html_full_sync(self) -> None:

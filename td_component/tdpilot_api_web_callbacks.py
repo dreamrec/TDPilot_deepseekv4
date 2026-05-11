@@ -98,28 +98,52 @@ def _route(request):
 def _headers(request):
     """Return a lower-cased dict of request headers. WebServer DAT
     keys vary across TD builds — some use ``request['headers']``, some
-    flatten them into the request dict itself. Tolerate both."""
+    flatten them into the request dict itself, AND case-conventions
+    differ (lowercase vs ``X-TDPilot-Token`` vs ``X-Tdpilot-Token``).
+    Tolerate ALL of it.
+
+    2026-05-11 fix — pre-fix the fallback only checked lowercase keys
+    against ``request``, so TD 2025.32820/macOS (which flattens with
+    original case ``X-TDPilot-Token``) was effectively headerless: the
+    auth gate saw ``headers == {}`` for every request, the X-TDPilot-Token
+    check returned 401 regardless of the actual header, and the Origin
+    allowlist was vacuously satisfied. Now we case-fold every direct
+    key on ``request`` itself, then also case-fold whatever's under
+    ``request['headers']``. Net effect: as long as TD surfaces the
+    header by ANY name + any case, we find it.
+    """
+    out = {}
+    # Pass 1 — flattened headers directly on request. We do this FIRST
+    # so the nested 'headers' dict (if present) wins on collision (the
+    # nested form is more authoritative when both exist).
+    for k, v in (request.items() if hasattr(request, "items") else []):
+        if v is None:
+            continue
+        lk = str(k).lower().strip()
+        # Skip the obviously-non-header request fields. WebServerDAT's
+        # request dict mixes headers with method/uri/data/etc.
+        if lk in ("method", "uri", "data", "body", "headers", "client",
+                  "request", "response", "remoteip", "remoteport", "version",
+                  "secureconnection"):
+            continue
+        # Only accept stringly values that look like header values;
+        # skip dicts/lists/bytes here (the nested 'headers' dict is
+        # picked up in pass 2).
+        if isinstance(v, (str, int, float, bool)):
+            out[lk] = str(v).strip()
+    # Pass 2 — nested headers dict, lower-cased. Overrides pass 1.
     raw = request.get("headers") or {}
-    if not isinstance(raw, dict):
-        raw = {}
-    out = {str(k).lower(): str(v) for k, v in raw.items()}
-    # Some builds put origin / sec-fetch-site / etc. on the request
-    # dict directly instead of nesting under 'headers'. Adopt them
-    # only when not already in the headers map.
-    #
-    # 2.1.3 — ``content-type`` was added to this fallback list so the
-    # JSON envelope check on /send works on builds that flatten
-    # headers. Without it, ``headers["content-type"]`` was empty and
-    # the route 415'd every request that came in via the flatten path.
-    for k in (
-        "origin",
-        "sec-fetch-site",
-        "x-tdpilot-token",
-        "authorization",
-        "content-type",
-    ):
-        if k not in out and k in request:
-            out[k] = str(request.get(k) or "")
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            out[str(k).lower().strip()] = str(v).strip()
+    elif isinstance(raw, list):
+        # Some builds use a list of "Key: Value" lines or tuples.
+        for item in raw:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                out[str(item[0]).lower().strip()] = str(item[1]).strip()
+            elif isinstance(item, str) and ":" in item:
+                k, v = item.split(":", 1)
+                out[k.lower().strip()] = v.strip()
     return out
 
 
@@ -386,33 +410,56 @@ def onHTTPRequest(webServerDAT, request, response):
         # support so existing automation keeps working. Browsers
         # ALWAYS send Origin on cross-origin POSTs, so the contract
         # binds where it matters.
+        # 2026-05-11 — Content-Type-agnostic JSON envelope extraction.
+        # Some TD builds (observed on 2025.32820/macOS) don't surface
+        # Content-Type into request['headers'] or as a flat key the
+        # _headers() fallback can find. Pre-fix, those builds fell into
+        # the plain-text branch and stored the literal `{"message":"..."}`
+        # string as the user prompt — visible in chat_transcript and
+        # wasting cached-prefix tokens on JSON quoting. Now: peek at the
+        # raw body shape regardless of Content-Type. If it parses as a
+        # JSON object with a "message" string, use that. Otherwise treat
+        # as plain text. Robust to header-flattening quirks.
         ctype = headers.get("content-type", "").split(";", 1)[0].strip().lower()
         origin_lower = (request_origin or "").strip().lower()
         is_browser_request = bool(origin_lower) and origin_lower != "null"
         raw = _read_body(request)
-        if ctype == "application/json":
+        body = ""
+        parsed_as_json = False
+        raw_stripped = (raw or "").strip()
+        if raw_stripped.startswith("{") and raw_stripped.endswith("}"):
             try:
-                payload = json.loads(raw) if raw else {}
-            except json.JSONDecodeError as exc:
-                _text(response, 400, f"invalid JSON body: {exc}", request_origin=request_origin)
+                payload = json.loads(raw_stripped)
+                if isinstance(payload, dict) and "message" in payload:
+                    body = str(payload.get("message", "")).strip()
+                    parsed_as_json = True
+            except json.JSONDecodeError:
+                pass
+        if not parsed_as_json:
+            if ctype == "application/json":
+                # Caller explicitly said JSON but body wasn't a valid
+                # {"message":...} envelope. Reject with a clear error
+                # rather than silently treating the raw body as a prompt.
+                _text(
+                    response,
+                    400,
+                    'JSON body must be an object with a "message" string',
+                    request_origin=request_origin,
+                )
                 return response
-            if not isinstance(payload, dict):
-                _text(response, 400, "JSON body must be an object", request_origin=request_origin)
+            if is_browser_request:
+                # Browser caller MUST use JSON — preflight + origin check
+                # is the CSRF guard. (Same policy as 2.1.3.)
+                _text(
+                    response,
+                    415,
+                    'Browser requests must use Content-Type: application/json with body {"message": "..."}',
+                    request_origin=request_origin,
+                )
                 return response
-            body = str(payload.get("message", "")).strip()
-        elif is_browser_request:
-            # Browser caller MUST use JSON — preflight + origin check is
-            # the CSRF guard.
-            _text(
-                response,
-                415,
-                'Browser requests must use Content-Type: application/json with body {"message": "..."}',
-                request_origin=request_origin,
-            )
-            return response
-        else:
-            # Non-browser (no Origin header): legacy plain-text body.
-            body = str(raw or "").strip()
+            # Non-browser (no Origin header) AND not JSON-shaped: legacy
+            # plain-text body. Backwards compat for curl-style automation.
+            body = raw_stripped
         if not body:
             _text(response, 400, "empty message", request_origin=request_origin)
             return response
@@ -549,18 +596,37 @@ def broadcast(webServerDAT, payload: dict) -> None:
 
 
 def _ws_token_from_uri(uri: str) -> str:
-    """Pull the ``?t=<token>`` from the WS handshake URI. Browsers
+    """Pull the session token from the WS handshake URI. Browsers
     don't permit custom WebSocket headers, so the token rides on the
-    query string instead."""
-    if "?" not in (uri or ""):
+    URL itself. Supports two encodings:
+
+      * Path-segment form ``ws://host:port/<token>`` — what the live
+        HTML client emits (see ``tdpilot_api_chat.html`` ~line 2228).
+      * Query-string form ``ws://host:port/?t=<token>`` — legacy /
+        external-tool convenience form.
+
+    2026-05-11 fix — pre-fix this only handled query-string form, so the
+    path-segment handshake (every browser client) hit the "no token"
+    branch which only mattered when ``_insecure_mode()`` was False.
+    With Authmode default flipped to "token", path-segment handshakes
+    started getting rejected; restore them by reading the path too.
+    """
+    if not uri:
         return ""
-    qs = uri.split("?", 1)[1]
-    for kv in qs.split("&"):
-        if not kv.startswith("t="):
-            continue
-        # urldecode minimum — tokens are URL-safe base64 already so
-        # %xx escapes are exotic here. Stay stdlib-free for TD compat.
-        return kv[2:].replace("%3D", "=").replace("%2F", "/").replace("%2B", "+")
+    # Query-string form first — wins if both are present.
+    if "?" in uri:
+        qs = uri.split("?", 1)[1]
+        for kv in qs.split("&"):
+            if kv.startswith("t="):
+                return kv[2:].replace("%3D", "=").replace("%2F", "/").replace("%2B", "+")
+    # Path-segment form: ``/<token>`` (single segment, no further slashes).
+    path = uri.split("?", 1)[0]
+    if path.startswith("/"):
+        path = path[1:]
+    # Reject obviously-multi-segment paths and the empty path; a real
+    # session token is a urlsafe-base64 string with no slashes.
+    if path and "/" not in path:
+        return path
     return ""
 
 
