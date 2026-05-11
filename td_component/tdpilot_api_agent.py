@@ -191,6 +191,32 @@ _FLASH_OVERRIDE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 2.3.1 — session-scope cue. Combined with _PRO_OVERRIDE_RE / _FLASH_OVERRIDE_RE
+# this promotes the per-turn override into a sticky tier so the user's intent
+# survives subsequent short turns that would otherwise auto-route to flash.
+# Reproduces the user complaint that motivated the fix: "I said 'use only pro
+# mode this session' and he executed one answer in pro then switched to flash."
+_SESSION_SCOPE_RE = re.compile(
+    r"\bthis\s+session\b"
+    r"|\bfrom\s+now\s+on\b"
+    r"|\bgoing\s+forward\b"
+    r"|\balways\b"
+    r"|\bevery\s+(?:turn|message|reply)\b"
+    r"|\bonly\s+use\b"
+    r"|\bstay\s+(?:on|in)\b"
+    r"|\block(?:\s+(?:to|on|in))?\b"
+    r"|\bfor\s+the\s+rest\s+of\s+(?:this\s+)?session\b"
+    r"|\bonly\s+(?:pro|flash)\b",
+    re.IGNORECASE,
+)
+# Explicit "back to auto" reset — independent of pro/flash mention.
+_TIER_RESET_RE = re.compile(
+    r"\bback\s+to\s+auto\b"
+    r"|\bauto\s+(?:tier|mode|routing)\b"
+    r"|\breset\s+(?:tier|mode|routing)\b",
+    re.IGNORECASE,
+)
+
 
 # Default callbacks are no-ops so callers can opt into the events they need.
 def _noop(*_a, **_kw):  # noqa: ANN001
@@ -236,6 +262,13 @@ class Agent:
         # on_model_change(reason, picked_model) — surfaced to the COMP
         # Status line so the user can see which tier each turn used.
         on_model_change: Callable[[str, str], None] = _noop,
+        # 2.3.1 — on_tier_change(new_tier) fires when _maybe_promote_tier
+        # mutates ``self.model_tier`` in response to a session-scope phrase
+        # ("this session", "from now on", "always", "only pro", ...). The
+        # AgentRuntime wires this to the COMP ``Modeltier`` param so the
+        # promotion survives a chat-panel reload. Distinct from
+        # on_model_change, which fires per-turn for the picked model.
+        on_tier_change: Callable[[str], None] = _noop,
         # Phase 0.1 — cache-stable dynamic-context slot. Callable invoked
         # ONCE per API call (not once per turn — the same turn can fire
         # multiple API calls during tool-use chains). It returns a list
@@ -310,6 +343,7 @@ class Agent:
         # doesn't bust mid-turn.
         self._active_model: str = self.model
         self.on_model_change = on_model_change
+        self.on_tier_change = on_tier_change
         self.base_url = base_url.rstrip("/")
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -403,6 +437,51 @@ class Agent:
         except BaseException as exc:  # noqa: BLE001 — fan out to callback
             self.on_error(exc)
             raise
+
+    def _maybe_promote_tier(self, user_text: str) -> bool:
+        """Mutate ``self.model_tier`` if the user expressed session-scope intent.
+
+        Returns True if the tier was changed. Called by ``_loop`` BEFORE
+        ``_resolve_model`` each turn. Fires on three conditions:
+
+          * explicit pro override + session-scope cue → tier := 'pro'
+          * explicit flash override + session-scope cue → tier := 'flash'
+          * explicit "back to auto" reset phrase → tier := 'auto'
+
+        ``_resolve_model`` itself remains pure and per-turn; the session-
+        sticky promotion is the side-effect that lifts user intent across
+        turns.
+        """
+        text = user_text or ""
+        if not text:
+            return False
+        new_tier: str | None = None
+        if _TIER_RESET_RE.search(text):
+            new_tier = "auto"
+        elif _SESSION_SCOPE_RE.search(text):
+            # When session-scope intent is already established by phrases
+            # like "stay on" / "always" / "this session", the per-turn
+            # override regex is too strict (it requires a verb cue). Fall
+            # back to a word-bounded mention of pro/flash. Both present
+            # → ambiguous, skip rather than guess.
+            has_pro = bool(_PRO_OVERRIDE_RE.search(text)) or bool(
+                re.search(r"\bpro\b", text, re.IGNORECASE)
+            )
+            has_flash = bool(_FLASH_OVERRIDE_RE.search(text)) or bool(
+                re.search(r"\bflash\b", text, re.IGNORECASE)
+            )
+            if has_pro and not has_flash:
+                new_tier = "pro"
+            elif has_flash and not has_pro:
+                new_tier = "flash"
+        if new_tier is None or new_tier == self.model_tier:
+            return False
+        self.model_tier = new_tier
+        try:
+            self.on_tier_change(new_tier)
+        except Exception:
+            pass
+        return True
 
     def _resolve_model(self, user_text: str) -> str:
         """Pure function. Pick a model for this turn based on the most
@@ -504,6 +583,10 @@ class Agent:
                     last_user_text = content
                 if last_user_text:
                     break
+        # 2.3.1 — session-sticky tier promotion. Mutates self.model_tier
+        # before _resolve_model runs so the per-turn pick honours any
+        # session-scope intent ("this session", "from now on", ...).
+        self._maybe_promote_tier(last_user_text)
         chosen = self._resolve_model(last_user_text)
         if chosen != self._active_model:
             try:
