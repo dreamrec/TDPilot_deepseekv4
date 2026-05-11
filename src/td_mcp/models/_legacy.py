@@ -12,7 +12,7 @@ re-exporting the current flat namespace so external callers don't break.
 """
 
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -441,8 +441,8 @@ class SearchNodesInput(BaseModel):
     )
     limit: int = Field(default=50, ge=1, le=200, description="Max results")
 
-    LEGACY_SCOPES: tuple[str, ...] = ("name", "type", "family", "all")
-    NEW_SCOPES: tuple[str, ...] = ("dat_text", "param_exprs")
+    LEGACY_SCOPES: ClassVar[tuple[str, ...]] = ("name", "type", "family", "all")
+    NEW_SCOPES: ClassVar[tuple[str, ...]] = ("dat_text", "param_exprs")
 
     @field_validator("search_type")
     @classmethod

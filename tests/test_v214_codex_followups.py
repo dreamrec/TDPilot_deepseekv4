@@ -131,7 +131,13 @@ def test_p2_clear_helper_resets_flag_button_and_timer(chat_html_src: str):
 def test_p2_send_arms_the_safety_timer(chat_html_src: str):
     """``send()`` must arm the safety timer alongside setting
     ``awaitingTurnEnd = true``. Without this the turn-end gate
-    has no ceiling."""
+    has no ceiling.
+
+    v2.3.1 — the timer logic moved from inline ``setTimeout`` into
+    ``armTurnEndWatchdog()`` so applyMessage can also re-arm it on
+    every runtime event (activity watchdog instead of wall-clock
+    deadline). The invariant is unchanged: send() must arm the timer.
+    """
     # Find the send() function body and assert it sets the timer.
     m = re.search(
         r"function send\s*\([^)]*\)\s*\{(.+?)\n\s{2}\}\s*\n",
@@ -141,9 +147,9 @@ def test_p2_send_arms_the_safety_timer(chat_html_src: str):
     assert m, "send() function not found"
     body = m.group(1)
     assert "awaitingTurnEnd = true" in body, "send() must set the flag"
-    assert "setTimeout" in body and "TURN_END_SAFETY_MS" in body, (
-        "send() must arm the TURN_END_SAFETY_MS timer."
-    )
+    assert "armTurnEndWatchdog()" in body, "send() must arm the timer via armTurnEndWatchdog()."
+    # And the watchdog function itself must still reference the budget.
+    assert "TURN_END_SAFETY_MS" in chat_html_src
 
 
 def test_p2_ws_onopen_resets_awaiting_flag(chat_html_src: str):

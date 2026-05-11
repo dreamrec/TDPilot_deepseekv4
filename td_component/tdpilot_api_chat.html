@@ -1034,6 +1034,24 @@
     $send.disabled = false;
   }
 
+  // 2.3.1 — activity watchdog (replaces the v2.1.4 wall-clock deadline).
+  // Pre-fix the safety timer was set ONCE in send() and fired after
+  // TURN_END_SAFETY_MS regardless of activity, so long-but-healthy tool
+  // chains tripped ``idle (timeout)`` while the runtime was still
+  // emitting EV_TEXT/EV_TOOL_CALL/EV_TOOL_RESULT. armTurnEndWatchdog
+  // resets the timer; applyMessage calls it on every runtime event so
+  // the timeout only fires after true silence (genuine WS drop / worker
+  // hang).
+  function armTurnEndWatchdog() {
+    if (pendingTurnEndTimer !== null) clearTimeout(pendingTurnEndTimer);
+    pendingTurnEndTimer = setTimeout(() => {
+      if (awaitingTurnEnd) {
+        clearAwaitingTurnEnd();
+        setAgentStatus('idle (timeout)');
+      }
+    }, TURN_END_SAFETY_MS);
+  }
+
   function isWorkingAgentState(s) {
     const t = String(s || '').toLowerCase();
     if (!t || t === 'idle' || t === 'ready' || t === 'reset' || t === 'connected') return false;
@@ -2006,17 +2024,10 @@
     // status-bus listener (see setAgentStatus) lifts the disable.
     $send.disabled = true;
     awaitingTurnEnd = true;
-    // 2.1.4 — safety timer. If the WS drops between /send and the
-    // turn-end status event, the button would otherwise stay disabled
-    // forever. After TURN_END_SAFETY_MS the flag self-clears so the
-    // user can retry. Cleared in setAgentStatus on the happy path.
-    if (pendingTurnEndTimer !== null) clearTimeout(pendingTurnEndTimer);
-    pendingTurnEndTimer = setTimeout(() => {
-      if (awaitingTurnEnd) {
-        clearAwaitingTurnEnd();
-        setAgentStatus('idle (timeout)');
-      }
-    }, TURN_END_SAFETY_MS);
+    // 2.3.1 — activity watchdog (was a one-shot wall-clock timer pre-fix).
+    // armTurnEndWatchdog also fires from applyMessage on every WS event
+    // so the deadline resets while the runtime is alive.
+    armTurnEndWatchdog();
     setAgentStatus('sending…');
     appendMessage('user', trimmed);
     recordSent(trimmed);
@@ -2215,6 +2226,11 @@
       case 'fullSync':     fullSync(msg.rows || []); break;
       case 'clear':        fullSync([]); break;
     }
+    // Activity watchdog: any event from the runtime proves it's alive.
+    // The 'status' case may have already cleared awaitingTurnEnd via
+    // setAgentStatus → clearAwaitingTurnEnd (when status was idle/done/
+    // error); in that case the guard skips the re-arm and lets idle stick.
+    if (awaitingTurnEnd) armTurnEndWatchdog();
   }
 
   function connectWS() {
