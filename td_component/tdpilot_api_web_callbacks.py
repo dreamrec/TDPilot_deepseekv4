@@ -271,7 +271,13 @@ def _check_auth(method: str, path: str, headers: dict) -> tuple[int, str] | None
     # ERROR 404" as a misleading fallback (the actual page load
     # succeeded, but Chromium's favicon error path doesn't cleanly
     # distinguish 401 from 404).
-    if method == "GET" and path in ("/", "/index.html", "/health", "/favicon.ico"):
+    #
+    # 2026-05-11 — HEAD also accepted for bootstrap paths. Browsers
+    # sometimes HEAD-probe a URL before GETting (cache-revalidation,
+    # link-rel=preload hints). HEAD on a 401 auth-gated route would
+    # confuse client-side caching logic; whitelisting HEAD keeps the
+    # bootstrap surface uniform with GET.
+    if method in ("GET", "HEAD") and path in ("/", "/index.html", "/health", "/favicon.ico"):
         return None
     if not _allowed_origin(headers.get("origin", "")):
         return (403, "cross-origin request blocked")
@@ -297,7 +303,11 @@ def _check_auth(method: str, path: str, headers: dict) -> tuple[int, str] | None
 def _cors(response, request_origin: str = ""):
     """Reflect a known-good origin instead of ``*``. Same-origin
     requests don't need this at all — but the cors header is harmless
-    when echoed back to a same-origin caller."""
+    when echoed back to a same-origin caller. Also sets cache-control
+    so browsers don't retain stale 401/404/error responses across
+    server transitions (the .tox rebuild window briefly returns
+    errors that the browser would otherwise cache and replay even
+    after the server is healthy)."""
     if _insecure_mode():
         # Insecure mode trades safety for tooling compat; widen CORS
         # accordingly so curl / external panels keep working.
@@ -307,8 +317,19 @@ def _cors(response, request_origin: str = ""):
     else:
         response["Access-Control-Allow-Origin"] = "null"
     response["Access-Control-Allow-Headers"] = "Content-Type, X-TDPilot-Token, Authorization"
-    response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response["Access-Control-Allow-Methods"] = "GET, HEAD, POST, OPTIONS"
     response["Vary"] = "Origin"
+    # 2026-05-11 — no-store/no-cache on every response. Pre-fix, browsers
+    # would cache responses from the brief .tox-rebuild window where
+    # the webserverDAT was transitioning (errors, 401s, half-responses)
+    # and then replay that cached state to the user even after the
+    # server came back healthy — manifesting as "the page can't be
+    # found / HTTP ERROR 404" stuck in the browser tab indefinitely.
+    # no-store stops Chrome/Safari/Firefox from caching the response;
+    # no-cache forces revalidation if a cached copy ever exists.
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    response["Expires"] = "0"
 
 
 def _json(response, status, payload, request_origin: str = ""):
@@ -342,7 +363,7 @@ def onHTTPRequest(webServerDAT, request, response):
         _text(response, 200, "", request_origin=request_origin)
         return response
 
-    if method == "GET" and path in ("/", "/index.html"):
+    if method in ("GET", "HEAD") and path in ("/", "/index.html"):
         # Serve the chat HTML so the page + WebSocket share http://host:port
         # origin. Required because Chrome blocks ws:// from file:// origins.
         # Inject the per-launch session token so the same-origin chat can
