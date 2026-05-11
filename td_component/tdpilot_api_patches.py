@@ -316,19 +316,42 @@ def _serialize_node(node) -> dict | None:
 def _walk_scope(scope_path: str, excludes: list[str]) -> list:
     """Return all non-excluded operator descendants of ``scope_path``.
 
-    Uses ``findChildren(depth=999)`` which walks the entire tree under
-    the scope COMP. The scope itself is NOT included in the list — only
-    its descendants.
+    2026-05-11 — original implementation used ``findChildren(depth=999,
+    includeNested=True)``. That call SILENTLY returned an empty list on
+    TD 2025.32820 (the ``includeNested`` kwarg isn't recognised and the
+    no-arg form raises ``TypeError: issubclass() arg 2 must be a class``
+    internally). Switched to a manual BFS using ``op.children`` — works
+    on every TD version, defends per-node against non-COMP nodes that
+    don't expose ``.children``.
+
+    The scope itself is NOT included in the list — only its descendants.
+    Nodes under excluded prefixes are skipped entirely (children of an
+    excluded COMP are NOT walked, even if the excluded COMP itself was
+    only listed as ``/project1/tdpilot_API`` — the descendants are
+    caught by the ``path.startswith(ex + "/")`` check in ``_excluded``).
     """
     root = op(scope_path)  # type: ignore[name-defined]
     if root is None:
         return []
+    out: list = []
     try:
-        descendants = list(root.findChildren(depth=999, includeNested=True))
+        stack = list(root.children)
     except Exception:
-        # Some node types reject findChildren; just return empty.
         return []
-    return [n for n in descendants if not _excluded(n.path, excludes)]
+    while stack:
+        n = stack.pop()
+        if _excluded(n.path, excludes):
+            continue
+        out.append(n)
+        # Recurse into anything that exposes .children (COMPs). Non-COMP
+        # nodes either don't have the attribute or return an empty list;
+        # be defensive either way.
+        try:
+            kids = list(n.children) if n.children else []
+        except Exception:
+            kids = []
+        stack.extend(kids)
+    return out
 
 
 def _walk_connections(nodes: list) -> list[dict]:
