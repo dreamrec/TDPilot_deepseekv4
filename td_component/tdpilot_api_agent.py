@@ -264,6 +264,13 @@ class Agent:
         # Treat all keys as optional — DeepSeek's compat layer may omit
         # some fields depending on the model version.
         on_usage: Callable[[dict], None] = _noop,
+        # Phase 1.1 (v2.2.0) — auto-rollback on error regression.
+        # Factory takes ``(dispatcher, tool_names)`` and returns a
+        # context manager (e.g. ``AutoRollbackGuard``) used to wrap each
+        # tool batch in ``_loop``. ``None`` disables the feature entirely
+        # — the loop runs unwrapped, identical to pre-v2.2.0 behaviour.
+        # Wired by AgentRuntime so it can honour ``TDPILOT_DISABLE_AUTO_ROLLBACK``.
+        rollback_guard_factory: Callable[..., Any] | None = None,
     ) -> None:
         if not api_key:
             raise AgentError("api_key is required")
@@ -310,6 +317,7 @@ class Agent:
         self.on_turn_done = on_turn_done
         self.on_error = on_error
         self.on_usage = on_usage
+        self.rollback_guard_factory = rollback_guard_factory
 
         self.messages: list[dict] = []
         self._stop_flag = threading.Event()
@@ -532,32 +540,94 @@ class Agent:
                 return text_blob
 
             # Execute tools, collect results, send back as a user turn.
-            results_block = []
-            for tu in tool_uses:
-                tool_id = tu.get("id", "")
-                tool_name = tu.get("name", "")
-                tool_args = tu.get("input", {}) or {}
-                self.on_tool_call(tool_name, tool_args)
+            # Phase 1.1 (v2.2.0) — auto-rollback wrap: capture baseline
+            # errors + open a TD undo block before the batch; after the
+            # batch, recheck errors and either close the block (clean
+            # path) or roll it back (regression path). The factory may
+            # return None or a no-op guard if disabled via env var; the
+            # ``with`` block is always safe to enter.
+            tool_names_in_batch = [tu.get("name", "") for tu in tool_uses]
+            rollback_guard = None
+            if self.rollback_guard_factory is not None:
                 try:
-                    result = self.dispatcher(tool_name, tool_args)
-                    # F-12: the explicit `_tool_error` sentinel is the
-                    # only failure signal post-v2.0. Internal handlers
-                    # that emit `{"error": "..."}` get auto-stamped
-                    # with `_tool_error: True` by `recovery.attach_hint()`
-                    # inside the dispatcher pipeline.
-                    is_error = is_tool_error_result(result)
-                except Exception as exc:  # noqa: BLE001
-                    result = {"_tool_error": True, "error": f"{type(exc).__name__}: {exc}"}
-                    is_error = True
-                self.on_tool_result(tool_name, result, is_error)
-                results_block.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_id,
-                        "content": _stringify(result),
-                        "is_error": is_error,
-                    }
-                )
+                    rollback_guard = self.rollback_guard_factory(
+                        self.dispatcher,
+                        tool_names_in_batch,
+                    )
+                except Exception as exc:  # noqa: BLE001 — factory must never break a turn
+                    print(f"[tdpilot_API/agent] rollback_guard_factory raised: {exc}")
+                    rollback_guard = None
+
+            results_block: list[dict] = []
+            try:
+                if rollback_guard is not None:
+                    rollback_guard.__enter__()
+                for tu in tool_uses:
+                    tool_id = tu.get("id", "")
+                    tool_name = tu.get("name", "")
+                    tool_args = tu.get("input", {}) or {}
+                    self.on_tool_call(tool_name, tool_args)
+                    try:
+                        result = self.dispatcher(tool_name, tool_args)
+                        # F-12: the explicit `_tool_error` sentinel is the
+                        # only failure signal post-v2.0. Internal handlers
+                        # that emit `{"error": "..."}` get auto-stamped
+                        # with `_tool_error: True` by `recovery.attach_hint()`
+                        # inside the dispatcher pipeline.
+                        is_error = is_tool_error_result(result)
+                    except Exception as exc:  # noqa: BLE001
+                        result = {
+                            "_tool_error": True,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                        is_error = True
+                    self.on_tool_result(tool_name, result, is_error)
+                    results_block.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": _stringify(result),
+                            "is_error": is_error,
+                        }
+                    )
+            finally:
+                if rollback_guard is not None:
+                    # __exit__ runs the post-batch check + decides rollback;
+                    # we always want this to fire even if the batch raised.
+                    try:
+                        rollback_guard.__exit__(None, None, None)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[tdpilot_API/agent] rollback_guard.__exit__ raised: {exc}")
+
+            # Phase 1.1 — if the guard fired a rollback, append a hint to
+            # the LAST tool_result so the LLM sees the regression context
+            # on its next API call. The hint goes in the tool_result's
+            # content (which can be a list of blocks) — keeps the
+            # alternating user/assistant constraint intact and pairs the
+            # hint with the failing batch's results.
+            if (
+                rollback_guard is not None
+                and getattr(rollback_guard, "rollback_fired", False)
+                and getattr(rollback_guard, "hint_text", "")
+                and results_block
+            ):
+                hint = rollback_guard.hint_text
+                last = results_block[-1]
+                existing = last.get("content")
+                if isinstance(existing, str):
+                    last["content"] = existing + "\n\n" + hint
+                elif isinstance(existing, list):
+                    last["content"] = list(existing) + [{"type": "text", "text": hint}]
+                else:
+                    last["content"] = hint
+                # Surface to the chat UI too — same callback the agent's
+                # natural-language text uses, so the user sees a yellow
+                # inline notice in the assistant bubble.
+                try:
+                    self.on_text(hint)
+                except Exception:  # noqa: BLE001
+                    pass
+
             self.messages.append({"role": "user", "content": results_block})
 
             if stop_reason == "end_turn":

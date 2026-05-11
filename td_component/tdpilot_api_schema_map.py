@@ -207,4 +207,27 @@ TOOL_TO_HANDLER: dict[str, tuple[str, Callable[[dict], dict]]] = {
     "tool_batch": ("handle_tool_batch", _id),
     # ---- Observability traces (Phase 4.1 — handler in tdpilot_api_tracing.py) ----
     "td_get_recent_traces": ("handle_get_recent_traces", _id),
+    # ---- Auto-rollback internal handlers (v2.2.0 — handlers in
+    # tdpilot_api_rollback.py). Registered here so the dispatcher can
+    # resolve them, but NOT added to TOOL_SCHEMAS in tdpilot_api_schema_defs
+    # — meaning the LLM never sees them as callable tools. Only the
+    # AutoRollbackGuard invokes these, around each batch in Agent._loop.
+    "auto_rollback_begin": ("handle_auto_rollback_begin", _id),
+    "auto_rollback_end": ("handle_auto_rollback_end", _id),
 }
+
+
+# v2.2.0 — internal-only tool names. Registered in TOOL_TO_HANDLER so the
+# dispatcher can route them, but DELIBERATELY absent from TOOL_SCHEMAS so
+# the LLM never sees them as callable tools. Wrapper logic (e.g.
+# AutoRollbackGuard) invokes them via the same dispatcher pipeline.
+#
+# The schema-vs-handler parity pin tests in test_tdpilot_api_batch.py and
+# test_tdpilot_api_tracing.py exclude this set from their equality check
+# so the parity invariant stays meaningful for everything else.
+INTERNAL_ONLY_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "auto_rollback_begin",
+        "auto_rollback_end",
+    }
+)

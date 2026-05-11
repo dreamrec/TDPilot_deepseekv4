@@ -271,6 +271,11 @@ class TDPilotAPIExt:
                 ("tdpilot_api_introspect", "introspect"),
                 ("tdpilot_api_batch", "tool_batch"),
                 ("tdpilot_api_tracing", "tracing"),
+                # Phase 1.1 — auto_rollback_begin / auto_rollback_end live
+                # here. Registered in TOOL_TO_HANDLER but NOT in
+                # TOOL_SCHEMAS, so the LLM can't call them — only the
+                # AutoRollbackGuard invokes them around each tool batch.
+                ("tdpilot_api_rollback", "rollback"),
             ):
                 dat = self.owner.op(mod_name)
                 if dat is not None:
