@@ -1,5 +1,72 @@
 # Changelog
 
+## Unreleased (v2.2.0 — Phase 1 in progress)
+
+**v2.2.0 will be the first release of the v2.2.0→v3.0 roadmap (see
+`docs/ROADMAP.md`).** Phase 1 ("Reliability foundation") ships across
+multiple PRs; v2.2.0 cuts when the whole phase is in. Until then,
+"Unreleased" tracks the in-progress work.
+
+### Added — Feature 1.1: Auto-rollback on error regression (chat-pipe / `tdpilot_API.tox`)
+
+Each LLM tool batch is now wrapped with a baseline-and-diff check
+against `td_get_errors`, plus a TD `ui.undo.startBlock` so the whole
+batch becomes one undo entry. If new *critical* errors appear after
+the batch (compile-style only — Python syntax, expression-parse,
+GLSL compile, Script DAT load), the batch is rolled back atomically
+via `ui.undo.undo()` and a hint is appended to the last
+`tool_result` so the LLM sees the regression on its next API call.
+The same hint surfaces to the chat UI via `on_text`.
+
+**Implementation:**
+
+- New `td_component/tdpilot_api_rollback.py`: pure-Python predicate
+  (`is_critical_error`), diff (`diff_errors`), batch classifier
+  (`batch_should_be_guarded`), and the `AutoRollbackGuard` context
+  manager. Two cook-thread handlers (`handle_auto_rollback_begin` /
+  `handle_auto_rollback_end`) registered in `TOOL_TO_HANDLER` but
+  NOT in `TOOL_SCHEMAS` — the LLM never sees them as callable
+  tools; only the guard invokes them internally.
+- `td_component/tdpilot_api_agent.py`: new `rollback_guard_factory`
+  constructor kwarg; `_loop` wraps the per-batch `for tu in
+  tool_uses` block with the guard via a context-manager protocol.
+- `td_component/tdpilot_api_runtime.py`: `_build_rollback_guard_factory`
+  honours the `TDPILOT_DISABLE_AUTO_ROLLBACK=1` env var; returns
+  `None` (no-op) when disabled.
+- Coverage in `tests/test_tdpilot_api_rollback.py` — 60 tests across
+  the predicate, diff, batch classifier, env-var gate, the guard's
+  state machine (with a recorded mock dispatcher), the hint
+  formatter, and the internal handlers' outside-TD failure mode.
+
+**Standdowns (auto-rollback skips the wrap):**
+
+- Pure-read batches (nothing in `MUTATION_TOOL_NAMES`) — saves two
+  `td_get_errors` calls per batch.
+- Batches containing any tool whose side effects `ui.undo` can't
+  revert (`td_exec_python`, `td_emergency_stabilize`, `td_patch_apply`).
+  Half-rolling-back is worse than not rolling back.
+- Baseline-capture failure (dispatcher raised) — degrades to no-guard
+  silently rather than breaking the user's turn.
+
+**Opt-out:** set `TDPILOT_DISABLE_AUTO_ROLLBACK=1` in the TD process
+environment.
+
+**Files baked into the API .tox** (rebuild required after pulling
+this change):
+
+- `td_component/tdpilot_api_rollback.py` (new)
+- `td_component/tdpilot_api_agent.py` (modified)
+- `td_component/tdpilot_api_runtime.py` (modified)
+- `td_component/tdpilot_api_extension.py` (modified — adds the
+  rollback module to the dispatcher's handler-module list)
+- `td_component/tdpilot_api_schema_map.py` (modified — registers
+  the two internal handlers in `TOOL_TO_HANDLER`)
+- `td_component/build_tdpilot_api_tox.py` (modified — adds
+  `tdpilot_api_rollback` to `_SOURCE_FILES`)
+
+Phase 1.2 (cycle detection) and the rest of Phase 1 follow in
+subsequent PRs.
+
 ## 2.1.5 - 2026-05-10
 
 **Patch: Codex P2 follow-up on v2.1.4 (PR #29).** A cosmetic-but-real

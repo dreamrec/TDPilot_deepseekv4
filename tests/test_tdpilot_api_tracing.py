@@ -196,17 +196,27 @@ def test_tracer_prune_old_files(tmp_path):
 def test_schema_parity_for_get_recent_traces():
     """Every entry in TOOL_SCHEMAS must have a TOOL_TO_HANDLER entry.
     Phase 4.1 added td_get_recent_traces — locks in parity.
+
+    v2.2.0 added internal-only handlers (e.g. auto_rollback_begin/end)
+    that live in TOOL_TO_HANDLER but are deliberately absent from
+    TOOL_SCHEMAS, so the LLM never sees them. Exclude that set from
+    the parity check so the invariant stays meaningful.
     """
     from tdpilot_api_schema_defs import TOOL_SCHEMAS  # type: ignore[import-not-found]
-    from tdpilot_api_schema_map import TOOL_TO_HANDLER  # type: ignore[import-not-found]
+    from tdpilot_api_schema_map import (  # type: ignore[import-not-found]
+        INTERNAL_ONLY_TOOL_NAMES,
+        TOOL_TO_HANDLER,
+    )
 
     schema_names = {s["name"] for s in TOOL_SCHEMAS}
     assert "td_get_recent_traces" in schema_names
     assert "td_get_recent_traces" in TOOL_TO_HANDLER
     handler_fn_name, _adapter = TOOL_TO_HANDLER["td_get_recent_traces"]
     assert handler_fn_name == "handle_get_recent_traces"
-    assert schema_names == set(TOOL_TO_HANDLER.keys()), (
-        "tool count drift — every schema entry must have a handler entry"
+    handler_names = set(TOOL_TO_HANDLER.keys()) - INTERNAL_ONLY_TOOL_NAMES
+    assert schema_names == handler_names, (
+        "tool count drift — every schema entry must have a handler entry "
+        "(excluding INTERNAL_ONLY_TOOL_NAMES, which are internal by design)"
     )
 
 

@@ -236,15 +236,22 @@ def test_batch_no_dispatcher_means_clean_error(monkeypatch):
 
 def test_tool_batch_present_in_schemas_and_handlers():
     from tdpilot_api_schema_defs import TOOL_SCHEMAS  # type: ignore[import-not-found]
-    from tdpilot_api_schema_map import TOOL_TO_HANDLER  # type: ignore[import-not-found]
+    from tdpilot_api_schema_map import (  # type: ignore[import-not-found]
+        INTERNAL_ONLY_TOOL_NAMES,
+        TOOL_TO_HANDLER,
+    )
 
     schema_names = {s["name"] for s in TOOL_SCHEMAS}
     assert "tool_batch" in schema_names
     assert "tool_batch" in TOOL_TO_HANDLER
     handler_fn_name, _adapter = TOOL_TO_HANDLER["tool_batch"]
     assert handler_fn_name == "handle_tool_batch"
-    # And the parity invariant the rest of the project relies on.
-    assert schema_names == set(TOOL_TO_HANDLER.keys())
+    # The parity invariant the rest of the project relies on. v2.2.0 added
+    # internal-only tools (e.g. auto_rollback_begin/end) that live in
+    # TOOL_TO_HANDLER but are deliberately absent from TOOL_SCHEMAS, so
+    # the LLM never sees them. Exclude that set from the parity check.
+    handler_names = set(TOOL_TO_HANDLER.keys()) - INTERNAL_ONLY_TOOL_NAMES
+    assert schema_names == handler_names
 
 
 # ---------------------------------------------------------------------------
