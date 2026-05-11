@@ -7,7 +7,7 @@
    ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝
 ```
 
-# TDPilot — DeepSeek v4 · v2.1.5
+# TDPilot — DeepSeek v4 · v2.3.0
 
 [![CI](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/tdpilot-dpsk4?label=npm)](https://www.npmjs.com/package/tdpilot-dpsk4)
@@ -20,7 +20,7 @@
 
 An AI assistant that lives inside TouchDesigner. It can inspect your network, build new operators, wire them up, debug errors, take screenshots, remember things between sessions, replay successful patterns, surface relevant memories before each turn, batch tool calls, recover from failures with actionable hints, and survive long conversations via context compaction.
 
-> **v2.1.5 just shipped (May 10, 2026)** — micro-patch on v2.1.4 catching one cosmetic regression Codex flagged on PR #29: `isWorkingAgentState` now treats `'idle <suffix>'` (e.g. `'idle (timeout)'` from the v2.1.4 safety timer) as non-working, so the pulse animation + Stop button don't keep showing after the timer fires. See [CHANGELOG](CHANGELOG.md#215---2026-05-10) for v2.1.5 details, [v2.1.4](CHANGELOG.md#214---2026-05-10) for the prior Codex follow-ups, or [v2.1.3 below](#whats-new-since-v15x) for the underlying security/queue/path-harmonization release.
+> **v2.3.0 just shipped (May 11, 2026)** — bilateral-audit release driven by a deep end-to-end test of the live `tdpilot_API` chat tox against a real DeepSeek session. **Closes 9 confirmed bugs** (4 latent security gaps that survived v1.7.1: header-flatten case-sensitivity disabled the entire auth+CORS+JSON-envelope stack on TD 2025.32820; Authmode default flipped to `"token"`; bm25 retrieval pollution causing drive-by tool execution from short prompts; WebSocket dead-client leak via silent-fail `webSocketSendText`) plus **adds the new `snapshot_save_scoped` / `snapshot_restore_scoped` agent tools** (Bug 19) so the agent can save and restore scoped project state mid-conversation without `project.load()` destroying its own COMP. Tool count 91 → 93. See [CHANGELOG](CHANGELOG.md#230---2026-05-11) for v2.3.0 details, or [v2.2.0](CHANGELOG.md#220---2026-05-11) for the prior Phase-1-reliability-foundation release (auto-rollback + cycle detection + drag-and-go UX).
 
 There are two ways to run it. Pick whichever fits — they coexist in the same TD project if you want both.
 
@@ -210,10 +210,12 @@ The standalone has 93 tools that cover the everyday inspect → build → wire �
 
 ## What's new since v1.5.x
 
-The line from v1.5.0 (Apr 25, 2026) to v2.1.5 (May 10, 2026) shipped in tight bursts. Most important updates, newest first:
+The line from v1.5.0 (Apr 25, 2026) to v2.3.0 (May 11, 2026) shipped in tight bursts. Most important updates, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| **v2.3.0** | May 11 | **Bilateral-audit release.** Closes 9 confirmed bugs uncovered by a deep end-to-end audit of the live `tdpilot_API` chat tox against a real DeepSeek session. The headline cluster: TD 2025.32820/macOS flattens HTTP headers with ORIGINAL CASE (`X-TDPilot-Token`, not lowercase) on direct `request` keys — pre-fix `_headers()` did case-sensitive lookup, silently disabling the entire v1.7.1 auth + CORS + JSON-envelope stack. Plus: inbox drain race fix (frame-level retry in `DrainEvents`), agent over-eager tool use gate (16-char retrieval floor + length-relative bm25 threshold + new "User-intent gate" paragraph in `SYSTEM_PROMPT_BASE`), WebSocket keepalive (client-driven `{"type":"ping"}` every 5s, server tracks `last_seen`, age-out at 15s), strict `{"message": ...}` type validation (null/dict/int/bool now 400 instead of silently `str()`-coerced), Chromium stuck-404 fix (favicon→204 + `Cache-Control: no-store` + `onServerStart` auto-reload of `chat_web`), Authmode default flipped `"open"`→`"token"`, WS path-segment auth, double-status-idle dedupe. **New feature**: `snapshot_save_scoped` / `snapshot_restore_scoped` agent tools — JSON manifest of a scope's structural shape (excluding agent COMP), restorable mid-conversation via diff-and-apply (Bug 19). Tool count 91 → 93. PR #41. |
+| **v2.2.0** | May 11 | **Phase 1 reliability foundation + drag-and-go UX.** First milestone of the v2.2→v3.0 roadmap. Auto-rollback (each LLM tool batch wrapped with a baseline-and-diff check against `td_get_errors` plus a TD `ui.undo.startBlock` — atomic revert + hint-to-agent on regression). Cycle detection (per-turn `(tool, args_hash) → count` ledger; default threshold 3 raises `CycleDetected` before the next dispatch). New `Authmode` Menu COMP param replaces the env-var auth toggle that didn't survive TD restarts. Auto-save + auto-reload when `Apikey` value changes (zero-pulse key onboarding). Build script auto-mirrors `.tox` from any worktree into the main repo's `td_component/` so drag-from-Finder is always fresh. PRs #34/#36/#37/#38/#39. |
 | **v2.1.5** | May 10 | **Codex P2 follow-up on v2.1.4.** `isWorkingAgentState` now classifies `'idle <suffix>'` (e.g. `'idle (timeout)'` from the v2.1.4 safety timer) as non-working. Pre-2.1.5 the predicate only matched exact `'idle'` / `'ready'` / `'reset'` / `'connected'`, so the v2.1.4 timer's diagnostic suffix kept the pulse animation + Stop button visible after the timer fired. Functional path was unaffected (button re-enable worked); UI lied about state. |
 | **v2.1.4** | May 10 | **Codex follow-ups on v2.1.3.** Two reliability holes the automated Codex review caught on PR #28: (P1) the new inbox queue now drains on `EV_ERROR` too — pre-2.1.4 a queued message after an errored turn sat in storage forever until a later successful turn happened to fire `EV_DONE`; (P2) the chat HTML's send-button gate now has a 90s safety timer + a `ws.onopen` reset, so a dropped WS connection between `/send` and the terminal status event no longer locks the user out of the chat permanently. |
 | **v2.1.3** | May 9 | **Security hardening + chat-pipe queue + path harmonization.** Audit found a CSRF / drive-by RCE chain in `tdpilot_API.tox` (insecure-mode bypassed origin checks AND `EXEC_MODE=full` was hardcoded). Closed by always-on origin enforcement (insecure-mode bypasses only the token check), `EXEC_MODE` clamp to `restricted` whenever insecure-mode is active (opt back into full with `TDPILOT_API_ALLOW_INSECURE_FULL_EXEC=1`), `application/json` requirement on `/send` (forces CORS preflight for cross-origin POSTs), and a loud textport banner when insecure-mode is on. Rapid-`/send` message-drop bug fixed via FIFO inbox queue on `comp.storage` + chat HTML send-button gate on the runtime's turn-end signal (not on the fetch resolution). Chat-pipe storage namespaced under `~/.tdpilot-dpsk4/api/` with `~/.tdpilot-api/` legacy fallback in `resolve_user_dir`. |
@@ -248,7 +250,7 @@ td_component/         TouchDesigner-side source (textDATs baked into the .tox)
   build_tdpilot_api_tox.py   Build script for the standalone .tox
 src/td_mcp/           DPSK4 MCP server (Python, 103 tools)
 skills/               Claude Code skills (CLI plugin)
-tests/                pytest suite (1122 tests + 12 agent-eval skeletons)
+tests/                pytest suite (1848 tests + 12 agent-eval skeletons)
   agent_evals/        Live-integration evals (run with `pytest -m agent_eval`)
 scripts/              Build + maintenance scripts
   doctor_live.py      Install doctor for the standalone (--deep probes DeepSeek)
