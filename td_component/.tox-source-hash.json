@@ -1,6 +1,6 @@
 {
-  "tox_source_hash": "e329bd377f94368883d07823c032cddbf351317bfa678ce417727611c12032b1",
-  "built_at": "2026-05-11T14:14:37.133529+00:00",
+  "tox_source_hash": "b02b2109d5fcd78ccfcd97125a496e3c8d55845e2203a33a6a4c0bcd1668277c",
+  "built_at": "2026-05-11T16:33:52.274469+00:00",
   "source_files": [
     "td_component/callbacks/_composer.py",
     "td_component/callbacks/__init__.py",

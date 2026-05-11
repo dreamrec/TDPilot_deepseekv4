@@ -122,6 +122,93 @@ def _write_tox_source_hash(repo_root):
     print("[TDPilot] Wrote {}".format(out_path))
 
 
+def _mirror_tox_to_main_repo_if_worktree(repo_root, tox_filename, hash_filename):
+    """If ``repo_root`` is a git WORKTREE (not the main checkout), also
+    copy the just-exported ``.tox`` and hash file into the main
+    checkout's ``td_component/`` directory.
+
+    Phase 1.2.2 (v2.2.x) helper. Pre-1.2.2 contributors set
+    ``TD_MCP_REPO_ROOT`` to a worktree path (``.claude/worktrees/<name>/``)
+    when developing, which writes the .tox into that worktree's
+    ``td_component/``. The MAIN repo's ``td_component/tdpilot_API.tox``
+    typically held a symlink pointing at SOME worktree, but worktrees
+    rotate (every Claude Code session creates a new one) and the
+    symlinks went stale silently. Result: user dragged the .tox from
+    main repo's td_component/ in Finder and got an old binary without
+    the latest features.
+
+    The mirror writes a REAL FILE COPY (replacing any prior symlink),
+    so drag-from-main-repo always picks up the latest build.
+
+    Silent no-op when:
+      * Running from the main checkout already (no mirror needed).
+      * ``TDPILOT_NO_TOX_MIRROR=1`` (opt-out for CI / test fixtures).
+      * git CLI unavailable, repo isn't a git worktree, or
+        ``rev-parse --git-common-dir`` fails.
+      * Main repo path doesn't have a ``td_component/`` directory.
+      * Any IO error during copy (logged but not fatal).
+
+    See ``feedback_tox_rebuild_auto_mirror.md`` memory for full
+    rationale.
+    """
+    if os.environ.get("TDPILOT_NO_TOX_MIRROR", "").strip() in ("1", "true", "yes"):
+        return
+    try:
+        import shutil
+        import subprocess
+
+        proc = subprocess.run(
+            ["git", "-C", repo_root, "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if proc.returncode != 0:
+            return
+        common_dir = proc.stdout.strip()
+        if not common_dir:
+            return
+        if not os.path.isabs(common_dir):
+            common_dir = os.path.abspath(os.path.join(repo_root, common_dir))
+        # git common-dir is ``/path/to/main_repo/.git`` for both main
+        # checkouts AND worktrees. Detect the main repo as its parent.
+        if os.path.basename(common_dir) != ".git":
+            return  # unrecognised layout — bail.
+        main_repo = os.path.dirname(common_dir)
+        # Skip no-op: build IS happening in the main checkout.
+        if os.path.realpath(main_repo) == os.path.realpath(repo_root):
+            return
+        main_td_component = os.path.join(main_repo, "td_component")
+        if not os.path.isdir(main_td_component):
+            return
+        copied = []
+        for basename in (tox_filename, hash_filename):
+            src = os.path.join(repo_root, "td_component", basename)
+            if not os.path.isfile(src):
+                continue
+            target = os.path.join(main_td_component, basename)
+            # Replace any prior target — could be a stale symlink from
+            # the pre-1.2.2 convention. os.path.exists is False on
+            # dangling symlinks, so check islink separately.
+            if os.path.islink(target) or os.path.exists(target):
+                try:
+                    os.remove(target)
+                except OSError as exc:
+                    print("[tox-mirror] could not remove existing {}: {}".format(target, exc))
+                    continue
+            try:
+                shutil.copyfile(src, target)
+                copied.append(basename)
+            except OSError as exc:
+                print("[tox-mirror] copy failed for {}: {}".format(basename, exc))
+                continue
+        if copied:
+            print("[tox-mirror] mirrored {} to {}".format(copied, main_td_component))
+    except Exception as exc:
+        # Never break a build over a mirror failure — just log and move on.
+        print("[tox-mirror] skipped: {}: {}".format(type(exc).__name__, exc))
+
+
 # Configuration
 # Default install target is /local (persists across project opens).
 # Set TD_MCP_PARENT_PATH to override (e.g. "/project1") or to "" for export-only.
@@ -498,6 +585,12 @@ def build_and_export():
         )
         export_comp.save(export_path)
         _write_tox_source_hash(repo_root)
+        # Phase 1.2.2 — auto-mirror the .tox + hash file into the main
+        # repo's td_component/ if we're building from a worktree. No-op
+        # when already in main, or when TDPILOT_NO_TOX_MIRROR=1.
+        _mirror_tox_to_main_repo_if_worktree(
+            repo_root, "tdpilot-dpsk4.tox", ".tox-source-hash.json"
+        )
     finally:
         try:
             temp_parent.destroy()

@@ -1,6 +1,40 @@
 # Changelog
 
-## Unreleased (v2.2.0 — Phase 1 + Phase 1.2.1 UX polish in progress)
+## Unreleased (v2.2.0 — Phase 1 + Phase 1.2.x UX polish in progress)
+
+### Added — Phase 1.2.2: build scripts auto-mirror `.tox` to main repo (`td_component/`)
+
+**The friction this fixes**: contributors rebuild the `.tox` from a worktree (`.claude/worktrees/<name>/`) via the canonical Textport recipe, which sets `TD_MCP_REPO_ROOT` to the worktree path. Pre-1.2.2 the build script only wrote the `.tox` to that worktree's `td_component/`. The MAIN repo's `td_component/tdpilot_API.tox` typically held a SYMLINK pointing at SOME worktree, but worktrees rotate (every Claude Code session creates a new one) and the symlinks went stale silently. Result: user restarts TD, drags the `.tox` from main-repo `td_component/` in Finder, gets an OLD `.tox` without the latest features, sees 401s / missing params / "I just rebuilt this — why isn't it picking up?". This bit us hard in the live-debug session that motivated v2.2.1.
+
+**The fix**: both build scripts now auto-mirror the freshly-built `.tox` + hash file from the worktree into the main repo's `td_component/` directory on every successful build. Drag-from-main-repo is always fresh. No symlinks to maintain; the mirror always writes a REAL FILE COPY (replacing any prior symlink along the way).
+
+**Implementation:**
+
+- New `_mirror_tox_to_main_repo_if_worktree(repo_root, tox_filename, hash_filename)` helper in `td_component/build_export_mcp_tox.py`. Uses `git rev-parse --git-common-dir` to detect whether the build root is a worktree; if so, copies the build outputs to the main checkout's `td_component/`. Auto-removes prior symlinks before copying so a stale symlink can't redirect the copy to the wrong place.
+- `td_component/build_export_mcp_tox.py::build_and_export` calls the mirror right after `_write_tox_source_hash`, mirroring `tdpilot-dpsk4.tox` + `.tox-source-hash.json`.
+- `td_component/build_tdpilot_api_tox.py::build_and_export` calls `_legacy._mirror_tox_to_main_repo_if_worktree` right after `_write_api_tox_source_hash`, mirroring `tdpilot_API.tox` + `.tox-api-source-hash.json`.
+
+**Silent no-op paths** (mirror correctly stays out of the way):
+
+- `TDPILOT_NO_TOX_MIRROR=1` env var — opt-out for CI / test fixtures that should NOT have a `.tox` mirrored.
+- Running from the main checkout itself (no mirror needed; the build target IS the main repo).
+- `git` CLI unavailable, repo isn't a git worktree, or `rev-parse` fails.
+- Main repo path doesn't have a `td_component/` directory (unrecognised layout).
+- Per-file: source `.tox` doesn't exist (build aborted before export); IO error during copy (logged but doesn't crash the build).
+
+**Tests (10 new in `tests/test_v222_tox_mirror.py`):**
+
+- `TestMirrorHappyPath` (3) — basic happy path (copies both files); the critical "replaces stale symlink" case (verifies the mirror auto-removes a prior symlink so it doesn't `copyfile` THROUGH the symlink into the wrong worktree); replaces existing real file with fresh bytes.
+- `TestMirrorNoOpPaths` (5) — env-var opt-out; build root IS main repo (no-op); git CLI fails; main repo has no `td_component/`; source file missing.
+- `TestMirrorErrorHandling` (2) — subprocess raising doesn't propagate up; per-file copy failure logs and continues with the next file.
+
+**Why this matters for future agents:** when the user reports "I rebuilt but drag-from-Finder still gives me an old `.tox`", check `ls -la <main_repo>/td_component/tdpilot_API.tox` — should be a REAL FILE (`-rw-r--r--`), not a symlink (`lrwxr-xr-x`), with mtime close to NOW. If it's still a symlink, the mirror didn't run (auto-detect failure) — debug `_mirror_tox_to_main_repo_if_worktree`. See `feedback_tox_rebuild_auto_mirror.md` memory for the full debug playbook.
+
+**Files touched:** `td_component/build_export_mcp_tox.py` (helper + dpsk4 call site), `td_component/build_tdpilot_api_tox.py` (API call site), `tests/test_v222_tox_mirror.py` (new).
+
+**`.tox` rebuild required:** both `build_export_mcp_tox.py` and `build_tdpilot_api_tox.py` are listed in `_TOX_SOURCE_FILES` for their respective `.tox` files (the build script bytes get hashed for freshness), so editing them invalidates the source-hash for BOTH `.tox` files. Both need to be rebuilt in TD before this PR can land CI-green.
+
+---
 
 ### Added — Phase 1.2.1 UX polish (chat-pipe / `tdpilot_API.tox`)
 
