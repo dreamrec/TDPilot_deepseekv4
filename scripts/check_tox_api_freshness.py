@@ -56,6 +56,10 @@ SOURCE_FILES = (
     "td_component/tdpilot_api_introspect.py",
     "td_component/tdpilot_api_batch.py",
     "td_component/tdpilot_api_recovery.py",
+    # v2.2.0 Phase 1.1 — auto-rollback on error regression. Pure module
+    # exporting AutoRollbackGuard + two ui.undo-touching internal
+    # handlers; baked into the API .tox.
+    "td_component/tdpilot_api_rollback.py",
     "td_component/tdpilot_api_tracing.py",
     "td_component/tdpilot_api_compaction.py",
     "td_component/tdpilot_api_chat.html",
