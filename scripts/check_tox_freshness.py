@@ -21,50 +21,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Must match _TOX_SOURCE_FILES in td_component/build_export_mcp_tox.py
-# v1.8.3 (PR-16): mcp_webserver_callbacks.py was decomposed into td_component/callbacks/.
-# The hash now covers the split sources and the composer; any byte change in
-# any of these files bumps the hash and forces a .tox rebuild.
-SOURCE_FILES = (
-    # mcp/ split package — replaces the pre-1.8.3 mcp_webserver_callbacks.py.
-    "td_component/callbacks/_composer.py",
-    "td_component/callbacks/__init__.py",
-    "td_component/callbacks/_header.py",
-    "td_component/callbacks/router.py",
-    "td_component/callbacks/auth.py",
-    "td_component/callbacks/serializers.py",
-    "td_component/callbacks/handlers/__init__.py",
-    "td_component/callbacks/handlers/nodes.py",
-    "td_component/callbacks/handlers/exec_and_custom_params.py",
-    "td_component/callbacks/handlers/exec_python.py",
-    "td_component/callbacks/handlers/inspect.py",
-    "td_component/callbacks/handlers/search.py",
-    "td_component/callbacks/handlers/lifecycle.py",
-    "td_component/callbacks/handlers/pulse.py",
-    "td_component/callbacks/handlers/monitor.py",
-    "td_component/callbacks/handlers/analyze_frame.py",
-    "td_component/event_emitter.py",
-    "td_component/ws_callbacks.py",
-    "td_component/tdpilot_dpsk4_startup.py",
-    # v1.5.6 — installer + panel scaffolding (parent tdpilot COMP children).
-    "td_component/installer.py",
-    "td_component/installer_exec.py",
-    "td_component/autostart.py",
-    "td_component/renderer.py",
-    # v1.6.7 — state_cache module that the renderer reads from. Was missing
-    # from main from v1.5.6 through v1.6.6 (see CHANGELOG v1.6.7).
-    "td_component/state_cache.py",
-    # v2.0.1 (security audit P2): the generator scripts shape the .tox
-    # body even though they aren't embedded as textDATs. Pre-2.0.1 a
-    # change to e.g. `_populate_component()` (the function that creates
-    # the info textDAT and assigns its text) could ship a stale .tox
-    # while the freshness gate still reported clean. The PR #19
-    # info-textDAT fix is exactly that class. Tracking the generator
-    # bytes alongside the embedded runtime closes the loop: any change
-    # to how the .tox is built forces a rebuild signal too.
-    "td_component/build_export_mcp_tox.py",
-    "td_component/build_tdpilot_tox.py",
-)
+# Pull the canonical source-file list directly from the build script — this is
+# the single source of truth for what bytes feed the .tox. Pre-consolidation
+# this file kept a parallel SOURCE_FILES tuple that had to be hand-mirrored
+# against td_component/build_export_mcp_tox.py::_TOX_SOURCE_FILES; the API-tox
+# sibling pair drifted exactly that way in PR #34 (v2.2.0 Phase 1.1) and broke
+# CI. Importing here makes drift structurally impossible.
+#
+# Note: build_export_mcp_tox auto-runs its build_and_export() at import only
+# when ``__name__ != "build_export_mcp_tox"`` — our import keeps __name__ at
+# the module's own name, so no build fires here.
+sys.path.insert(0, str(ROOT / "td_component"))
+from build_export_mcp_tox import _TOX_SOURCE_FILES as SOURCE_FILES  # noqa: E402
+
 HASH_FILE = ROOT / "td_component" / ".tox-source-hash.json"
 TOX_FILE = ROOT / "td_component" / "tdpilot-dpsk4.tox"
 

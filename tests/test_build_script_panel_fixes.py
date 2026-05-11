@@ -66,12 +66,37 @@ class TestStateCacheRestored:
         )
 
     def test_state_cache_listed_in_freshness_gate(self):
-        """``scripts/check_tox_freshness.py`` must mirror _TOX_SOURCE_FILES.
-        Drift between the two would let a state_cache edit ship without a
-        .tox rebuild — which would silently break the panel again."""
+        """``scripts/check_tox_freshness.py`` must hash-track state_cache.py.
+
+        Post-consolidation (PR "refactor: consolidate paired .tox source-file
+        lists"), the gate imports ``_TOX_SOURCE_FILES`` from the build script
+        instead of redefining a parallel tuple — so a literal string-search in
+        the gate file no longer hits. We verify two things now:
+
+          1. The gate imports the build script's tuple (preventing the
+             paired-list drift footgun that triggered the consolidation).
+          2. The imported tuple actually contains ``state_cache.py``.
+        """
         freshness = (REPO_ROOT / "scripts" / "check_tox_freshness.py").read_text(encoding="utf-8")
-        assert '"td_component/state_cache.py"' in freshness, (
-            "state_cache.py must be in SOURCE_FILES in check_tox_freshness.py"
+        assert "from build_export_mcp_tox import _TOX_SOURCE_FILES" in freshness, (
+            "scripts/check_tox_freshness.py must import _TOX_SOURCE_FILES from "
+            "build_export_mcp_tox (single source of truth). Re-introducing a "
+            "parallel SOURCE_FILES tuple here is the drift footgun this test "
+            "exists to prevent."
+        )
+        # And verify state_cache.py is actually in the imported tuple — same
+        # safety net as before, now sourced from the canonical list.
+        import sys
+
+        td_comp = str(REPO_ROOT / "td_component")
+        if td_comp not in sys.path:
+            sys.path.insert(0, td_comp)
+        from build_export_mcp_tox import _TOX_SOURCE_FILES  # noqa: E402
+
+        assert "td_component/state_cache.py" in _TOX_SOURCE_FILES, (
+            "state_cache.py must be in _TOX_SOURCE_FILES. Without hash-tracking "
+            "this file, a state_cache edit would ship without a .tox rebuild and "
+            "silently break the panel renderer again (see v1.6.7 CHANGELOG)."
         )
 
     def test_populate_component_creates_state_cache_dat(self):

@@ -528,4 +528,13 @@ def build_and_export():
     return export_path
 
 
-build_and_export()
+# Auto-run when invoked as an entry point (TD Textport, the TD startup hook in
+# tdpilot_dpsk4_startup.py) but NOT when imported as a Python module — the
+# guard lets scripts/check_tox_freshness.py pull _TOX_SOURCE_FILES from us
+# without firing a build, and lets the synthetic ModuleType("build_export_mcp_tox")
+# in build_tdpilot_api_tox._load_legacy_module() skip the build too. We can't
+# use the conventional ``__name__ == "__main__"`` form because TD's startup
+# hook runs this file with the startup module's globals, so __name__ is
+# something like "tdpilot_dpsk4_startup" — not "__main__".
+if __name__ != "build_export_mcp_tox":
+    build_and_export()
