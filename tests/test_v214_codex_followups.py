@@ -147,9 +147,7 @@ def test_p2_send_arms_the_safety_timer(chat_html_src: str):
     assert m, "send() function not found"
     body = m.group(1)
     assert "awaitingTurnEnd = true" in body, "send() must set the flag"
-    assert "armTurnEndWatchdog()" in body, (
-        "send() must arm the timer via armTurnEndWatchdog()."
-    )
+    assert "armTurnEndWatchdog()" in body, "send() must arm the timer via armTurnEndWatchdog()."
     # And the watchdog function itself must still reference the budget.
     assert "TURN_END_SAFETY_MS" in chat_html_src
 

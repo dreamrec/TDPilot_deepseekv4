@@ -464,9 +464,7 @@ class Agent:
             # override regex is too strict (it requires a verb cue). Fall
             # back to a word-bounded mention of pro/flash. Both present
             # → ambiguous, skip rather than guess.
-            has_pro = bool(_PRO_OVERRIDE_RE.search(text)) or bool(
-                re.search(r"\bpro\b", text, re.IGNORECASE)
-            )
+            has_pro = bool(_PRO_OVERRIDE_RE.search(text)) or bool(re.search(r"\bpro\b", text, re.IGNORECASE))
             has_flash = bool(_FLASH_OVERRIDE_RE.search(text)) or bool(
                 re.search(r"\bflash\b", text, re.IGNORECASE)
             )
