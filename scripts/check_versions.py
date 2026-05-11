@@ -112,6 +112,16 @@ def main() -> int:
             "plugin_README.md header",
         ),
         check_line(
+            # 2026-05-11: README header was stale at v2.1.5 across two
+            # releases (v2.2.0 + v2.3.0) because it wasn't on this
+            # enforcement list. Add it so the next release can't repeat.
+            # Match pattern: ``# TDPilot — DeepSeek v4 · vX.Y.Z`` exactly.
+            ROOT / "README.md",
+            r"# TDPilot — DeepSeek v4 · v([0-9]+\.[0-9]+\.[0-9]+)",
+            expected,
+            "README.md header",
+        ),
+        check_line(
             ROOT / "docs" / "API_REFERENCE.md",
             r"Auto-generated from TDPilot v([0-9]+\.[0-9]+\.[0-9]+)",
             expected,
