@@ -541,6 +541,44 @@ def _warn_state():
     return w
 
 
+def reap_dead_ws_clients(webServerDAT) -> int:
+    """Send a no-op heartbeat to each registered WS client and remove
+    any handle whose ``webSocketSendText`` raises.
+
+    2026-05-11 — backstop for a real leak observed during bilateral
+    audit: ``comp.storage['tdpilot_api_ws_clients']`` had 5 zombie
+    handles with 0 actual TCP connections. Root cause: TD's
+    ``onWebSocketClose`` callback doesn't always fire for closed
+    sockets (browser-kill, TCP reset), so the registry is append-only
+    between broadcasts. The existing ``broadcast()`` already prunes
+    on raise, but broadcasts only happen during turns — when chat is
+    idle, leaked handles accumulate. This function exists to be
+    called periodically (every ~5s from ``DrainEvents``) so the
+    registry stays clean even during idle stretches.
+
+    Returns the number of handles reaped (0 on healthy state).
+    """
+    clients = _ws_clients()
+    if not clients:
+        return 0
+    # Lightweight ping payload — clients can ignore. We deliberately
+    # don't use TD's webSocketPing (frame type 0x9) because some TD
+    # builds don't expose it; webSocketSendText is universally
+    # available and TD raises on dead sockets either way.
+    ping = json.dumps({"type": "ping"})
+    dead = []
+    for client in list(clients):
+        try:
+            webServerDAT.webSocketSendText(client, ping)
+        except Exception:
+            dead.append(client)
+    for d in dead:
+        clients.discard(d)
+    if dead:
+        print(f"[tdpilot_API/web] reaped {len(dead)} dead WS client(s); {len(clients)} remain")
+    return len(dead)
+
+
 def _send_full_history(webServerDAT, client):
     """Snapshot the current transcript for a freshly-connected client."""
     t = _comp().op("chat_transcript")
