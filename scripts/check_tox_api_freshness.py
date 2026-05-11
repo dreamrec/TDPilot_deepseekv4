@@ -25,71 +25,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Must match _API_TOX_SOURCE_FILES in td_component/build_tdpilot_api_tox.py.
-# Add new files in BOTH places — the build script's list drives the hash
-# that gets written; this list drives the check that compares to it.
-# A drift between the two lists shows up as a stable mismatch even with
-# no source edits (different inputs -> different hashes).
-SOURCE_FILES = (
-    # Direct embeds — every file listed in the build script's _SOURCE_FILES
-    # tuple as a real path (i.e. not the `<COMPOSE>` sentinel).
-    "td_component/tdpilot_api_agent.py",
-    "td_component/tdpilot_api_dispatcher.py",
-    "td_component/tdpilot_api_config.py",
-    "td_component/tdpilot_api_lookup.py",
-    "td_component/tdpilot_api_schema_defs.py",
-    "td_component/tdpilot_api_schema_map.py",
-    "td_component/tdpilot_api_schema.py",
-    "td_component/tdpilot_api_runtime.py",
-    "td_component/tdpilot_api_extension.py",
-    "td_component/tdpilot_api_bm25.py",
-    "td_component/tdpilot_api_memory.py",
-    "td_component/tdpilot_api_knowledge.py",
-    "td_component/tdpilot_api_recipes.py",
-    "td_component/tdpilot_api_skills.py",
-    "td_component/tdpilot_api_patches.py",
-    "td_component/tdpilot_api_user_tools.py",
-    "td_component/tdpilot_api_subagents.py",
-    "td_component/tdpilot_api_macros.py",
-    "td_component/tdpilot_api_official_docs.py",
-    "td_component/tdpilot_api_td2025.py",
-    "td_component/tdpilot_api_introspect.py",
-    "td_component/tdpilot_api_batch.py",
-    "td_component/tdpilot_api_recovery.py",
-    # v2.2.0 Phase 1.1 — auto-rollback on error regression. Pure module
-    # exporting AutoRollbackGuard + two ui.undo-touching internal
-    # handlers; baked into the API .tox.
-    "td_component/tdpilot_api_rollback.py",
-    "td_component/tdpilot_api_tracing.py",
-    "td_component/tdpilot_api_compaction.py",
-    "td_component/tdpilot_api_chat.html",
-    "td_component/tdpilot_api_web_callbacks.py",
-    "td_component/tdpilot_api_executor.py",
-    "td_component/tdpilot_api_parexec.py",
-    # Composed mcp_webserver_callbacks textDAT — its body comes from the
-    # callbacks/ split package (overlaps with check_tox_freshness.py by
-    # design; both .tox files embed this composed content).
-    "td_component/callbacks/_composer.py",
-    "td_component/callbacks/__init__.py",
-    "td_component/callbacks/_header.py",
-    "td_component/callbacks/router.py",
-    "td_component/callbacks/auth.py",
-    "td_component/callbacks/serializers.py",
-    "td_component/callbacks/handlers/__init__.py",
-    "td_component/callbacks/handlers/nodes.py",
-    "td_component/callbacks/handlers/exec_and_custom_params.py",
-    "td_component/callbacks/handlers/exec_python.py",
-    "td_component/callbacks/handlers/inspect.py",
-    "td_component/callbacks/handlers/search.py",
-    "td_component/callbacks/handlers/lifecycle.py",
-    "td_component/callbacks/handlers/pulse.py",
-    "td_component/callbacks/handlers/monitor.py",
-    "td_component/callbacks/handlers/analyze_frame.py",
-    # Build script bytes — same reasoning as the dpsk4 gate (any change to
-    # how the .tox is laid out forces a rebuild signal even if no embedded
-    # source changed).
-    "td_component/build_tdpilot_api_tox.py",
-)
+# Pull the canonical source-file list directly from the build script — this is
+# the single source of truth for what bytes feed tdpilot_API.tox. Pre-consolidation
+# this file kept a parallel SOURCE_FILES tuple that had to be hand-mirrored
+# against td_component/build_tdpilot_api_tox.py::_API_TOX_SOURCE_FILES; that
+# pair drifted in PR #34 (v2.2.0 Phase 1.1) when `tdpilot_api_rollback.py` was
+# added to the build script's list but not this one, breaking CI for two
+# commits until the manual mirror caught up. Importing here makes drift
+# structurally impossible.
+#
+# Note: build_tdpilot_api_tox auto-runs its build_and_export() at import only
+# when ``__name__ != "build_tdpilot_api_tox"`` — our import keeps __name__ at
+# the module's own name, so no build fires here.
+sys.path.insert(0, str(ROOT / "td_component"))
+from build_tdpilot_api_tox import _API_TOX_SOURCE_FILES as SOURCE_FILES  # noqa: E402
+
 HASH_FILE = ROOT / "td_component" / ".tox-api-source-hash.json"
 TOX_FILE = ROOT / "td_component" / "tdpilot_API.tox"
 
