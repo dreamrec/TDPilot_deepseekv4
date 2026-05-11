@@ -20,14 +20,10 @@ copy that disagrees with the repo, the repo wins.
 ## ==== BEGIN PROMPT ====
 
 You're picking up work on **TDPilot DPSK4** — a TouchDesigner AI
-assistant. The repo lives at:
-
-```
-/Users/visansilviugeorge/Desktop/DREAM AI/TDPilot_deepseekv4
-```
-
-(Adjust path if your local clone is elsewhere — the GitHub repo is
-`dreamrec/TDPilot_deepseekv4`.)
+assistant. The GitHub repo is `dreamrec/TDPilot_deepseekv4`. `cd`
+into your local clone of it before running any commands below — this
+prompt uses `<REPO_ROOT>` as a placeholder for whatever path you
+cloned to.
 
 ### Current state
 
@@ -146,7 +142,7 @@ These are encoded in CI gates and pin tests; violating them = red CI.
 Before writing any code:
 
 ```bash
-cd "/Users/visansilviugeorge/Desktop/DREAM AI/TDPilot_deepseekv4"
+cd <REPO_ROOT>                     # your local clone of dreamrec/TDPilot_deepseekv4
 git fetch origin && git checkout -b claude/v2.2.0-phase-0-foundation origin/main
 git log --oneline -5   # confirm 93c9a30 AGENTS.md is the tip
 uv sync --extra dev --frozen
