@@ -207,6 +207,12 @@ _SOURCE_FILES = (
     ("tdpilot_api_introspect", "textDAT", "td_component/tdpilot_api_introspect.py"),
     ("tdpilot_api_batch", "textDAT", "td_component/tdpilot_api_batch.py"),
     ("tdpilot_api_recovery", "textDAT", "td_component/tdpilot_api_recovery.py"),
+    # Phase 1.1 (v2.2.0) — auto-rollback on error regression. Pure module
+    # except for two ``ui.undo``-touching handlers exposed only via
+    # TOOL_TO_HANDLER (not TOOL_SCHEMAS) so the LLM never calls them
+    # directly; the AutoRollbackGuard invokes them internally around
+    # each tool-batch in tdpilot_api_agent._loop.
+    ("tdpilot_api_rollback", "textDAT", "td_component/tdpilot_api_rollback.py"),
     ("tdpilot_api_tracing", "textDAT", "td_component/tdpilot_api_tracing.py"),
     ("tdpilot_api_compaction", "textDAT", "td_component/tdpilot_api_compaction.py"),
     ("tdpilot_api_chat_html", "textDAT", "td_component/tdpilot_api_chat.html"),

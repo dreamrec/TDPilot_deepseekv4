@@ -681,7 +681,30 @@ class AgentRuntime:
             # status bar. Sanitised to int-or-zero so the frontend
             # never sees a stray non-numeric field.
             on_usage=lambda usage: self._push(EV_USAGE, _sanitise_usage(usage)),
+            # Phase 1.1 (v2.2.0) — auto-rollback on error regression.
+            # ``_build_rollback_guard_factory`` honours
+            # TDPILOT_DISABLE_AUTO_ROLLBACK and returns ``None`` when
+            # disabled, which makes the wrap a literal no-op (Agent
+            # ._loop checks for None before constructing a guard).
+            rollback_guard_factory=self._build_rollback_guard_factory(),
         )
+
+    def _build_rollback_guard_factory(self) -> Callable[..., Any] | None:
+        """Return a factory ``(dispatcher, tool_names) -> AutoRollbackGuard``
+        or ``None`` if auto-rollback is disabled.
+
+        v1 honours only the ``TDPILOT_DISABLE_AUTO_ROLLBACK`` env var.
+        A future PR can plug in a COMP-param toggle by reading
+        ``self._config`` here.
+        """
+        try:
+            import tdpilot_api_rollback as ar  # type: ignore[import-not-found]
+        except ImportError:
+            return None
+        if ar.is_disabled_via_env():
+            print("[tdpilot_API/runtime] auto-rollback disabled via TDPILOT_DISABLE_AUTO_ROLLBACK")
+            return None
+        return lambda dispatcher, tool_names: ar.AutoRollbackGuard(dispatcher, tool_names)
 
     # ------------------------------------------------------------------
     # Phase 4.1 — observability tracer
