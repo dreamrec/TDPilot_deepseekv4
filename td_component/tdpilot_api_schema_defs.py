@@ -1212,10 +1212,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
                 "path": {
                     "type": "string",
-                    "description": (
-                        "Absolute path to a .scoped.json manifest. Alternative "
-                        "to ``name``."
-                    ),
+                    "description": ("Absolute path to a .scoped.json manifest. Alternative to ``name``."),
                 },
                 "dry_run": {
                     "type": "boolean",

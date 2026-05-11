@@ -288,10 +288,18 @@ def test_insecure_mode_bypasses_token_only_not_origin(web_module, monkeypatch):
 
 def test_ws_token_extraction_from_uri(web_module):
     module, _ = web_module
+    # Query-string form (legacy / external-tool friendly).
     assert module._ws_token_from_uri("/?t=abc123") == "abc123"
     assert module._ws_token_from_uri("/path?foo=bar&t=xyz&z=1") == "xyz"
-    assert module._ws_token_from_uri("/no-query") == ""
+    # Empty / pure-slash URIs return no token.
     assert module._ws_token_from_uri("") == ""
+    assert module._ws_token_from_uri("/") == ""
+    # 2026-05-11 — path-segment form (what the HTML client now emits as
+    # ``ws://host:port/<token>``). Single-segment path = token.
+    assert module._ws_token_from_uri("/abc123") == "abc123"
+    assert module._ws_token_from_uri("/no-query") == "no-query"
+    # Multi-segment paths are obviously not a token.
+    assert module._ws_token_from_uri("/a/b/c") == ""
 
 
 def test_ws_token_extraction_handles_url_encoding(web_module):

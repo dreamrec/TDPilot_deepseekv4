@@ -380,12 +380,14 @@ def _walk_connections(nodes: list) -> list[dict]:
                     continue
                 if target.path not in path_set:
                     continue
-                out.append({
-                    "from": src.path,
-                    "from_index": int(out_idx),
-                    "to": target.path,
-                    "to_index": int(in_idx),
-                })
+                out.append(
+                    {
+                        "from": src.path,
+                        "from_index": int(out_idx),
+                        "to": target.path,
+                        "to_index": int(in_idx),
+                    }
+                )
     return out
 
 
@@ -610,13 +612,16 @@ def handle_snapshot_restore_scoped(body: dict) -> dict:
     for p in to_create:
         spec = manifest_nodes_by_path[p]
         try:
-            r = raw("td_create_node", {
-                "parent_path": spec["parent_path"],
-                "op_type": spec["type"],
-                "name": spec["name"],
-                "node_x": spec.get("nodeX"),
-                "node_y": spec.get("nodeY"),
-            })
+            r = raw(
+                "td_create_node",
+                {
+                    "parent_path": spec["parent_path"],
+                    "op_type": spec["type"],
+                    "name": spec["name"],
+                    "node_x": spec.get("nodeX"),
+                    "node_y": spec.get("nodeY"),
+                },
+            )
             if isinstance(r, dict) and r.get("success") is False:
                 applied["errors"].append({"op": "create", "path": p, "result": r})
             else:
@@ -663,19 +668,20 @@ def handle_snapshot_restore_scoped(body: dict) -> dict:
     current_nodes_after = _walk_scope(scope, excludes)
     current_conns = _walk_connections(current_nodes_after)
     # Disconnect any current connection NOT in the manifest set.
-    manifest_conn_keys = {
-        (c["from"], c["from_index"], c["to"], c["to_index"]) for c in manifest_conns
-    }
+    manifest_conn_keys = {(c["from"], c["from_index"], c["to"], c["to_index"]) for c in manifest_conns}
     for c in current_conns:
         key = (c["from"], c["from_index"], c["to"], c["to_index"])
         if key in manifest_conn_keys:
             continue
         try:
-            r = raw("td_disconnect", {
-                "path": c["to"],
-                "connector_type": "input",
-                "index": c["to_index"],
-            })
+            r = raw(
+                "td_disconnect",
+                {
+                    "path": c["to"],
+                    "connector_type": "input",
+                    "index": c["to_index"],
+                },
+            )
             if isinstance(r, dict) and r.get("success") is False:
                 applied["errors"].append({"op": "disconnect", "edge": key, "result": r})
             else:
@@ -683,20 +689,21 @@ def handle_snapshot_restore_scoped(body: dict) -> dict:
         except Exception as exc:
             applied["errors"].append({"op": "disconnect", "edge": key, "exc": str(exc)})
     # Create manifest connections not currently present.
-    current_conn_keys = {
-        (c["from"], c["from_index"], c["to"], c["to_index"]) for c in current_conns
-    }
+    current_conn_keys = {(c["from"], c["from_index"], c["to"], c["to_index"]) for c in current_conns}
     for c in manifest_conns:
         key = (c["from"], c["from_index"], c["to"], c["to_index"])
         if key in current_conn_keys:
             continue
         try:
-            r = raw("td_connect_nodes", {
-                "source_path": c["from"],
-                "source_output": c["from_index"],
-                "target_path": c["to"],
-                "target_input": c["to_index"],
-            })
+            r = raw(
+                "td_connect_nodes",
+                {
+                    "source_path": c["from"],
+                    "source_output": c["from_index"],
+                    "target_path": c["to"],
+                    "target_input": c["to_index"],
+                },
+            )
             if isinstance(r, dict) and r.get("success") is False:
                 applied["errors"].append({"op": "connect", "edge": key, "result": r})
             else:
