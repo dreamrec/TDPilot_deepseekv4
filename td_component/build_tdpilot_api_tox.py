@@ -871,6 +871,11 @@ def build_and_export():
     # v2.1.1 — refresh the API .tox source-hash manifest so CI's
     # check_tox_api_freshness gate stays green.
     _write_api_tox_source_hash(repo_root)
+    # Phase 1.2.2 (v2.2.x) — auto-mirror the .tox + hash file into the
+    # main repo's td_component/ when building from a worktree, so
+    # drag-from-Finder in the main repo always uses the latest build.
+    # See feedback_tox_rebuild_auto_mirror.md.
+    _legacy._mirror_tox_to_main_repo_if_worktree(repo_root, "tdpilot_API.tox", ".tox-api-source-hash.json")
     if install_parent is None:
         print(f"[tdpilot_API] drag {export_path} into a TD project to install.")
     return export_path
