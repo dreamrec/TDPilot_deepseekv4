@@ -224,9 +224,12 @@ class RuntimeMatrix:
 
 
 async def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
+    # post-v2.1.5 (Codex review on PR #30): use the dpsk4 fork's actual
+    # script name. Pre-fix this said "tdpilot", which is the parent
+    # fork's entrypoint and raises ModuleNotFoundError here.
     server = StdioServerParameters(
         command=args.server_command,
-        args=["run", "--directory", args.repo_dir, "tdpilot"],
+        args=["run", "--directory", args.repo_dir, "tdpilot-dpsk4"],
     )
     async with stdio_client(server) as (read, write):
         async with ClientSession(read, write) as session:
