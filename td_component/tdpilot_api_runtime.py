@@ -710,6 +710,13 @@ class AgentRuntime:
                 self._trace_update_model(tier, picked),
                 self._push(EV_MODEL, {"tier": tier, "model": picked}),
             ),
+            # 2.3.1 — sticky-tier promotion ("use only pro this session",
+            # "from now on flash", "back to auto"). The Agent mutates its
+            # own ``model_tier`` in-memory; we mirror it back to the COMP
+            # ``Modeltier`` param so the user sees the dropdown update AND
+            # so the promotion survives a chat-panel reload (start_turn
+            # re-reads the COMP param every turn).
+            on_tier_change=self._sync_model_tier_to_comp,
             # Phase 2 (1.8.0) — per-call token usage to the chat
             # status bar. Sanitised to int-or-zero so the frontend
             # never sees a stray non-numeric field.
@@ -728,6 +735,23 @@ class AgentRuntime:
             # for the lifetime of this Agent instance.
             cycle_ledger_factory=self._build_cycle_ledger_factory(),
         )
+
+    def _sync_model_tier_to_comp(self, new_tier: str) -> None:
+        """Mirror an Agent-side sticky-tier promotion back to the COMP
+        ``Modeltier`` param. Best-effort: if the COMP isn't reachable
+        (e.g. headless tests, parent() not callable) the in-memory mutation
+        still holds for the lifetime of this Agent instance.
+        """
+        if new_tier not in ("auto", "flash", "pro"):
+            return
+        # Keep the runtime's cached config in sync so the next start_turn's
+        # live-refresh (line ~1282 reading parent().par.Modeltier) doesn't
+        # immediately fight the agent's mutation.
+        self._config["model_tier"] = new_tier
+        try:
+            parent().par.Modeltier = new_tier  # type: ignore[name-defined]
+        except Exception:
+            pass
 
     def _build_rollback_guard_factory(self) -> Callable[..., Any] | None:
         """Return a factory ``(dispatcher, tool_names) -> AutoRollbackGuard``

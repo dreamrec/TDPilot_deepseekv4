@@ -366,7 +366,14 @@ __result__ = {{"results": results, "truncated": truncated}}
 
 async def _exec_dat_text_scope(ctx: Context, query: str, path: str, limit: int) -> dict[str, Any]:
     code = _DAT_TEXT_SCOPE_CODE_TEMPLATE.format(query=query, limit=limit, path=path)
-    body = {"code": code, "exec_mode": _tr._current_exec_mode()}
+    # 2.3.1 — pin "full" regardless of TD_MCP_EXEC_MODE. The template
+    # references ``Exception`` and ``isinstance`` by name (both absent from
+    # restricted-mode globals on the TD side), so honouring the env var
+    # caused every dat_text/param_exprs search to crash with
+    # ``NameError: name 'Exception' is not defined``. Safe to pin "full"
+    # because the template is fully internal — user inputs are repr()-
+    # escaped Python literals; no user code executes.
+    body = {"code": code, "exec_mode": "full"}
     data = await _tr._get_client(ctx).request("exec", body)
     if not isinstance(data, dict) or not data.get("success"):
         return {"results": [], "error": (data or {}).get("error", "exec failed")}
@@ -375,7 +382,8 @@ async def _exec_dat_text_scope(ctx: Context, query: str, path: str, limit: int) 
 
 async def _exec_param_exprs_scope(ctx: Context, query: str, path: str, limit: int) -> dict[str, Any]:
     code = _PARAM_EXPRS_SCOPE_CODE_TEMPLATE.format(query=query, limit=limit, path=path)
-    body = {"code": code, "exec_mode": _tr._current_exec_mode()}
+    # See _exec_dat_text_scope for the "full" pin rationale.
+    body = {"code": code, "exec_mode": "full"}
     data = await _tr._get_client(ctx).request("exec", body)
     if not isinstance(data, dict) or not data.get("success"):
         return {"results": [], "error": (data or {}).get("error", "exec failed")}
