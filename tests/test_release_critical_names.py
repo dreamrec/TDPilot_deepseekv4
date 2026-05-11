@@ -206,3 +206,83 @@ def test_ci_python_matrix_includes_every_supported_version():
         f'`requires-python = "{constraint}"`). Found versions: {versions}. '
         "Codex P3 on PR #30."
     )
+
+
+# ---------------------------------------------------------------------------
+# AGENTS.md presence + content invariants (post-PR-31 review)
+# ---------------------------------------------------------------------------
+
+
+def test_agents_md_exists_at_repo_root():
+    """AGENTS.md must exist at the repo root so coding agents (Claude,
+    Codex, Copilot, Cursor) can discover it without searching.
+
+    Reviewer on PR #30 called this out explicitly: "I'd also commit a
+    cleaned-up AGENTS.md to main, because the local one contains
+    important release and DeepSeek-specific operating rules that future
+    agents won't see from the public repo." The AGENTS.md convention
+    (https://agents.md/) places the file at repo root by default.
+    """
+    path = ROOT / "AGENTS.md"
+    assert path.is_file(), (
+        "AGENTS.md must exist at the repo root. See "
+        "https://agents.md/ for the convention. Without it, fresh "
+        "agents miss the release flow, .tox rebuild dance, DeepSeek "
+        "prefix-cache rules, and TD-specific gotchas."
+    )
+
+
+def test_agents_md_pins_all_critical_names():
+    """AGENTS.md must reference every canonical name from the
+    naming-pins table in `Critical naming pins`. If a future edit
+    accidentally drops one, this test fails so it stays consistent
+    with the rest of the repo."""
+    text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    required_names = (
+        EXPECTED_NPM_PACKAGE,  # tdpilot-dpsk4
+        EXPECTED_REPO_SLUG,  # dreamrec/TDPilot_deepseekv4
+        EXPECTED_MARKETPLACE_NAME,  # dreamrec-TDPilot_deepseekv4
+    )
+    for name in required_names:
+        assert name in text, (
+            f"AGENTS.md is missing the canonical name `{name}`. The "
+            "Critical naming pins table is load-bearing — every release-"
+            "critical identifier should be listed there so a future agent "
+            "doesn't have to grep for them."
+        )
+
+
+def test_agents_md_covers_release_critical_topics():
+    """AGENTS.md must mention every load-bearing topic from the
+    project's operational rules. These are the topics that have cost
+    real debug time and that the user's reviewer specifically wanted
+    documented in the public repo (PR #30 follow-up).
+
+    Checks are deliberately loose (substring match) so the exact
+    wording can evolve while still pinning that the topic IS covered.
+    """
+    text = (ROOT / "AGENTS.md").read_text(encoding="utf-8").lower()
+    required_topics = {
+        # Release flow
+        "gh release create": "GitHub Release creation step (otherwise release-assets.yml never fires)",
+        "scripts/check_versions.py": "version-sync gate",
+        "check_tox_freshness": ".tox freshness gate",
+        # DeepSeek-specific
+        "thinking": "the thinking-blocks echo rule",
+        "prefix-cache": "DeepSeek auto-cache stability requirement",
+        # Security model
+        "tdpilot_api_insecure": "the insecure-mode escape hatch",
+        "exec_mode": "the td_exec_python sandbox levels",
+        # TD-specific gotchas
+        "cook thread": "the cook-thread vs worker-thread split",
+        "comp.storage": "state-survives-reload pattern",
+        "feedbacktop": "the canonical feedbackTOP wiring discipline",
+        "webrendertop": "the http:// vs file:// origin trap",
+        # Tox dance
+        "_tox_source_files": "the source-file list that gets baked into the .tox",
+        "td_mcp_repo_root": "the env var required for the rebuild recipe",
+    }
+    missing = [(k, why) for k, why in required_topics.items() if k.lower() not in text]
+    assert not missing, "AGENTS.md is missing these load-bearing topics:\n" + "\n".join(
+        f"  - {k!r} — {why}" for k, why in missing
+    )
