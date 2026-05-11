@@ -286,3 +286,125 @@ def test_agents_md_covers_release_critical_topics():
     assert not missing, "AGENTS.md is missing these load-bearing topics:\n" + "\n".join(
         f"  - {k!r} — {why}" for k, why in missing
     )
+
+
+# ---------------------------------------------------------------------------
+# docs/ROADMAP.md + docs/NEW_SESSION_PROMPT.md (added post-v2.1.5 alongside
+# AGENTS.md): the v2.2.0→v3.0 implementation plan plus a copy-pasteable
+# starter prompt for fresh agent sessions. Both are explicitly exempted
+# from the `/docs/*.md` deny-list in .gitignore so they ship with the
+# public repo. If either file is renamed, moved, or stripped of the
+# load-bearing structure that makes it useful, these tests fail.
+# ---------------------------------------------------------------------------
+
+
+def test_roadmap_md_exists_and_covers_all_phases():
+    """`docs/ROADMAP.md` must exist and cover every phase (0–6) of the
+    v2.2.0→v3.0 plan. Phase numbering is load-bearing: the
+    `NEW_SESSION_PROMPT.md` starter and `AGENTS.md` cross-reference both
+    point at specific phase headings. If a phase section gets deleted
+    accidentally, this test fails so the deletion is forced to be
+    deliberate (and the cross-refs get updated in the same PR).
+
+    Also asserts cross-links to the bootstrap prompt and AGENTS.md are
+    present, so a fresh agent landing on the ROADMAP has working
+    pointers to the other two source-of-truth docs.
+    """
+    path = ROOT / "docs" / "ROADMAP.md"
+    assert path.is_file(), (
+        "docs/ROADMAP.md must exist. It's the v2.2.0→v3.0 implementation "
+        "plan, source-of-truth for what we're building next. Without it, "
+        "a fresh agent session has nowhere to anchor multi-phase work. "
+        "If you're intentionally removing it, also remove the "
+        "`!/docs/ROADMAP.md` exception in .gitignore and the AGENTS.md "
+        "cross-reference."
+    )
+    text = path.read_text(encoding="utf-8")
+    # Every phase must have a top-level heading. Phase numbering is
+    # referenced by NEW_SESSION_PROMPT.md and AGENTS.md cross-links.
+    for phase in range(7):
+        marker = f"## Phase {phase}"
+        assert marker in text, (
+            f"docs/ROADMAP.md is missing the `{marker}` section. "
+            "Phase headings are load-bearing — they're cited by line "
+            "number in NEW_SESSION_PROMPT.md and referenced by "
+            "phase-PR branch names like `claude/v2.2.0-phase-0-foundation`."
+        )
+    # Cross-links to the bootstrap and operating-rules docs must work.
+    required_links = (
+        "NEW_SESSION_PROMPT.md",
+        "AGENTS.md",
+        "CHANGELOG.md",
+    )
+    for link in required_links:
+        assert link in text, (
+            f"docs/ROADMAP.md is missing a reference to `{link}`. "
+            "The 'How to use this doc' section links to all three; "
+            "removing one strands fresh agents who follow the chain."
+        )
+
+
+def test_new_session_prompt_md_exists_with_required_invariants():
+    """`docs/NEW_SESSION_PROMPT.md` must exist and preserve the
+    properties that make it useful:
+
+    1. The `==== BEGIN PROMPT ====` / `==== END PROMPT ====` markers
+       (the copy-paste UX depends on them being unambiguous).
+    2. Inline references to the worst footguns — package name,
+       thinking-blocks echo rule, .tox-freshness gates, 7-manifest
+       lockstep. These exist inside the prompt body precisely so a
+       future agent that skips AGENTS.md (they will) is still
+       protected from the most expensive mistakes.
+    3. A pointer to AGENTS.md and ROADMAP.md, so the bootstrap chain
+       stays intact.
+
+    If a future edit removes any of these, this test fails — forcing
+    the maintainer to either restore the invariant or update this pin
+    deliberately.
+    """
+    path = ROOT / "docs" / "NEW_SESSION_PROMPT.md"
+    assert path.is_file(), (
+        "docs/NEW_SESSION_PROMPT.md must exist. It's the copy-pasteable "
+        "starter prompt for a fresh agent picking up roadmap work. "
+        "If you're intentionally removing it, also remove the "
+        "`!/docs/NEW_SESSION_PROMPT.md` exception in .gitignore and the "
+        "AGENTS.md cross-reference."
+    )
+    text = path.read_text(encoding="utf-8")
+    # Copy-paste markers — the whole UX of this file depends on a
+    # human (or agent-operator) being able to extract the prompt body
+    # by between-marker selection.
+    assert "==== BEGIN PROMPT ====" in text, (
+        "docs/NEW_SESSION_PROMPT.md is missing the `==== BEGIN PROMPT ====` "
+        "marker. Copy-paste extraction breaks without it."
+    )
+    assert "==== END PROMPT ====" in text, (
+        "docs/NEW_SESSION_PROMPT.md is missing the `==== END PROMPT ====` "
+        "marker. Copy-paste extraction breaks without it."
+    )
+    # Inlined footguns — these are deliberately duplicated from
+    # AGENTS.md so an agent that skips AGENTS.md still gets the
+    # protection.
+    text_lc = text.lower()
+    required_inlined_constraints = {
+        EXPECTED_NPM_PACKAGE.lower(): "package-name pin",
+        "thinking": "DeepSeek thinking-blocks echo rule",
+        "check_tox_freshness": "tox-freshness gate",
+        "check_versions.py": "7-manifest version-sync gate",
+        "gh release create": "GitHub Release creation step",
+        "comp.storage": "state-survives-reload pattern",
+    }
+    missing_inlined = [
+        (k, why) for k, why in required_inlined_constraints.items() if k.lower() not in text_lc
+    ]
+    assert not missing_inlined, (
+        "docs/NEW_SESSION_PROMPT.md is missing these inlined footgun callouts:\n"
+        + "\n".join(f"  - {k!r} — {why}" for k, why in missing_inlined)
+    )
+    # Bootstrap chain — pointers to the two source-of-truth docs the
+    # fresh agent must read.
+    for required_link in ("AGENTS.md", "ROADMAP.md"):
+        assert required_link in text, (
+            f"docs/NEW_SESSION_PROMPT.md is missing a reference to `{required_link}`. "
+            "The bootstrap chain breaks if either link drops."
+        )

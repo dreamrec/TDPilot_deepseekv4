@@ -111,6 +111,14 @@ docs/archive/
 # tests, and runtime readers (see scripts/_chunk_schema_v1.py). Not
 # free-form planning doc — exempt from the docs/ ignore.
 !/docs/CHUNK_SCHEMA.md
+# v2.2.0→v3.0 implementation roadmap. Source-of-truth for multi-release
+# planning, referenced by AGENTS.md and pinned by tests/test_release_critical_names.py.
+# Not a transient session report — tracked alongside the code that fulfils it.
+!/docs/ROADMAP.md
+# Starter prompt for fresh agent sessions picking up the ROADMAP work.
+# Self-contained bootstrap — pinned by tests/test_release_critical_names.py so
+# rename/move accidents are caught by CI.
+!/docs/NEW_SESSION_PROMPT.md
 !/CHANGELOG.md
 /CLAUDE.md
 # plugin_README.md is bundled as README.md inside the Claude Code plugin
