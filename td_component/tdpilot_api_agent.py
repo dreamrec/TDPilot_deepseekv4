@@ -271,6 +271,14 @@ class Agent:
         # — the loop runs unwrapped, identical to pre-v2.2.0 behaviour.
         # Wired by AgentRuntime so it can honour ``TDPILOT_DISABLE_AUTO_ROLLBACK``.
         rollback_guard_factory: Callable[..., Any] | None = None,
+        # Phase 1.2 (v2.2.0) — cycle detection. Factory takes zero
+        # args and returns a fresh ``CycleLedger`` (one per turn) or
+        # None. Agent._loop checks the ledger before each tool
+        # dispatch; when the count reaches the ledger's threshold,
+        # ``CycleDetected`` is raised, propagating to run_turn's
+        # BaseException catch and out via ``on_error`` → ``EV_ERROR``.
+        # Wired by AgentRuntime to honour ``TDPILOT_DISABLE_CYCLE_DETECTION``.
+        cycle_ledger_factory: Callable[[], Any] | None = None,
     ) -> None:
         if not api_key:
             raise AgentError("api_key is required")
@@ -318,6 +326,7 @@ class Agent:
         self.on_error = on_error
         self.on_usage = on_usage
         self.rollback_guard_factory = rollback_guard_factory
+        self.cycle_ledger_factory = cycle_ledger_factory
 
         self.messages: list[dict] = []
         self._stop_flag = threading.Event()
@@ -503,6 +512,39 @@ class Agent:
                 pass
         self._active_model = chosen
 
+        # Phase 1.2 (v2.2.0) — per-turn cycle-detection ledger. Built
+        # ONCE at the top of _loop (before the first API call), reused
+        # across every batch of tool dispatches in this turn. Factory
+        # returns None → feature disabled for this turn; the ``if
+        # cycle_ledger is not None`` check inside the inner for-loop
+        # makes the whole path a no-op in that case.
+        #
+        # ``CycleDetected`` + ``_format_cycle_args`` are late-imported
+        # from tdpilot_api_cycle_detector here because that module
+        # imports ``AgentError`` from THIS module — top-level import
+        # would create a circular dependency. The cost of the deferred
+        # lookup is one dict access per turn (Python caches the
+        # resolved module after the first call).
+        cycle_ledger = None
+        CycleDetected = None  # noqa: N806 — late-imported class, treated as constant in this scope
+        _format_cycle_args = None  # noqa: N806 — late-imported helper
+        if self.cycle_ledger_factory is not None:
+            try:
+                from tdpilot_api_cycle_detector import (  # noqa: PLC0415
+                    CycleDetected as _CycleDetected,
+                )
+                from tdpilot_api_cycle_detector import (
+                    _format_args_summary as _fas,
+                )
+
+                cycle_ledger = self.cycle_ledger_factory()
+                CycleDetected = _CycleDetected  # noqa: N806
+                _format_cycle_args = _fas  # noqa: N806
+            except Exception as exc:  # noqa: BLE001 — factory must never break a turn
+                print(f"[tdpilot_API/agent] cycle_ledger setup failed: {exc}")
+                cycle_ledger = None
+                CycleDetected = None  # noqa: N806
+
         for _turn in range(self.turn_budget):
             if self._stop_flag.is_set():
                 return None
@@ -566,6 +608,22 @@ class Agent:
                     tool_id = tu.get("id", "")
                     tool_name = tu.get("name", "")
                     tool_args = tu.get("input", {}) or {}
+                    # Phase 1.2 — cycle detection. Check BEFORE
+                    # ``on_tool_call`` fires so a blocked call doesn't
+                    # leak an EV_TOOL_CALL event that gets superseded
+                    # by the EV_ERROR a tick later. The raise
+                    # propagates through the outer try/finally (so the
+                    # rollback guard's __exit__ still runs), out of
+                    # _loop, into run_turn's BaseException catch, into
+                    # on_error → EV_ERROR + EV_STATE:idle.
+                    if cycle_ledger is not None:
+                        count = cycle_ledger.record(tool_name, tool_args)
+                        if count >= cycle_ledger.threshold:
+                            raise CycleDetected(
+                                tool_name=tool_name,
+                                count=count,
+                                args_summary=_format_cycle_args(tool_args),
+                            )
                     self.on_tool_call(tool_name, tool_args)
                     try:
                         result = self.dispatcher(tool_name, tool_args)

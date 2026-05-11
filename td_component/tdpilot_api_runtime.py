@@ -687,6 +687,13 @@ class AgentRuntime:
             # disabled, which makes the wrap a literal no-op (Agent
             # ._loop checks for None before constructing a guard).
             rollback_guard_factory=self._build_rollback_guard_factory(),
+            # Phase 1.2 (v2.2.0) — cycle detection.
+            # ``_build_cycle_ledger_factory`` honours
+            # TDPILOT_DISABLE_CYCLE_DETECTION and returns ``None`` when
+            # disabled. Agent._loop builds one ledger per turn from
+            # the factory; ``None`` means cycle detection is off
+            # for the lifetime of this Agent instance.
+            cycle_ledger_factory=self._build_cycle_ledger_factory(),
         )
 
     def _build_rollback_guard_factory(self) -> Callable[..., Any] | None:
@@ -705,6 +712,29 @@ class AgentRuntime:
             print("[tdpilot_API/runtime] auto-rollback disabled via TDPILOT_DISABLE_AUTO_ROLLBACK")
             return None
         return lambda dispatcher, tool_names: ar.AutoRollbackGuard(dispatcher, tool_names)
+
+    def _build_cycle_ledger_factory(self) -> Callable[[], Any] | None:
+        """Return a zero-arg factory ``() -> CycleLedger`` or ``None``
+        if cycle detection is disabled (env var
+        ``TDPILOT_DISABLE_CYCLE_DETECTION`` or module unavailable).
+
+        The factory is invoked once per turn from ``Agent._loop`` so
+        each turn starts with a fresh counter — identical calls in
+        the *next* turn never see the previous turn's history. A
+        future PR may plug a COMP-param threshold (``Cyclethreshold``)
+        in through ``self._config`` here.
+        """
+        try:
+            import tdpilot_api_cycle_detector as cd  # type: ignore[import-not-found]
+        except ImportError:
+            return None
+        if cd.is_disabled_via_env():
+            print("[tdpilot_API/runtime] cycle detection disabled via TDPILOT_DISABLE_CYCLE_DETECTION")
+            return None
+        # Threshold defaults to CycleLedger.DEFAULT_THRESHOLD (3). When
+        # the COMP-param wiring lands, read ``self._config["cycle_threshold"]``
+        # here and pass through.
+        return cd.build_cycle_ledger_factory()
 
     # ------------------------------------------------------------------
     # Phase 4.1 — observability tracer
