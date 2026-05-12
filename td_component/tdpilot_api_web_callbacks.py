@@ -445,6 +445,45 @@ def onHTTPRequest(webServerDAT, request, response):
             _json(response, 500, {"ok": False, "error": str(exc)}, request_origin=request_origin)
         return response
 
+    if method == "GET" and path == "/stats":
+        # v2.4 / Phase C.7 — per-session cost telemetry. Read-only,
+        # token-gated like every other route. Pulls the runtime's
+        # already-aggregated counters off the extension. Returns
+        # the same shape that EV_USAGE_SESSION pushes via WS so
+        # the chat UI has a single payload model for both surfaces.
+        try:
+            ext = _ext()
+            runtime = getattr(ext, "_runtime", None) if ext is not None else None
+            if runtime is None or not hasattr(runtime, "_session_totals_payload"):
+                _json(
+                    response,
+                    503,
+                    {"ok": False, "error": "runtime not ready"},
+                    request_origin=request_origin,
+                )
+                return response
+            session = runtime._session_totals_payload()
+            _json(
+                response,
+                200,
+                {
+                    "ok": True,
+                    "session": session,
+                    "model_pricing_version": session.get("model_pricing_version", ""),
+                    "started_at": session.get("started_at", ""),
+                },
+                request_origin=request_origin,
+            )
+        except Exception as exc:
+            debug(f"[tdpilot_API/web] /stats failed: {exc}")
+            _json(
+                response,
+                500,
+                {"ok": False, "error": str(exc)},
+                request_origin=request_origin,
+            )
+        return response
+
     if method == "POST" and path == "/set-authmode":
         # v2.4 / Phase B.2 — wizard endpoint for the Authmode=open→token
         # migration. Flips the COMP param + rotates the session token.

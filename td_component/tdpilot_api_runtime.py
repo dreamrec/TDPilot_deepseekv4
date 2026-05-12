@@ -235,6 +235,11 @@ EV_MODEL = "model"  # payload: {"tier": str, "model": str} — Sprint 4.3
 # per-turn meter and resets on EV_DONE / EV_ERROR. All fields optional
 # — DeepSeek's compat layer may omit some depending on model version.
 EV_USAGE = "usage"  # payload: {"input_tokens": int, "output_tokens": int, "cache_read_input_tokens": int}
+# v2.4 / Phase C.7 — rolling per-session token totals. Pushed once
+# after every EV_USAGE so the chat footer reflects the running cost
+# without polling /stats. Payload is the same shape /stats returns
+# under response["session"] (one source of truth).
+EV_USAGE_SESSION = "usage_session"  # payload: {input_tokens, output_tokens, cache_hits, cache_misses, approx_usd, started_at, model_pricing_version}
 # Phase 1.3 — severity-tracked validation hint. Emitted at turn end
 # when high-severity mutations went out without a follow-up validator
 # call. Soft signal; chat UI renders as a subtle nudge below the
@@ -317,6 +322,38 @@ _USAGE_FIELDS = (
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
 )
+
+
+# v2.4 / Phase C.7 — DeepSeek published rates as of 2026-05. Values
+# are USD per 1M tokens. The version stamp ships with /stats so the
+# chat footer can label estimates that came from an outdated build.
+# When DeepSeek revises pricing, bump _PRICING_VERSION and the three
+# constants together; the wire format is forward-compatible.
+_PRICING_VERSION = "2026-05-01"
+_PRICE_INPUT_FRESH_PER_M = 0.27   # USD/M uncached input tokens
+_PRICE_INPUT_CACHED_PER_M = 0.027  # 10x discount on cache hits
+_PRICE_OUTPUT_PER_M = 1.10        # USD/M output tokens
+
+
+def _estimate_usd(input_tokens: int, output_tokens: int, cache_hits: int) -> float:
+    """Best-effort USD estimate. Labelled 'approximate' in every UI
+    surface that consumes this — DeepSeek can revise rates between
+    releases. ``cache_hits`` is the count of API calls where the
+    request hit the cache; we don't currently track per-token cache
+    splits, so the estimate assumes all input was uncached (worst
+    case, gives a conservative upper bound that won't surprise the
+    user with a bigger-than-displayed bill).
+    """
+    fresh_cost = (input_tokens / 1_000_000.0) * _PRICE_INPUT_FRESH_PER_M
+    out_cost = (output_tokens / 1_000_000.0) * _PRICE_OUTPUT_PER_M
+    return round(fresh_cost + out_cost, 6)
+
+
+def _now_iso() -> str:
+    """Return current UTC time as ISO-8601 string. Used for
+    session-start timestamps in /stats responses."""
+    import datetime as _dt
+    return _dt.datetime.utcnow().isoformat() + "Z"
 
 
 def _sanitise_usage(usage: Any) -> dict[str, int]:
@@ -688,6 +725,15 @@ class AgentRuntime:
         if system_prompt is None:
             system_prompt = build_system_prompt()
         self._events: Queue = Queue()
+        # v2.4 / Phase C.7 — per-session token + cache accumulators.
+        # Updated by _handle_usage on every EV_USAGE; reset by reset();
+        # survive stop(). Worker writes, cook reads from /stats. Integers
+        # are word-sized writes in CPython so no lock needed.
+        self._session_input_tokens: int = 0
+        self._session_output_tokens: int = 0
+        self._session_cache_hits: int = 0    # cache_read_input_tokens > 0
+        self._session_cache_misses: int = 0  # input_tokens > 0 AND read == 0
+        self._session_started_iso: str = _now_iso()
         # The Agent always sees the cook-thread-safe wrapper so it never
         # touches TD from the worker thread.
         # v2.4 / Phase C.8 — wire on_breaker_trip so the circuit breaker
@@ -855,7 +901,10 @@ class AgentRuntime:
             # Phase 2 (1.8.0) — per-call token usage to the chat
             # status bar. Sanitised to int-or-zero so the frontend
             # never sees a stray non-numeric field.
-            on_usage=lambda usage: self._push(EV_USAGE, _sanitise_usage(usage)),
+            # v2.4 / Phase C.7 — handler accumulates session totals
+            # and pushes both EV_USAGE (per-call) and EV_USAGE_SESSION
+            # (rolling) so the chat footer can render running cost.
+            on_usage=self._handle_usage,
             # v2.4 / Phase A.5 — Agent emits soft hints during HTTP retry
             # so the chat UI can render "retrying in 5s…" instead of
             # going silent for the duration of a 429-rate-limit window.
@@ -1448,6 +1497,45 @@ class AgentRuntime:
     # as separate tech debt.
     # ------------------------------------------------------------------
 
+    def _handle_usage(self, usage: Any) -> None:
+        """v2.4 / Phase C.7 — accumulate session token + cache counts
+        and emit EV_USAGE + EV_USAGE_SESSION.
+
+        Cache classification: a call that reports
+        ``cache_read_input_tokens > 0`` counts as a hit; a call where
+        input_tokens > 0 AND cache_read_input_tokens == 0 counts as a
+        miss. Other shapes (zero-input keep-alives, missing fields)
+        don't change either counter.
+        """
+        sanitised = _sanitise_usage(usage)
+        self._session_input_tokens += sanitised.get("input_tokens", 0)
+        self._session_output_tokens += sanitised.get("output_tokens", 0)
+        read = sanitised.get("cache_read_input_tokens", 0)
+        fresh = sanitised.get("input_tokens", 0)
+        if read > 0:
+            self._session_cache_hits += 1
+        elif fresh > 0:
+            self._session_cache_misses += 1
+        self._push(EV_USAGE, sanitised)
+        self._push(EV_USAGE_SESSION, self._session_totals_payload())
+
+    def _session_totals_payload(self) -> dict[str, Any]:
+        """v2.4 / Phase C.7 — return the current session-totals dict.
+        Same shape pushed via EV_USAGE_SESSION and returned by /stats."""
+        return {
+            "input_tokens": self._session_input_tokens,
+            "output_tokens": self._session_output_tokens,
+            "cache_hits": self._session_cache_hits,
+            "cache_misses": self._session_cache_misses,
+            "approx_usd": _estimate_usd(
+                self._session_input_tokens,
+                self._session_output_tokens,
+                self._session_cache_hits,
+            ),
+            "started_at": self._session_started_iso,
+            "model_pricing_version": _PRICING_VERSION,
+        }
+
     def _read_thinking_budget(self) -> int:
         """v2.4 / Phase C.9 — read the Thinkingbudget COMP param.
 
@@ -1658,6 +1746,14 @@ class AgentRuntime:
         # A reset starts a fresh session, so previously-triggered
         # skills should NOT carry over into the new conversation.
         self._session_skills_activated.clear()
+        # v2.4 / Phase C.7 — zero session token + cache counters and
+        # refresh the started-at timestamp. The chat footer's
+        # "Session: X in · Y out · ~$Z" pill resets to 0 on next push.
+        self._session_input_tokens = 0
+        self._session_output_tokens = 0
+        self._session_cache_hits = 0
+        self._session_cache_misses = 0
+        self._session_started_iso = _now_iso()
         # Phase 1.3 — same logic for the per-turn validation ledger.
         self._turn_tool_calls = []
         # Phase 2 (1.8.0) — drop any straggling latency-clock entries.

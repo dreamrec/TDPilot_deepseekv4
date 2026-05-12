@@ -138,6 +138,15 @@
     color: var(--muted);
   }
   #token-meter:empty { display: none; }
+  /* v2.4 / Phase C.7 — session-totals meter. Dimmer than the per-turn
+     token meter so it doesn't compete visually; shows running session
+     input/output + approximate USD. Hover for full breakdown. */
+  #session-meter {
+    color: var(--muted);
+    opacity: 0.7;
+    cursor: help;
+  }
+  #session-meter:empty { display: none; }
   /* Faint divider between state, model, tokens, cursor. */
   #status-bar .rhs > span + span:not(:empty)::before {
     content: '·';
@@ -778,7 +787,7 @@
   <div id="status-bar">
     <span class="lhs" data-prefix="▰▰▰"><span id="ws-label">tdpilot_api</span> · ws <span id="ws-state">connecting</span></span>
     <span class="rhs">
-      <span id="status-text">idle</span><span id="model-badge"></span><span id="token-meter"></span><span class="cursor">█</span>
+      <span id="status-text">idle</span><span id="model-badge"></span><span id="token-meter"></span><span id="session-meter"></span><span class="cursor">█</span>
     </span>
     <button id="quiet-toggle" type="button"
             title="Quiet mode — hide tool-call detail (Cmd/Ctrl + .)"
@@ -1976,6 +1985,31 @@
     refreshTokenMeter();
   }
 
+  // v2.4 / Phase C.7 — session-cost meter. Pushed by the runtime
+  // after every per-call EV_USAGE so the footer reflects the running
+  // total. "Approximate" warning + pricing-version stamp travel in
+  // the tooltip so the user knows the rate assumed.
+  function updateSessionMeter(session) {
+    const $sm = document.getElementById('session-meter');
+    if (!$sm) return;
+    if (!session || typeof session !== 'object') {
+      $sm.textContent = '';
+      $sm.title = '';
+      return;
+    }
+    const inK = formatTokenCount(session.input_tokens || 0);
+    const outK = formatTokenCount(session.output_tokens || 0);
+    const usd = typeof session.approx_usd === 'number' ? session.approx_usd : 0;
+    $sm.textContent = `Session: ${inK} in · ${outK} out · ~$${usd.toFixed(4)}`;
+    $sm.title =
+      `input:        ${session.input_tokens || 0}\n` +
+      `output:       ${session.output_tokens || 0}\n` +
+      `cache hits:   ${session.cache_hits || 0}\n` +
+      `cache misses: ${session.cache_misses || 0}\n` +
+      `pricing version: ${session.model_pricing_version || 'unknown'}\n` +
+      `(approximate — DeepSeek may revise rates)`;
+  }
+
   function setAgentStatus(text) {
     const newState = (text || 'idle').toLowerCase();
     const wasWorking = isWorkingAgentState(agentState);
@@ -2266,6 +2300,7 @@
       case 'status':       setStatus(msg.status); break;
       case 'model':        setModel(msg); break;
       case 'usage':        recordUsage(msg); break;
+      case 'usage_session': updateSessionMeter(msg.session || {}); break;
       case 'fullSync':     fullSync(msg.rows || []); break;
       case 'clear':        fullSync([]); break;
     }

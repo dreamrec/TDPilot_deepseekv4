@@ -703,6 +703,7 @@ class TDPilotAPIExt:
             EV_TOOL_CALL,
             EV_TOOL_RESULT,
             EV_USAGE,
+            EV_USAGE_SESSION,
         )
 
         if kind == EV_TEXT:
@@ -813,6 +814,17 @@ class TDPilotAPIExt:
                 {
                     "type": "usage",
                     "usage": payload if isinstance(payload, dict) else {},
+                }
+            )
+        elif kind == EV_USAGE_SESSION:
+            # v2.4 / Phase C.7 — rolling per-session totals. Chat UI
+            # renders these in the footer ("Session: 12.3K in · ...
+            # · ~$0.001"). Pushed once per EV_USAGE so the footer
+            # updates without polling.
+            self._broadcast(
+                {
+                    "type": "usage_session",
+                    "session": payload if isinstance(payload, dict) else {},
                 }
             )
         elif kind == EV_SUB_TEXT:
