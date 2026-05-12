@@ -620,8 +620,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "td_cooking_info",
         "description": (
             "Get cook-time stats for a node (or recursively under a path) — "
-            "great for diagnosing 'why is my project slow' questions. Returns "
-            "cook time, CPU time, and cook-frame counters."
+            "great for diagnosing 'why is my project slow' questions. Each "
+            "row now includes cookTime (total wall), cpuCookTime, gpuCookTime "
+            "(v2.4: GPU-only — 0 for non-TOP operators), cookFrame, and (TOPs "
+            "only) cudaMemoryBytes — per-TOP VRAM footprint via cudaMemory(). "
+            "Use sort_by='gpuCookTime' to surface GLSL / feedback-loop hot "
+            "spots, sort_by='cudaMemoryBytes' to find VRAM hogs."
         ),
         "input_schema": {
             "type": "object",
@@ -630,7 +634,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "recurse": {"type": "boolean", "default": False},
                 "sort_by": {
                     "type": "string",
-                    "enum": ["cookTime", "cpuCookTime"],
+                    "enum": [
+                        "cookTime",
+                        "cpuCookTime",
+                        "gpuCookTime",        # v2.4 / Phase A.4
+                        "cudaMemoryBytes",    # v2.4 / Phase A.4
+                    ],
                     "default": "cookTime",
                 },
                 "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 200},
