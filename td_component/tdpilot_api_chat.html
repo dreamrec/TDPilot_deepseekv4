@@ -1075,9 +1075,14 @@
   // catches it (no message lost).
   let awaitingTurnEnd = false;
   let pendingTurnEndTimer = null;
-  // 90s — covers slow DeepSeek turns + tool chains; a stuck button
-  // beyond this is the worse failure mode.
-  const TURN_END_SAFETY_MS = 90000;
+  // v2.4 / B-009 (live-debug 2026-05-13) — bumped from 90s → 240s.
+  // Live observation: pro extended-thinking turns on complex prompts
+  // ("Build a kaleidoscope feedback loop") routinely take 60-180s
+  // for ONE DeepSeek API call (no events emitted during the urlopen).
+  // The 90s ceiling tripped the watchdog idle-timeout while the agent was
+  // still thinking. 240s gives pro enough room for the slowest
+  // single-call observed; longer = real WS drop / worker hang.
+  const TURN_END_SAFETY_MS = 240000;
 
   function clearAwaitingTurnEnd() {
     if (pendingTurnEndTimer !== null) {
@@ -2394,6 +2399,25 @@
 
   function applyMessage(msg) {
     if (!msg || !msg.type) return;
+    // v2.4 / B-009 (live-debug 2026-05-13) — false-timeout recovery.
+    // If the JS watchdog tripped the idle-timeout mid-turn (e.g. a slow
+    // pro extended-thinking call exceeded TURN_END_SAFETY_MS while
+    // emitting no events), the next runtime event proves the agent is
+    // still alive. tool_call / tool_result / append are unambiguous
+    // proof-of-life; restore the working state instead of letting the
+    // user keep staring at "idle (timeout)" while tool calls visibly
+    // stream into the chat. ('model' and 'usage' alone don't recover
+    // — they can arrive during shutdown bookkeeping after a real end.)
+    const isProofOfLife = (
+      msg.type === 'tool_call' ||
+      msg.type === 'tool_result' ||
+      msg.type === 'append'
+    );
+    if (isProofOfLife && !awaitingTurnEnd && agentState.startsWith('idle')) {
+      awaitingTurnEnd = true;
+      $send.disabled = true;
+      setAgentStatus('thinking…');
+    }
     switch (msg.type) {
       case 'append':       appendMessage(msg.role, msg.message); break;
       case 'tool_call':    appendToolCall(msg); break;

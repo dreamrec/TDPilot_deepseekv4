@@ -442,6 +442,19 @@ class Agent:
         # ``kind`` is a short stable identifier ("api_retry",
         # "api_retry_exhausted"); ``message`` is a human-readable string.
         on_hint: Callable[[str, str], None] = _noop,
+        # v2.4 / B-009 (live-debug 2026-05-13) — heartbeat during long API
+        # calls. Pro extended-thinking turns can block on urlopen for
+        # 60-180s with no events emitted; the frontend's prior 90s activity
+        # watchdog tripped 'idle (timeout)' falsely while the agent was
+        # still thinking. Fires every ``heartbeat_interval`` seconds while
+        # urlopen is pending; the runtime wires this to push EV_STATE
+        # ("thinking") onto the event queue, which broadcasts via WS and
+        # re-arms the JS watchdog. No-op by default so unit tests don't
+        # need TD bindings to instantiate Agent.
+        on_heartbeat: Callable[[], None] = _noop,
+        # Interval between heartbeats during a single API call. 30s is
+        # well inside the bumped JS watchdog window (240s).
+        heartbeat_interval: float = 30.0,
         # v2.4 / Phase B.1 — screenshot vision pipeline. When True, the
         # _loop strips ``data_base64`` from td_screenshot tool_results and
         # injects a sibling ``image`` content block in the same user turn
@@ -530,6 +543,11 @@ class Agent:
         self.max_retries = max(0, int(max_retries))
         self.initial_backoff = max(0.1, float(initial_backoff))
         self.on_hint = on_hint
+        # v2.4 / B-009 (live-debug 2026-05-13) — heartbeat surface.
+        self.on_heartbeat = on_heartbeat
+        # Clamp to ≥ 1s to prevent pathological per-call thread storms
+        # from a misconfigured COMP param.
+        self.heartbeat_interval = max(1.0, float(heartbeat_interval))
         # v2.4 / Phase B.1 — screenshot vision flag. Off by default.
         self.enable_vision_pipeline = bool(enable_vision_pipeline)
         # v2.4 / Phase C.9 — thinking budget. Clamped to ≥ 0 so a bad
@@ -1228,10 +1246,41 @@ class Agent:
             if self._stop_flag.is_set():
                 raise AgentError("Interrupted before API call")
             try:
-                with urllib.request.urlopen(
-                    req, timeout=self.request_timeout, context=ctx
-                ) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
+                # v2.4 / B-009 (live-debug 2026-05-13) — heartbeat thread.
+                # urlopen blocks the worker thread for the full duration of
+                # the DeepSeek call (no streaming on this code path). With
+                # pro extended thinking that can be 60-180s. The frontend's
+                # activity watchdog only re-arms on incoming WS events, so
+                # the long silence used to trip a false 'idle (timeout)'.
+                # This thread pulses on_heartbeat → runtime pushes
+                # EV_STATE("thinking") → broadcast WS → frontend re-arms.
+                # Daemon + Event-stop pair so the heartbeat dies on the
+                # finally branch regardless of how urlopen exits (success,
+                # HTTPError, URLError, timeout).
+                _hb_stop = threading.Event()
+
+                def _heartbeat_loop(stop_event: threading.Event = _hb_stop) -> None:
+                    # Bind _hb_stop into the default-arg to avoid late-binding
+                    # over the retry-loop iteration variable (ruff B023).
+                    while not stop_event.wait(self.heartbeat_interval):
+                        try:
+                            self.on_heartbeat()
+                        except Exception:  # noqa: BLE001 — pulse must never crash worker
+                            pass
+
+                _hb_thread = threading.Thread(
+                    target=_heartbeat_loop,
+                    daemon=True,
+                    name="tdpilot-api-heartbeat",
+                )
+                _hb_thread.start()
+                try:
+                    with urllib.request.urlopen(
+                        req, timeout=self.request_timeout, context=ctx
+                    ) as resp:
+                        return json.loads(resp.read().decode("utf-8"))
+                finally:
+                    _hb_stop.set()
             except urllib.error.HTTPError as exc:
                 try:
                     detail = exc.read().decode("utf-8")

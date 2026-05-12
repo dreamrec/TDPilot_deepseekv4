@@ -918,6 +918,13 @@ class AgentRuntime:
             # so the promotion survives a chat-panel reload (start_turn
             # re-reads the COMP param every turn).
             on_tier_change=self._sync_model_tier_to_comp,
+            # v2.4 / B-009 (live-debug 2026-05-13) — heartbeat. Fires every
+            # ``heartbeat_interval`` (default 30s) while the agent is
+            # blocked on a urlopen to DeepSeek. We push EV_STATE("thinking")
+            # so the WS event re-arms the JS activity watchdog. Without
+            # this, pro extended-thinking turns of 60-180s tripped a false
+            # 'idle (timeout)' in the chat panel.
+            on_heartbeat=lambda: self._push(EV_STATE, "thinking"),
             # Phase 2 (1.8.0) — per-call token usage to the chat
             # status bar. Sanitised to int-or-zero so the frontend
             # never sees a stray non-numeric field.
