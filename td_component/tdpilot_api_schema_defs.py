@@ -698,6 +698,21 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Markdown body of the memory.",
                 },
+                "content_type": {
+                    "type": "string",
+                    "enum": ["instruction", "reference", "fact"],
+                    "description": (
+                        "How pre-turn BM25 retrieval should treat this entry. "
+                        "Default 'reference' — entry freely surfaces on any "
+                        "matching query. Pick 'instruction' for step lists, "
+                        "recipes, 'how to do X' procedures — those entries "
+                        "are then HIDDEN from generic queries and surface "
+                        "only when the user explicitly names them. "
+                        "(Prevents drive-by tool execution from short prompts "
+                        "matching instruction-shaped memories.) Pick 'fact' "
+                        "for assertions / static knowledge."
+                    ),
+                },
             },
             "required": ["name", "type", "content"],
         },
@@ -876,6 +891,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "description": "reference / guide / catalog / tutorial / project.",
                 },
                 "content": {"type": "string", "description": "Markdown body."},
+                "content_type": {
+                    "type": "string",
+                    "enum": ["instruction", "reference", "fact"],
+                    "description": (
+                        "How pre-turn BM25 retrieval should treat this entry. "
+                        "Default 'reference' — entry surfaces freely on matching "
+                        "queries (the right pick for descriptive knowledge: "
+                        "operator docs, API surfaces, conventions). Pick "
+                        "'instruction' for step-list guides — those then surface "
+                        "only when the user explicitly names them, avoiding "
+                        "drive-by tool execution from incidental short-prompt "
+                        "matches."
+                    ),
+                },
             },
             "required": ["name", "content"],
         },
@@ -934,6 +963,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "required": ["tool"],
                     },
                     "description": "List of {tool, args} dicts — the executable replay sequence.",
+                },
+                "content_type": {
+                    "type": "string",
+                    "enum": ["instruction", "reference", "fact"],
+                    "description": (
+                        "How pre-turn BM25 retrieval should treat this recipe. "
+                        "Default 'instruction' — recipes are step lists by "
+                        "design, so they surface ONLY when the user explicitly "
+                        "names them (avoids drive-by replay from incidental "
+                        "matches). Pass 'reference' for documentation-style "
+                        "recipes the user should be able to search by content."
+                    ),
                 },
             },
             "required": ["name", "replay"],

@@ -186,10 +186,13 @@ def _insecure_mode() -> bool:
        very rare error path where the COMP isn't resolvable AND the
        env var is unset.
 
-    Default Authmode is ``"open"`` (set in the build script's
-    ``_API_PAGE`` schema). New users get drag-and-go; users who need
-    multi-machine/LAN security flip Authmode to ``"token"`` in the
-    COMP's param panel.
+    Default Authmode is ``"token"`` (flipped in v2.3.0, commit
+    ``ef0aec2`` — bilateral audit). New users get secure-by-default
+    token auth; users who want drag-and-go convenience can flip
+    Authmode to ``"open"`` in the COMP's param panel. Legacy COMPs
+    built pre-v2.3.0 still ship with ``Authmode=open`` baked in —
+    the v2.4 ``/firstrun`` wizard surfaces an opt-in switch to
+    token mode for those (see Phase B.2 in the v2.4 plan).
     """
     # 1. COMP param wins.
     try:
@@ -440,6 +443,65 @@ def onHTTPRequest(webServerDAT, request, response):
         except Exception as exc:
             debug(f"[tdpilot_API/web] /firstrun failed: {exc}")
             _json(response, 500, {"ok": False, "error": str(exc)}, request_origin=request_origin)
+        return response
+
+    if method == "POST" and path == "/set-authmode":
+        # v2.4 / Phase B.2 — wizard endpoint for the Authmode=open→token
+        # migration. Flips the COMP param + rotates the session token.
+        # Tab reload is the responsibility of the caller (the chat HTML
+        # does window.location.reload() after a 200 so the new token is
+        # injected by the GET / template substitution).
+        #
+        # This route sits BELOW _check_auth, so a legacy-open COMP can
+        # hit it without a token (origin allowlist still required); a
+        # token-mode COMP holding a valid token can flip to open or
+        # rotate the token. We DELIBERATELY do not require explicit
+        # confirmation of the previous state — the user already opted
+        # in via the wizard button.
+        raw = (_read_body(request) or "").strip()
+        try:
+            payload = json.loads(raw) if raw.startswith("{") else {}
+        except json.JSONDecodeError:
+            payload = {}
+        mode = str(payload.get("mode", "")).strip().lower()
+        if mode not in ("open", "token"):
+            _text(
+                response,
+                400,
+                'mode must be "open" or "token"',
+                request_origin=request_origin,
+            )
+            return response
+        try:
+            comp = _comp()
+            prev = ""
+            if comp is not None and hasattr(comp.par, "Authmode"):
+                prev = str(comp.par.Authmode.val or "").lower()
+                comp.par.Authmode = mode
+            new_token = ""
+            if mode == "token":
+                # Rotate so any stale tabs holding an old token are
+                # invalidated. The 401-recovery banner in the chat HTML
+                # picks them up and prompts reload (existing behavior).
+                try:
+                    comp.unstore(_STORAGE_KEY_TOKEN)
+                except Exception:
+                    pass
+                new_token = _session_token()
+            _json(
+                response,
+                200,
+                {"ok": True, "mode": mode, "previous": prev, "token": new_token},
+                request_origin=request_origin,
+            )
+        except Exception as exc:
+            debug(f"[tdpilot_API/web] /set-authmode failed: {exc}")
+            _json(
+                response,
+                500,
+                {"ok": False, "error": str(exc)},
+                request_origin=request_origin,
+            )
         return response
 
     ext = _ext()

@@ -57,6 +57,15 @@ except ImportError:
     MEMORY_DIR = Path.home() / ".tdpilot-api" / "memory"
 MEMORY_INDEX = MEMORY_DIR / "MEMORY.md"
 VALID_TYPES = ("user", "feedback", "project", "reference")
+# v2.4 / Phase B.4 — content_type controls pre-turn BM25 retrieval visibility.
+# "instruction" entries are step lists / how-to guides — surfaced ONLY when
+# the user explicitly names them, never on generic queries (closes the
+# drive-by-tool-execution bug where the model treated retrieval hits as
+# user-issued commands). "reference" / "fact" entries are descriptive and
+# freely searchable. Legacy entries without this field default to
+# "reference" on read (safest — they remain visible to BM25).
+VALID_CONTENT_TYPES = ("instruction", "reference", "fact")
+DEFAULT_CONTENT_TYPE = "reference"
 MAX_INDEX_LINES = 200
 
 
@@ -233,6 +242,13 @@ def handle_memory_save(body: dict) -> dict:
     content = (body.get("content") or "").strip()
     mtype = (body.get("type") or "").strip().lower()
     description = (body.get("description") or "").strip()
+    # v2.4 / Phase B.4 — content_type opt-in field. Default "reference" so
+    # callers who don't pass it get BM25-visible entries (preserves prior
+    # behaviour). Callers explicitly tagging step lists with "instruction"
+    # opt INTO the safer hide-from-generic-queries discipline.
+    content_type = (
+        body.get("content_type") or DEFAULT_CONTENT_TYPE
+    ).strip().lower()
 
     if not name:
         return {"error": "Missing required field: name"}
@@ -242,18 +258,29 @@ def handle_memory_save(body: dict) -> dict:
         return {
             "error": f"Invalid type: {mtype!r}. Must be one of {list(VALID_TYPES)}.",
         }
+    if content_type not in VALID_CONTENT_TYPES:
+        return {
+            "error": (
+                f"Invalid content_type: {content_type!r}. "
+                f"Must be one of {list(VALID_CONTENT_TYPES)}."
+            ),
+        }
 
     _ensure_dir()
     filename = _safe_filename(name, mtype)
     filepath = MEMORY_DIR / filename
 
-    full = f"---\nname: {name}\ndescription: {description}\ntype: {mtype}\n---\n\n{content}\n"
+    full = (
+        f"---\nname: {name}\ndescription: {description}\n"
+        f"type: {mtype}\ncontent_type: {content_type}\n---\n\n{content}\n"
+    )
     filepath.write_text(full, encoding="utf-8")
     _write_index()
     return {
         "ok": True,
         "filename": filename,
         "path": str(filepath),
+        "content_type": content_type,
         "index_lines": len(_build_index_text().splitlines()),
     }
 
@@ -348,12 +375,18 @@ def handle_memory_recall(body: dict) -> dict:
         mtype = meta.get("type") or "unknown"
         if type_filter and mtype != type_filter:
             continue
+        # v2.4 / Phase B.4 — propagate content_type with default-on-read
+        # so legacy frontmatter without the field still flows through as
+        # "reference" (the safe, freely-searchable default).
         docs.append(
             {
                 "filename": p.name,
                 "name": meta.get("name") or p.stem,
                 "description": meta.get("description") or "",
                 "type": mtype,
+                "content_type": (
+                    meta.get("content_type") or DEFAULT_CONTENT_TYPE
+                ).strip().lower(),
                 "text": body_text,
             }
         )
@@ -538,6 +571,10 @@ def _bm25_search(query: str, docs: list[dict], top_k: int) -> list[dict]:
                 "filename": doc.get("filename"),
                 "name": doc.get("name"),
                 "type": doc.get("type"),
+                # v2.4 / Phase B.4 — surface content_type so the pre-turn
+                # retrieval filter (in tdpilot_api_runtime._run_pre_turn_retrieval)
+                # can suppress "instruction" hits on generic prompts.
+                "content_type": doc.get("content_type") or DEFAULT_CONTENT_TYPE,
                 "description": doc.get("description"),
                 "score": round(score, 3),
                 "snippet": snippet,

@@ -167,6 +167,54 @@ _MAX_BACKOFF_SECONDS = 60.0
 _NON_RETRYABLE_HTTP_CODES = frozenset({400, 401, 403, 404})
 
 
+# ---------------------------------------------------------------------------
+# v2.4 / Phase B.1 — screenshot vision pipeline (feature-flagged).
+# DeepSeek's Anthropic-compat /v1/messages endpoint cannot surface base64
+# inside ``tool_result`` blocks — the model literally cannot see screenshots
+# taken via td_screenshot today. The vision pipeline:
+#   1. Strips ``data_base64`` from the tool_result that lands in self.messages
+#      (saves cached-prefix tokens + keeps the JSON small).
+#   2. Injects a proper ``image`` content block in the SAME user turn (image
+#      blocks must live in user content per Anthropic spec; interleaving
+#      tool_result + image keeps role alternation clean).
+#   3. Still broadcasts the full base64 to the chat UI via the WS path —
+#      that surface lives in the runtime layer, untouched.
+#
+# Ships behind ``enable_vision_pipeline`` (default False) until a live
+# DeepSeek call confirms its compat layer accepts ``image`` blocks. If
+# DeepSeek returns 400 on the first call with an image block, set the
+# flag back to False and revert to the legacy embedded-base64 behavior.
+# ---------------------------------------------------------------------------
+
+
+def _split_screenshot_payload(
+    tool_name: str, result: Any
+) -> tuple[Any, str | None, str]:
+    """Return ``(slim_result, b64_or_None, media_type)``.
+
+    For non-screenshot tools or non-dict results, returns the input unchanged
+    + ``None`` base64. For screenshot dicts carrying ``data_base64``, returns
+    a copy with that field replaced by a small ``image_omitted_for_compat``
+    marker, plus the raw base64 string the caller can pack into an image
+    content block.
+
+    ``media_type`` is a best-effort guess from the result's ``format`` field
+    (defaults to ``"image/jpeg"`` which matches handle_screenshot's current
+    output).
+    """
+    if tool_name != "td_screenshot" or not isinstance(result, dict):
+        return result, None, ""
+    b64 = result.get("data_base64")
+    if not isinstance(b64, str) or not b64:
+        return result, None, ""
+    fmt = str(result.get("format") or "jpeg").lower().lstrip(".")
+    media_type = "image/png" if fmt == "png" else "image/jpeg"
+    slim = {k: v for k, v in result.items() if k != "data_base64"}
+    slim["image_omitted_for_compat"] = True
+    slim["content_type"] = media_type
+    return slim, b64, media_type
+
+
 def _parse_retry_after(headers: Any, default: float) -> float:
     """Parse a Retry-After header into seconds, falling back to ``default``.
 
@@ -366,6 +414,14 @@ class Agent:
         # ``kind`` is a short stable identifier ("api_retry",
         # "api_retry_exhausted"); ``message`` is a human-readable string.
         on_hint: Callable[[str, str], None] = _noop,
+        # v2.4 / Phase B.1 — screenshot vision pipeline. When True, the
+        # _loop strips ``data_base64`` from td_screenshot tool_results and
+        # injects a sibling ``image`` content block in the same user turn
+        # so the model can actually see the screenshot. Default False
+        # until a live DeepSeek call confirms its compat layer accepts
+        # image blocks in user content. The WS broadcast path (chat UI)
+        # is untouched — full base64 still reaches the browser.
+        enable_vision_pipeline: bool = False,
     ) -> None:
         if not api_key:
             raise AgentError("api_key is required")
@@ -422,6 +478,8 @@ class Agent:
         self.max_retries = max(0, int(max_retries))
         self.initial_backoff = max(0.1, float(initial_backoff))
         self.on_hint = on_hint
+        # v2.4 / Phase B.1 — screenshot vision flag. Off by default.
+        self.enable_vision_pipeline = bool(enable_vision_pipeline)
 
         self.messages: list[dict] = []
         self._stop_flag = threading.Event()
@@ -743,6 +801,12 @@ class Agent:
                     rollback_guard = None
 
             results_block: list[dict] = []
+            # v2.4 / Phase B.1 — vision-pipeline image-block buffer. Each
+                # entry is ``(tool_result_index, image_block)`` so we can
+                # interleave after the for-loop closes. Skipped entirely
+                # when the feature flag is off — preserves byte-for-byte
+                # legacy behavior pre-v2.4.
+            pending_image_blocks: list[tuple[int, dict]] = []
             try:
                 if rollback_guard is not None:
                     rollback_guard.__enter__()
@@ -781,15 +845,43 @@ class Agent:
                             "error": f"{type(exc).__name__}: {exc}",
                         }
                         is_error = True
+                    # v2.4 / Phase B.1 — split screenshot payload so the
+                    # tool_result that lands in self.messages doesn't carry
+                    # base64 (which DeepSeek's compat layer can't decode
+                    # and which costs cached-prefix tokens on every turn).
+                    # The base64 itself becomes an ``image`` content block
+                    # appended right after this tool_result, in the same
+                    # user turn.
+                    history_result = result
+                    image_b64: str | None = None
+                    image_mt = ""
+                    if self.enable_vision_pipeline:
+                        history_result, image_b64, image_mt = (
+                            _split_screenshot_payload(tool_name, result)
+                        )
                     self.on_tool_result(tool_name, result, is_error)
                     results_block.append(
                         {
                             "type": "tool_result",
                             "tool_use_id": tool_id,
-                            "content": _stringify(result),
+                            "content": _stringify(history_result),
                             "is_error": is_error,
                         }
                     )
+                    if image_b64:
+                        pending_image_blocks.append(
+                            (
+                                len(results_block) - 1,
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": image_mt or "image/jpeg",
+                                        "data": image_b64,
+                                    },
+                                },
+                            )
+                        )
             finally:
                 if rollback_guard is not None:
                     # __exit__ runs the post-batch check + decides rollback;
@@ -804,6 +896,15 @@ class Agent:
             # Logic extracted into ``_apply_rollback_hint`` for direct
             # unit-testing (Codex P2 followup on PR #34).
             self._apply_rollback_hint(rollback_guard, results_block)
+
+            # v2.4 / Phase B.1 — interleave pending image blocks after
+            # their matching tool_results so the user turn looks like
+            # [tool_result, image, tool_result, image, ...]. Walk in
+            # reverse so the index references stay valid as we insert.
+            if pending_image_blocks:
+                for tr_idx, image_block in reversed(pending_image_blocks):
+                    # Insert AFTER the tool_result at tr_idx.
+                    results_block.insert(tr_idx + 1, image_block)
 
             self.messages.append({"role": "user", "content": results_block})
 

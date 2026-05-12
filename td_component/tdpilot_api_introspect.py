@@ -299,11 +299,43 @@ def firstrun_status() -> dict:
 
     is_first_run = not (has_api_key or has_memory or has_brains)
 
+    # v2.4 / Phase B.2 — detect Authmode so the chat UI can prompt
+    # legacy COMPs (built pre-v2.3.0, when the default was "open") to
+    # opt INTO token mode. Reads the COMP param directly so the wizard
+    # accurately reflects current state, not the build-script default.
+    authmode = ""
+    try:
+        comp = parent()  # type: ignore[name-defined] # noqa: F821
+        if comp is not None and hasattr(comp.par, "Authmode"):
+            authmode = str(comp.par.Authmode.val or "").strip().lower()
+    except NameError:
+        # Not running inside TD (e.g. in tests) — leave empty.
+        authmode = ""
+    except Exception:
+        authmode = ""
+    authmode_is_open = authmode == "open"
+
     # Steps the chat UI should highlight. Order matches the wizard
     # flow: paste key first (everything else is gated on it), then
     # invite the user to save a memory once they've had a real
     # conversation, then optionally install a brain.
     next_steps: list[dict] = []
+    # v2.4 / Phase B.2 — surface the Authmode migration BEFORE other
+    # steps so legacy-open users see it first. Acts as a soft nudge,
+    # not a forced switch (drag-and-go convenience is preserved for
+    # users who genuinely want it).
+    if authmode_is_open:
+        next_steps.append(
+            {
+                "name": "switch_to_token_auth",
+                "label": (
+                    "Auth is OPEN — any local browser tab can drive "
+                    "TouchDesigner. Recommended: switch to token auth."
+                ),
+                "done": False,
+                "recommended_action": "switch_to_token",
+            }
+        )
     if not has_api_key:
         next_steps.append(
             {
@@ -335,5 +367,8 @@ def firstrun_status() -> dict:
         "has_api_key": has_api_key,
         "has_memory": has_memory,
         "has_brains": has_brains,
+        # v2.4 / Phase B.2 — Authmode surface for the migration wizard.
+        "authmode": authmode,
+        "authmode_is_open": authmode_is_open,
         "next_steps": next_steps,
     }

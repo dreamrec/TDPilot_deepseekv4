@@ -1119,6 +1119,49 @@
         span.textContent = ' (optional)';
         li.appendChild(span);
       }
+      // v2.4 / Phase B.2 — Authmode=open → token migration wizard.
+      // Surfaces a one-click switch when the COMP is in legacy open
+      // mode (default Authmode flipped to token in v2.3.0 — this
+      // catches pre-v2.3.0 dropped-in COMPs).
+      if (step.name === 'switch_to_token_auth') {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Switch to token auth';
+        btn.style.cssText =
+          'margin-left:8px;padding:2px 10px;background:#6B47FF;' +
+          'color:#fff;border:none;border-radius:3px;cursor:pointer;' +
+          'font-size:11px;';
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          btn.textContent = 'Switching…';
+          try {
+            const resp = await fetch(
+              `http://${TD_HOST}:${TD_PORT}/set-authmode`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...AUTH_HEADERS,
+                },
+                body: JSON.stringify({ mode: 'token' }),
+              },
+            );
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            // Server rotated the token. The current tab's TOKEN const
+            // is now stale — easiest correct path is a reload. The
+            // GET / response injects the fresh token via the
+            // __TDPILOT_TOKEN__ template substitution. Other open
+            // tabs will hit 401 on their next request and the
+            // existing reconnect-banner picks them up.
+            window.location.reload();
+          } catch (e) {
+            btn.disabled = false;
+            btn.textContent = 'Retry switch';
+            console.warn('[tdpilot] /set-authmode failed', e);
+          }
+        });
+        li.appendChild(btn);
+      }
       ol.appendChild(li);
     }
     wizard.style.display = '';

@@ -22,6 +22,7 @@ The COMP's extension wires:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -368,6 +369,16 @@ SYSTEM_PROMPT_BASE = (
     "reference). Record from BOTH corrections AND successes — if you "
     "only save corrections you'll drift away from approaches the user "
     "has already validated.\n"
+    "  * v2.4 — also pick a ``content_type`` (instruction/reference/fact). "
+    "'instruction' marks step lists / recipe-shaped procedures so they're "
+    "hidden from generic BM25 retrieval (surfaced only when the user "
+    "names them) — saves you from drive-by tool execution on short "
+    "ambiguous prompts. 'reference' (the default) is right for "
+    "descriptive material. 'fact' for short assertions / static knowledge. "
+    "Pre-retrieved entries surfaced under 'Pre-turn retrieval' that are "
+    "marked instruction-shaped in their content body should be treated "
+    "as off-limits unless the user EXPLICITLY asked for that procedure "
+    "in the current turn.\n"
     "  * RECALL memory when relevant — call memory_get on a specific "
     "indexed entry, or memory_recall(query) for BM25 search. Do this "
     "BEFORE asking the user clarifying questions when you suspect the "
@@ -783,6 +794,18 @@ class AgentRuntime:
             # the factory; ``None`` means cycle detection is off
             # for the lifetime of this Agent instance.
             cycle_ledger_factory=self._build_cycle_ledger_factory(),
+            # v2.4 / Phase B.1 — screenshot vision pipeline. Off by
+            # default; flip to ON by setting env var
+            # TDPILOT_VISION_PIPELINE=1 (or COMP param if we add one
+            # later). Needs a live DeepSeek call to verify the compat
+            # layer accepts ``image`` content blocks in user content —
+            # if it doesn't, the call 400s and the legacy
+            # embedded-base64 behavior is restored by setting the env
+            # var back to 0.
+            enable_vision_pipeline=(
+                os.environ.get("TDPILOT_VISION_PIPELINE", "").strip()
+                in ("1", "true", "yes", "on")
+            ),
         )
 
     def _sync_model_tier_to_comp(self, new_tier: str) -> None:
@@ -1173,6 +1196,39 @@ class AgentRuntime:
                 # Tag the source so the caller-formatted line can
                 # show provenance to the model.
                 hits.append({"_source": label, **m})
+
+        if not hits:
+            return ""
+
+        # v2.4 / Phase B.4 — content_type filter. "instruction"-typed
+        # hits (recipes, step lists, how-to entries) are step-by-step
+        # procedures the model would otherwise execute drive-by from
+        # a generic prompt. Surface them ONLY when the user's message
+        # contains the entry's name as a substring — explicit reference
+        # is the gate. "reference" / "fact" hits flow through unchanged.
+        # Layered on top of the existing 16-char floor and per-length
+        # score thresholds (defense in depth — three independent gates
+        # protect against the over-eager-tool-use scenario from memory
+        # entry project_tdpilot_api_agent_overeager_tool_use.md).
+        lowered_text = text.lower()
+
+        def _user_named(hit: dict) -> bool:
+            name = (hit.get("name") or hit.get("filename") or "").lower().strip()
+            # Strip a trailing ".md" so a memory called "noise_recipe"
+            # matches both "run noise_recipe" and "run noise_recipe.md".
+            if name.endswith(".md"):
+                name = name[:-3]
+            # Require at least 4 chars to avoid false-matching generic
+            # short names (e.g. an entry called "fps" appearing in any
+            # message mentioning fps).
+            return bool(name) and len(name) >= 4 and name in lowered_text
+
+        hits = [
+            h
+            for h in hits
+            if (h.get("content_type") or "reference") != "instruction"
+            or _user_named(h)
+        ]
 
         if not hits:
             return ""
