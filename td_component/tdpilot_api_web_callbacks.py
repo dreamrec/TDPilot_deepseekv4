@@ -445,6 +445,31 @@ def onHTTPRequest(webServerDAT, request, response):
             _json(response, 500, {"ok": False, "error": str(exc)}, request_origin=request_origin)
         return response
 
+    if method == "GET" and path == "/capabilities-summary":
+        # v2.4 / Phase C.6 — capability summary for the chat HTML.
+        # Pure data; safe to serve before the runtime is ready, so it
+        # sits above the ext-ready gate (parallel to /firstrun).
+        try:
+            from tdpilot_api_introspect import (  # type: ignore[import-not-found]
+                handle_get_capabilities_summary,
+            )
+
+            _json(
+                response,
+                200,
+                handle_get_capabilities_summary({}),
+                request_origin=request_origin,
+            )
+        except Exception as exc:
+            debug(f"[tdpilot_API/web] /capabilities-summary failed: {exc}")
+            _json(
+                response,
+                500,
+                {"ok": False, "error": str(exc)},
+                request_origin=request_origin,
+            )
+        return response
+
     if method == "GET" and path == "/stats":
         # v2.4 / Phase C.7 — per-session cost telemetry. Read-only,
         # token-gated like every other route. Pulls the runtime's

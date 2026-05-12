@@ -724,6 +724,11 @@
     "properties": {},
     "required": []
   },
+  "td_get_capabilities_summary": {
+    "description_present": true,
+    "properties": {},
+    "required": []
+  },
   "td_get_connections": {
     "description_present": true,
     "properties": {

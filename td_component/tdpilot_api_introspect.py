@@ -217,6 +217,131 @@ def handle_get_capabilities(body: dict) -> dict:
     return caps
 
 
+# v2.4 / Phase C.6 — capability summary for UI discoverability.
+# Static data, allocated once on module load. Mirrors the MCP-side
+# constant in src/td_mcp/registry/tools_info.py — keep them in sync
+# when you add a new tool family. Each group's `examples` are <= 50
+# chars so they fit as chips below the chat input.
+_CAPABILITIES_SUMMARY: dict[str, Any] = {
+    "schema_version": 1,
+    "groups": [
+        {
+            "id": "build",
+            "title": "Build",
+            "blurb": "Create operators, wire networks, scaffold recipes.",
+            "primary_tools": [
+                "td_create_node",
+                "td_connect_nodes",
+                "td_set_params",
+                "patch_apply",
+            ],
+            "examples": [
+                "Build a kaleidoscope feedback loop",
+                "Add a Constant TOP wired to a Composite TOP",
+                "Replay my 'audio-react' recipe",
+            ],
+        },
+        {
+            "id": "diagnose",
+            "title": "Diagnose",
+            "blurb": "Find errors, profile cooks, detect drift.",
+            "primary_tools": [
+                "td_audit_project",
+                "td_get_errors",
+                "td_cooking_info",
+                "td_detect_instability",
+            ],
+            "examples": [
+                "Audit this project for problems",
+                "Why is the framerate dropping?",
+                "Show recent errors",
+            ],
+        },
+        {
+            "id": "inspect",
+            "title": "Inspect",
+            "blurb": "Survey nodes, describe surface, screenshot.",
+            "primary_tools": [
+                "td_get_nodes",
+                "td_describe_surface",
+                "td_screenshot",
+                "td_get_node_detail",
+            ],
+            "examples": [
+                "List the top 20 nodes by cook time",
+                "Screenshot the network",
+                "Describe this component",
+            ],
+        },
+        {
+            "id": "remember",
+            "title": "Remember",
+            "blurb": "Save techniques and recall them by topic.",
+            "primary_tools": [
+                "memory_save",
+                "memory_recall",
+                "memory_list",
+                "knowledge_save",
+            ],
+            "examples": [
+                "Remember this as 'soft-glow'",
+                "What memories about feedback?",
+                "List my memories",
+            ],
+        },
+        {
+            "id": "recipes",
+            "title": "Recipes",
+            "blurb": "Replay saved techniques or save a new one.",
+            "primary_tools": [
+                "recipe_replay",
+                "recipe_save",
+                "recipe_recall",
+            ],
+            "examples": [
+                "Replay 'audio-react' here",
+                "Save this network as a recipe",
+                "Show favorite recipes",
+            ],
+        },
+        {
+            "id": "learn",
+            "title": "Learn / Lookup",
+            "blurb": "Search docs, find examples, get operator help.",
+            "primary_tools": [
+                "knowledge_search",
+                "td_find_official_example",
+                "td_get_operator_doc",
+            ],
+            "examples": [
+                "How does Trail CHOP work?",
+                "Find an example using Particle GPU",
+                "Snippet for vertex shader",
+            ],
+        },
+    ],
+    "featured_prompts": [
+        "Build a kaleidoscope feedback loop",
+        "Audit this project for problems",
+        "Replay my 'audio-react' recipe",
+        "Screenshot the network",
+        "Why is the framerate dropping?",
+        "What memories about feedback?",
+    ],
+}
+
+
+def handle_get_capabilities_summary(body: dict) -> dict:
+    """v2.4 / Phase C.6 — return the grouped capability index.
+
+    Pure-data tool: no live TD calls, no side effects. The chat UI
+    fetches it on first load to populate "featured prompt" chips
+    below the input field; the agent can also call it directly to
+    answer "what can you do?".
+    """
+    return _CAPABILITIES_SUMMARY
+
+
 # ---------------------------------------------------------------------------
 # Phase 5.2 — first-run detection
 # ---------------------------------------------------------------------------

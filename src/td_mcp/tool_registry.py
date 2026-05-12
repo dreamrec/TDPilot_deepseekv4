@@ -2019,6 +2019,7 @@ from td_mcp.registry.tools_hints import (  # noqa: E402
 )
 from td_mcp.registry.tools_info import (  # noqa: E402
     td_get_capabilities,
+    td_get_capabilities_summary,  # v2.4 / Phase C.6
     td_get_info,
     td_get_server_metrics,
     td_list_families,

@@ -1950,6 +1950,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
+        "name": "td_get_capabilities_summary",
+        "description": (
+            "v2.4 / Phase C.6 — return a grouped human-readable capability "
+            "index with example prompts per group. Use when the user asks "
+            "'what can you do?' or to render UI affordances (the chat HTML "
+            "renders 5–6 'featured prompt' chips from `featured_prompts` "
+            "on first load). Pure data — no live TD calls."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
         "name": "tool_batch",
         "description": (
             "Run multiple TDPilot tool calls in one round trip. Saves "
