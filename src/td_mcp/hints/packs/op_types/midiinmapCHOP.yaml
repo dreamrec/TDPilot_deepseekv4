@@ -1,0 +1,68 @@
+schema_version: 1
+op_types: [midiinmapCHOP]
+hints:
+  - id: midiinmap_requires_midiin_source
+    priority: critical
+    rule: |
+      `midiinmapCHOP` is a MAPPER — it must be wired to a `midiinCHOP`
+      input. The midiinCHOP selects the physical device (via its
+      Device parameter, sourced from `app.midiDeviceManager`); the
+      midiinmapCHOP then maps individual CC / note / pitch events
+      into named channels. Use `td_midi_devices()` (v2.4) to list
+      available devices BEFORE setting `midiinCHOP.par.device` —
+      hardcoding a name that doesn't exist on the current machine
+      silently produces an empty channel set, which the agent then
+      mistakes for "wiring works, controller isn't sending data".
+    source: hint_pack
+    source_kind: hint_pack
+    when:
+      op_type: midiinmapCHOP
+
+  - id: midiinmap_learn_workflow
+    priority: useful
+    rule: |
+      To bind a hardware control: set `midiinmapCHOP.par.active = True`,
+      click "Learn" on the target channel row, then move the physical
+      knob / fader. The Channel + Index + Type fields auto-populate
+      from the next MIDI event. For programmatic binding, set
+      `learn` parameter on the row, send the MIDI event, then clear
+      `learn`. Channel rows persist across sessions inside the .toe.
+    source: hint_pack
+    source_kind: hint_pack
+    when:
+      op_type: midiinmapCHOP
+      intent_match: "learn|bind|map|assign|cc|controller"
+
+  - id: midiinmap_channel_name_collision
+    priority: useful
+    rule: |
+      Channel names in midiinmapCHOP must be unique. Duplicate names
+      silently drop the later entry. Use semantic names
+      (e.g. "filter_cutoff", "delay_feedback") not raw CC numbers
+      ("cc23", "cc42") — downstream expressions read by channel
+      name, so re-mapping the controller doesn't require touching
+      the network. Renaming a channel breaks every expression that
+      references it; rebind via the existing name to avoid cascades.
+    source: hint_pack
+    source_kind: hint_pack
+    when:
+      op_type: midiinmapCHOP
+
+  - id: midiinmap_use_td_midi_devices_first
+    priority: useful
+    rule: |
+      v2.4 introduces `td_midi_devices()` which enumerates the
+      `app.midiDeviceManager.inputDevices` + `.outputDevices` lists
+      without screenshots. Call it BEFORE creating a midiinCHOP +
+      midiinmapCHOP chain so the agent picks a device name that
+      actually exists on the user's machine (macOS shows "IAC
+      Driver Bus 1", Windows shows whatever WinMM reports, Linux
+      uses ALSA "<client>:<port>" form — abstracting the platform
+      via the tool removes guesswork).
+    source: hint_pack
+    source_kind: hint_pack
+    when:
+      op_type: midiinmapCHOP
+      intent_match: "midi|controller|device|bind"
+
+next_tools: [td_midi_devices, td_get_param_help, td_chop_data, td_screenshot]

@@ -14,7 +14,7 @@
 [![downloads](https://img.shields.io/npm/dm/tdpilot-dpsk4?label=downloads)](https://www.npmjs.com/package/tdpilot-dpsk4)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![python](https://img.shields.io/badge/python-3.10%2B-blue)](./pyproject.toml)
-[![tools](https://img.shields.io/badge/tools-93%20%28standalone%29%20%C2%B7%20103%20%28CLI%29-blueviolet)](./docs/MANUAL.md)
+[![tools](https://img.shields.io/badge/tools-93%20%28standalone%29%20%C2%B7%20104%20%28CLI%29-blueviolet)](./docs/MANUAL.md)
 [![TouchDesigner](https://img.shields.io/badge/TouchDesigner-2025.30000%2B-ff6200)](https://derivative.ca)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-v4-00a86b)](https://deepseek.com)
 
@@ -28,7 +28,7 @@ Two ways to run it. They coexist in the same TD project if you want both.
 |---|---|---|
 | **Install effort** | Drag one file in, paste a key. | Install Claude Code, install the plugin, configure MCP. |
 | **Where chat lives** | Browser tab + a panel inside TD. | Your Claude Code terminal. |
-| **Tools** | 93 curated for in-TD use | 103 (full surface) |
+| **Tools** | 93 curated for in-TD use | 104 (full surface) |
 | **Best for** | Live performance, quick patches, demos, "no setup" use | Heavy multi-file projects, long sessions, full Claude Code ecosystem |
 | **TD port** | 9987 | 9985 + 9986 |
 | **Config dir** | `~/.tdpilot-api/` | `~/.tdpilot-dpsk4/` |
@@ -121,7 +121,7 @@ If the browser tab shows nothing on first load, give it a second — the embedde
 
 ## Claude Code CLI — first-time install
 
-If you already use Claude Code and want the full 103-tool surface plus the plugin marketplace ecosystem:
+If you already use Claude Code and want the full 104-tool surface plus the plugin marketplace ecosystem:
 
 **1. Install Claude Code.**
 Follow the [Claude Code install docs](https://docs.claude.com/en/docs/claude-code).
@@ -162,7 +162,7 @@ Or paste this `.mcp.json` block into your project root:
 Drag `td_component/tdpilot-dpsk4.tox` into your TD `/local` container. Or run the auto-installer panel inside the .tox.
 
 **5. Talk to TD from your Claude Code terminal.**
-The 103 tools, 3 skills (`tdpilot-dpsk4-core`, `tdpilot-dpsk4-production`, `popx-touchdesigner`), and 2 slash commands (`/td-check`, `/td-snapshot`) are now available.
+The 104 tools, 3 skills (`tdpilot-dpsk4-core`, `tdpilot-dpsk4-production`, `popx-touchdesigner`), and 2 slash commands (`/td-check`, `/td-snapshot`) are now available.
 
 ---
 
@@ -255,7 +255,7 @@ td_component/         TouchDesigner-side source (textDATs baked into the .tox)
   tdpilot_API.tox     Standalone .tox binary
   tdpilot-dpsk4.tox   CLI-bridge .tox binary
   build_tdpilot_api_tox.py   Build script for the standalone .tox
-src/td_mcp/           DPSK4 MCP server (Python, 103 tools)
+src/td_mcp/           DPSK4 MCP server (Python, 104 tools)
 skills/               Claude Code skills (CLI plugin)
 tests/                pytest suite (1848 tests + 12 agent-eval skeletons)
   agent_evals/        Live-integration evals (run with `pytest -m agent_eval`)
