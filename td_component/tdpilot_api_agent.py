@@ -304,6 +304,34 @@ _TIER_RESET_RE = re.compile(
     re.IGNORECASE,
 )
 
+# v2.4 / B-008-T (live-debug 2026-05-13) — TASK-DONE signals. Once
+# task-sticky pro is active (entered by a heuristic-induced pro routing
+# OR by a CycleDetected escalation), the agent stays on pro until the
+# user sends one of these signals — at which point we drop back to the
+# normal auto heuristic. Cost-OK rationale: the user explicitly said
+# costs are small + transparent (visible in the cost pill), so staying
+# on pro across a multi-turn build is the right UX trade-off vs the
+# context-thrash of mid-task tier flips.
+#
+# Conservative set — only fires on CLEAR completion signals, not on
+# casual mid-task acks ("ok"/"yes"/"sure"). Negative signals ("still
+# broken", "not working") deliberately do NOT match — the agent must
+# stay on pro while the user is still asking for help.
+_TASK_DONE_RE = re.compile(
+    r"\b(?:thanks?(?:\s+you)?|thank\s+you|"
+    r"perfect|awesome|excellent|nailed\s+it|"
+    r"ship\s+it|"
+    r"(?:that|it)\s+works(?:\s+now)?|works\s+now|"
+    r"all\s+done|we'?re\s+done|that'?s\s+(?:it|done|all)|"
+    r"looks?\s+(?:good|great|perfect)|"
+    r"done|finished|completed?)\b"
+    # Hard guard: don't fire if the message is asking for MORE work in
+    # the same sentence ("thanks, now also fix Y" — keep on pro).
+    r"(?!.*\b(?:now|but|also|additionally|next|then|and)\b.+\b"
+    r"(?:fix|build|create|add|do|change|update|tweak|adjust)\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 # Default callbacks are no-ops so callers can opt into the events they need.
 def _noop(*_a, **_kw):  # noqa: ANN001
@@ -462,9 +490,20 @@ class Agent:
         # v2.4 / B-008-C (live-debug 2026-05-13) — reactive escalation flag.
         # Set to True by ``run_turn`` when the previous turn died on
         # ``CycleDetected``. Consumed (and reset) by ``_resolve_model`` on
-        # the NEXT auto-tier turn to force pro for one shot. Costs ~3× on
-        # that single turn, but only fires after a known stuck pattern.
+        # the NEXT auto-tier turn to force pro. With B-008-T integrated,
+        # this also enters task-sticky pro so subsequent turns of the
+        # recovery effort stay on pro until the user signals done.
         self._cycle_escalate_next_turn: bool = False
+        # v2.4 / B-008-T (live-debug 2026-05-13, follow-up to A+C) —
+        # TASK-STICKY pro. When the auto heuristic OR cycle-escalation
+        # picks pro, latch this flag so the rest of the multi-turn task
+        # stays on pro (preserves working-memory + DeepSeek auto-cache
+        # across tool-chain turns). Cleared by ``_maybe_clear_task_sticky``
+        # when the user's message matches ``_TASK_DONE_RE`` (thanks /
+        # perfect / done / that works / ...). Explicit user pins
+        # (model_tier=flash/pro) and per-turn overrides take precedence
+        # — this only governs the auto-tier path.
+        self._task_sticky_pro: bool = False
         self.on_model_change = on_model_change
         self.on_tier_change = on_tier_change
         self.base_url = base_url.rstrip("/")
@@ -582,6 +621,31 @@ class Agent:
             self.on_error(exc)
             raise
 
+    def _maybe_clear_task_sticky(self, user_text: str) -> bool:
+        """Clear ``_task_sticky_pro`` if the user's message signals task done.
+
+        Called by ``_loop`` BEFORE ``_resolve_model`` each turn so that the
+        very turn containing the "thanks" / "done" / "that works" signal
+        drops back to the auto heuristic — the user's follow-up question
+        (often a lookup) gets a cheap flash response.
+
+        Returns True if the flag was cleared, False otherwise. Idempotent
+        if the flag was already False (the regex is still evaluated, which
+        is fine — sub-millisecond on short messages).
+
+        Guard against "thanks, now also fix Y"-style mixed messages built
+        into _TASK_DONE_RE's negative lookahead — those keep the flag.
+        """
+        if not self._task_sticky_pro:
+            return False
+        text = user_text or ""
+        if not text:
+            return False
+        if _TASK_DONE_RE.search(text):
+            self._task_sticky_pro = False
+            return True
+        return False
+
     def _maybe_promote_tier(self, user_text: str) -> bool:
         """Mutate ``self.model_tier`` if the user expressed session-scope intent.
 
@@ -665,13 +729,20 @@ class Agent:
             return self.model
         # 3. v2.4 / B-008-C (live-debug 2026-05-13) — REACTIVE ESCALATION.
         # If the previous turn died on CycleDetected (caught in run_turn's
-        # except), the next auto-tier turn forces pro. Rationale: flash's
-        # weaker working memory is the most common cause of the identical-
-        # probe loop that trips the cycle ledger. One pro turn usually
-        # breaks the loop; we then drop back to auto. Costs ~3× on that
-        # one turn, but only fires after a known stuck pattern.
+        # except), force pro AND latch task-sticky so the multi-turn
+        # recovery stays on pro until the user signals done. Pre-B-008-T
+        # this was a one-shot escalation; that lost context if the
+        # recovery itself took >1 turn (which it usually does).
         if self._cycle_escalate_next_turn:
             self._cycle_escalate_next_turn = False
+            self._task_sticky_pro = True
+            return self.model
+        # 3.5. v2.4 / B-008-T — TASK-STICKY pro. Honored AFTER cycle-
+        # escalate (which would set the same flag anyway) and BEFORE the
+        # heuristic recomputes. The flag is cleared by
+        # _maybe_clear_task_sticky on a task-done message, which runs
+        # in _loop BEFORE this method.
+        if self._task_sticky_pro:
             return self.model
         # 4. Auto heuristic (improved 2026-05-13).
         text = (user_text or "").lower()
@@ -739,7 +810,14 @@ class Agent:
         )
         if any(kw in text for kw in structural_nouns):
             score += 1
-        return self.model if score >= 2 else self.flash_model
+        picked = self.model if score >= 2 else self.flash_model
+        # v2.4 / B-008-T — heuristic-induced pro routing latches task-
+        # sticky. The next turn (even a short clarification like "what's
+        # the framerate?") stays on pro, preserving working-memory and
+        # the DeepSeek auto-cache across the multi-turn build.
+        if picked == self.model:
+            self._task_sticky_pro = True
+        return picked
 
     def _loop(self) -> str | None:
         # Phase 4.3 — compact the conversation history if it has grown
@@ -776,6 +854,12 @@ class Agent:
         # before _resolve_model runs so the per-turn pick honours any
         # session-scope intent ("this session", "from now on", ...).
         self._maybe_promote_tier(last_user_text)
+        # v2.4 / B-008-T (live-debug 2026-05-13) — clear task-sticky pro
+        # if the user just signalled task completion ("thanks", "done",
+        # "that works", ...). Runs BEFORE _resolve_model so the very
+        # turn carrying the signal drops to flash for any follow-up
+        # lookup, without an extra round-trip on pro.
+        self._maybe_clear_task_sticky(last_user_text)
         chosen = self._resolve_model(last_user_text)
         # B-004 (live-debug 2026-05-13) — fire on_model_change on EVERY
         # turn, not only when the tier flips. Pre-fix the badge in the

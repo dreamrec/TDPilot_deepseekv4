@@ -159,19 +159,27 @@ def test_b008c_cycle_detect_promotes_next_turn(monkeypatch):
     )
 
 
-def test_b008c_escalation_flag_resets_after_one_use(monkeypatch):
-    """The escalation is one-shot: after using it once, the flag flips
-    back to False and the NEXT next turn routes by normal heuristic."""
+def test_b008c_escalation_flag_consumed_and_promotes_to_sticky(monkeypatch):
+    """B-008-T (live-debug 2026-05-13 follow-up) upgraded the one-shot
+    cycle-escalation to a sticky-pro entry. The ``_cycle_escalate_next_turn``
+    flag is still consumed on the next ``_resolve_model`` call (one-shot
+    semantic preserved for the entry point), but it now also latches
+    ``_task_sticky_pro`` so the recovery effort stays on pro across the
+    multi-turn fix — not just the single turn after the cycle hit.
+
+    Pre-B-008-T behavior (one-shot only) is no longer correct: a
+    cycle-detect typically signals a multi-turn task got stuck, and the
+    recovery itself takes multiple turns. Reverting to flash on turn 2
+    of recovery just retrips the same loop. Coverage of the full
+    multi-turn sticky lifecycle lives in test_b008t_task_sticky_pro.py."""
     a = _make_agent(monkeypatch)
     a._cycle_escalate_next_turn = True
-    a._resolve_model("anything")  # consumes the flag
+    a._resolve_model("anything")
     assert a._cycle_escalate_next_turn is False, (
-        "escalation must self-reset after one use"
+        "the one-shot escalation flag is still consumed on its first use"
     )
-    # Next turn — a short lookup must return to flash routing.
-    picked = a._resolve_model("ping")
-    assert picked == "deepseek-v4-flash", (
-        f"after one-shot escalation, lookups must return to flash, got {picked}"
+    assert a._task_sticky_pro is True, (
+        "cycle-escalation now latches task-sticky pro for the recovery effort"
     )
 
 

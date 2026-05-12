@@ -456,8 +456,12 @@ def test_resolve_model_auto_code_fence_signal_lifts_to_pro():
     Tested as a DELTA: the same surrounding text without a fence routes
     one way, with a fence routes to pro. This is robust to threshold
     changes — what matters is that the fence is a meaningful signal.
+
+    NB: each branch uses a FRESH agent. Post-B-008-T (commit pending),
+    a pro routing latches ``_task_sticky_pro`` on that agent, so
+    re-using one instance for both branches would carry sticky from
+    the fenced call into the base call and corrupt the delta.
     """
-    a = _make_agent_for_routing("auto")
     base = "fix the parameter on this op so it animates correctly"
     fenced = (
         "fix the parameter on this op so it animates correctly\n"
@@ -468,8 +472,8 @@ def test_resolve_model_auto_code_fence_signal_lifts_to_pro():
     # under any reasonable threshold). The base, without fence and
     # without tool keywords, scores at most 1 — comfortably under any
     # pro threshold.
-    assert a._resolve_model(fenced) == "deepseek-v4-pro"
-    assert a._resolve_model(base) == "deepseek-v4-flash"
+    assert _make_agent_for_routing("auto")._resolve_model(fenced) == "deepseek-v4-pro"
+    assert _make_agent_for_routing("auto")._resolve_model(base) == "deepseek-v4-flash"
 
 
 def test_resolve_model_auto_invalid_tier_falls_back_to_auto():
