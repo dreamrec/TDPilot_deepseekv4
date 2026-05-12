@@ -147,13 +147,15 @@
     cursor: help;
   }
   #session-meter:empty { display: none; }
-  /* Cost token gets its own color so it can swap to a warning red
-     once the running session passes ~$1. Default is even dimmer than
-     the rest of the pill — usually the user doesn't care about the
-     exact figure, just that it's low. */
+  /* Cost token gets its own color so it pops against the dim
+     #token-meter (--muted) sitting next to it, AND can swap to a
+     warning red once the running session passes ~$1. Default uses
+     --text (the body-copy near-white) at full opacity — clearly the
+     brightest element in the status bar without screaming for
+     attention. Over $1 → soft red (--error-fg) + bold to escalate. */
   #session-meter .cost {
-    color: var(--muted);
-    opacity: 0.75;
+    color: var(--text);
+    opacity: 1;
   }
   #session-meter .cost.over-dollar {
     color: var(--error-fg);
