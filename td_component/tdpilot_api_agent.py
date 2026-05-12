@@ -715,11 +715,20 @@ class Agent:
         # session-scope intent ("this session", "from now on", ...).
         self._maybe_promote_tier(last_user_text)
         chosen = self._resolve_model(last_user_text)
-        if chosen != self._active_model:
-            try:
-                self.on_model_change(self.model_tier, chosen)
-            except Exception:
-                pass
+        # B-004 (live-debug 2026-05-13) — fire on_model_change on EVERY
+        # turn, not only when the tier flips. Pre-fix the badge in the
+        # chat UI stayed empty after a tab reload IF the auto-router
+        # kept picking the same tier as the last turn (e.g. sticky pro,
+        # or a long-running build where every turn routes to pro). The
+        # badge depends on EV_MODEL ever firing, so a quiet "same tier
+        # again" turn left the user staring at just "thinking" with no
+        # idea which model was running. Now we fire every turn; the
+        # extension drain de-dupes idempotently (textContent assignment
+        # to the same value is a no-op).
+        try:
+            self.on_model_change(self.model_tier, chosen)
+        except Exception:
+            pass
         self._active_model = chosen
 
         # Phase 1.2 (v2.2.0) — per-turn cycle-detection ledger. Built
