@@ -1843,8 +1843,23 @@ class AgentRuntime:
             self._push(EV_STATE, "idle")
             print(f"[tdpilot_API/runtime] AgentError surfaced: {exc}")
         except Exception as exc:  # noqa: BLE001
-            self._push(EV_ERROR, redact(f"Worker crash: {type(exc).__name__}: {exc}"))
-            self._push(EV_STATE, "idle")
+            # B-005 (live-debug 2026-05-13) — TD's textDAT module reload
+            # can break class identity: ``CycleDetected`` inherits from
+            # ``AgentError`` at definition time, but after a reload the
+            # two modules may hold different class objects, so
+            # ``except AgentError`` silently misses it. Result: the user
+            # sees a misleading "Worker crash:" prefix on what was
+            # actually a controlled cycle abort already surfaced via
+            # on_error. Fix: also match agent-side controlled failures
+            # by class NAME, which survives module reloads. Real
+            # unexpected exceptions still surface as "Worker crash:".
+            type_name = type(exc).__name__
+            if type_name in ("AgentError", "TurnBudgetExceeded", "CycleDetected"):
+                self._push(EV_STATE, "idle")
+                print(f"[tdpilot_API/runtime] {type_name} surfaced (name-match): {exc}")
+            else:
+                self._push(EV_ERROR, redact(f"Worker crash: {type_name}: {exc}"))
+                self._push(EV_STATE, "idle")
         finally:
             # Brief grace period so a rapid second start_turn doesn't race
             # with the still-finishing thread.
