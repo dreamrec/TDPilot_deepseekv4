@@ -143,10 +143,23 @@
      input/output + approximate USD. Hover for full breakdown. */
   #session-meter {
     color: var(--muted);
-    opacity: 0.7;
+    opacity: 0.55;
     cursor: help;
   }
   #session-meter:empty { display: none; }
+  /* Cost token gets its own color so it can swap to a warning red
+     once the running session passes ~$1. Default is even dimmer than
+     the rest of the pill — usually the user doesn't care about the
+     exact figure, just that it's low. */
+  #session-meter .cost {
+    color: var(--muted);
+    opacity: 0.75;
+  }
+  #session-meter .cost.over-dollar {
+    color: var(--error-fg);
+    opacity: 1;
+    font-weight: 600;
+  }
   /* Faint divider between state, model, tokens, cursor. */
   #status-bar .rhs > span + span:not(:empty)::before {
     content: '·';
@@ -2066,15 +2079,27 @@
   function updateSessionMeter(session) {
     const $sm = document.getElementById('session-meter');
     if (!$sm) return;
+    // Empty / non-object → blank the pill so the :empty CSS rule hides it.
     if (!session || typeof session !== 'object') {
-      $sm.textContent = '';
+      while ($sm.firstChild) $sm.removeChild($sm.firstChild);
       $sm.title = '';
       return;
     }
     const inK = formatTokenCount(session.input_tokens || 0);
     const outK = formatTokenCount(session.output_tokens || 0);
     const usd = typeof session.approx_usd === 'number' ? session.approx_usd : 0;
-    $sm.textContent = `Session: ${inK} in · ${outK} out · ~$${usd.toFixed(4)}`;
+    // Rebuild as DOM nodes so the cost portion gets its own span — that
+    // lets us turn JUST the $X portion red without colouring the whole
+    // "Session: …" prefix. innerHTML would also work but the security
+    // hook in this repo (substring-matches "innerHTML =") complains
+    // even on assignments to safe content; removeChild + appendChild
+    // is the established pattern (see loadChips above).
+    while ($sm.firstChild) $sm.removeChild($sm.firstChild);
+    $sm.appendChild(document.createTextNode(`Session: ${inK} in · ${outK} out · ~`));
+    const $cost = document.createElement('span');
+    $cost.className = usd >= 1 ? 'cost over-dollar' : 'cost';
+    $cost.textContent = `$${usd.toFixed(4)}`;
+    $sm.appendChild($cost);
     $sm.title =
       `input:        ${session.input_tokens || 0}\n` +
       `output:       ${session.output_tokens || 0}\n` +
