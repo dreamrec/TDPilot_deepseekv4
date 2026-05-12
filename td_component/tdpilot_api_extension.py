@@ -700,6 +700,7 @@ class TDPilotAPIExt:
             EV_SUB_TEXT,
             EV_SUB_TOOL,
             EV_TEXT,
+            EV_TIER_SYNC,
             EV_TOOL_CALL,
             EV_TOOL_RESULT,
             EV_USAGE,
@@ -794,6 +795,20 @@ class TDPilotAPIExt:
                 self.owner.par.Activemodel.val = short[:60]
             except Exception:
                 pass
+        elif kind == EV_TIER_SYNC:
+            # v2.4 / B-003 (live-debug 2026-05-13) — deferred sync of the
+            # Modeltier COMP param after an Agent-side sticky promotion
+            # (e.g. "use only pro this session"). Pre-fix the runtime
+            # callback wrote parent().par.Modeltier from the worker
+            # thread, tripping TD's THREAD CONFLICT detector. Now the
+            # callback only pushes the event; this drain handler runs
+            # on the cook thread and performs the actual write safely.
+            new_tier = str(payload) if payload else ""
+            if new_tier in ("auto", "flash", "pro"):
+                try:
+                    self.owner.par.Modeltier.val = new_tier
+                except Exception as exc:  # noqa: BLE001
+                    debug(f"[tdpilot_API/ext] Modeltier sync failed: {exc}")
             # Phase 2 (1.8.0) — push a structured `model` event to the
             # chat. The status-bar code uses tier + picked separately
             # to render a short-form badge ("pro" vs "flash") and a

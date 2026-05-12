@@ -240,6 +240,15 @@ EV_USAGE = "usage"  # payload: {"input_tokens": int, "output_tokens": int, "cach
 # without polling /stats. Payload is the same shape /stats returns
 # under response["session"] (one source of truth).
 EV_USAGE_SESSION = "usage_session"  # payload: {input_tokens, output_tokens, cache_hits, cache_misses, approx_usd, started_at, model_pricing_version}
+# v2.4 / B-003 (live-debug 2026-05-13) — deferred COMP-param sync for
+# the sticky-tier feature. ``on_tier_change`` fires from the worker
+# thread (Agent._maybe_promote_tier inside Agent._loop). Pre-fix the
+# callback wrote ``parent().par.Modeltier = new_tier`` directly,
+# triggering TD's THREAD CONFLICT detector on ``td.ParentShortcut``.
+# Now the callback only pushes this event; the cook-thread drain
+# handler in tdpilot_api_extension.py performs the actual COMP
+# param write. Payload is the new tier string ("auto"/"flash"/"pro").
+EV_TIER_SYNC = "tier_sync"  # payload: str (new model tier)
 # Phase 1.3 — severity-tracked validation hint. Emitted at turn end
 # when high-severity mutations went out without a follow-up validator
 # call. Soft signal; chat UI renders as a subtle nudge below the
@@ -949,20 +958,33 @@ class AgentRuntime:
 
     def _sync_model_tier_to_comp(self, new_tier: str) -> None:
         """Mirror an Agent-side sticky-tier promotion back to the COMP
-        ``Modeltier`` param. Best-effort: if the COMP isn't reachable
-        (e.g. headless tests, parent() not callable) the in-memory mutation
-        still holds for the lifetime of this Agent instance.
+        ``Modeltier`` param.
+
+        v2.4 / B-003 (live-debug 2026-05-13) — pre-fix this method wrote
+        ``parent().par.Modeltier = new_tier`` directly. But this method
+        is wired as ``on_tier_change`` and fires from inside
+        ``Agent._maybe_promote_tier`` which runs on the WORKER thread
+        (Agent._loop). Touching ``parent()`` / a ``td.ParentShortcut``
+        from the worker thread trips TD's THREAD CONFLICT detector with
+        a "may behave unpredictably or terminate" dialog. The fix
+        defers the COMP-param write to the cook thread by pushing an
+        EV_TIER_SYNC event; the drain handler in
+        ``tdpilot_api_extension.py`` performs the actual write under
+        ``onFrameStart`` (cook-thread context). The in-memory
+        ``self._config`` update stays here because dict ops are
+        thread-safe in CPython.
         """
         if new_tier not in ("auto", "flash", "pro"):
             return
         # Keep the runtime's cached config in sync so the next start_turn's
-        # live-refresh (line ~1282 reading parent().par.Modeltier) doesn't
-        # immediately fight the agent's mutation.
+        # live-refresh (line ~1644 reading parent().par.Modeltier) doesn't
+        # immediately fight the agent's mutation. dict mutation is
+        # thread-safe in CPython — no parent() touch here.
         self._config["model_tier"] = new_tier
-        try:
-            parent().par.Modeltier = new_tier  # type: ignore[name-defined]
-        except Exception:
-            pass
+        # Defer the COMP-param write to the cook thread via the event
+        # queue. _push uses a thread-safe Queue, so calling it from the
+        # worker is fine.
+        self._push(EV_TIER_SYNC, new_tier)
 
     def _build_rollback_guard_factory(self) -> Callable[..., Any] | None:
         """Return a factory ``(dispatcher, tool_names) -> AutoRollbackGuard``
