@@ -422,6 +422,13 @@ class Agent:
         # image blocks in user content. The WS broadcast path (chat UI)
         # is untouched — full base64 still reaches the browser.
         enable_vision_pipeline: bool = False,
+        # v2.4 / Phase C.9 — extended-thinking budget. When > 0, every
+        # /v1/messages request body includes ``"thinking": {"type":
+        # "enabled", "budget_tokens": N}``. DeepSeek's compat-layer
+        # support for this field is undocumented as of 2026-05 — if
+        # the server 400s, set this to 0 to disable. 0 = disabled
+        # (legacy pre-v2.4 behaviour, byte-stable cache prefix).
+        thinking_budget: int = 0,
     ) -> None:
         if not api_key:
             raise AgentError("api_key is required")
@@ -480,6 +487,9 @@ class Agent:
         self.on_hint = on_hint
         # v2.4 / Phase B.1 — screenshot vision flag. Off by default.
         self.enable_vision_pipeline = bool(enable_vision_pipeline)
+        # v2.4 / Phase C.9 — thinking budget. Clamped to ≥ 0 so a bad
+        # COMP-param value can't produce a negative budget.
+        self.thinking_budget = max(0, int(thinking_budget))
 
         self.messages: list[dict] = []
         self._stop_flag = threading.Event()
@@ -1022,6 +1032,19 @@ class Agent:
             body["system"] = self.system_prompt
         if self.tools:
             body["tools"] = self.tools
+        # v2.4 / Phase C.9 — extended-thinking budget. Adding the
+        # ``thinking`` block on every request keeps the cache prefix
+        # byte-stable as long as the budget value is fixed for the
+        # session (it's loaded once at AgentRuntime construction
+        # from the Thinkingbudget COMP param). DeepSeek's Anthropic-
+        # compat layer support is undocumented as of 2026-05; a 400
+        # here means the field isn't accepted — set Thinkingbudget=0
+        # to disable.
+        if self.thinking_budget > 0:
+            body["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self.thinking_budget,
+            }
 
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(

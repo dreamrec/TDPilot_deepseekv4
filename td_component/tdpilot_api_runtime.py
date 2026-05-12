@@ -83,18 +83,48 @@ class CookThreadDispatcher:
     Construct with the dispatcher that does the actual TD work (typically
     `make_dispatcher(handlers_module)` from tdpilot_api_dispatcher). Pass
     THIS object to the Agent as its dispatcher.
+
+    v2.4 / Phase C.8 — circuit breaker. When TD is paused mid-turn the cook
+    thread doesn't fire ``pump`` and EVERY queued call waits the full
+    ``timeout`` (60s default). A 10-tool turn would hang 600s. The breaker
+    trips on the first timeout: ``cancel_pending`` drains anything already
+    queued, ``_tripped`` short-circuits subsequent ``__call__`` entries to
+    return immediately, and ``on_breaker_trip`` lets the runtime push an
+    EV_HINT explaining the symptom. ``reset_breaker`` re-arms the
+    dispatcher for the next turn (called by ``start_turn``).
     """
 
-    def __init__(self, raw_dispatcher: Callable[[str, dict], Any], timeout: float = DEFAULT_TOOL_TIMEOUT):
+    def __init__(
+        self,
+        raw_dispatcher: Callable[[str, dict], Any],
+        timeout: float = DEFAULT_TOOL_TIMEOUT,
+        on_breaker_trip: Callable[[str], None] | None = None,
+    ):
         self._raw = raw_dispatcher
         self._timeout = timeout
         self._pending: Queue = Queue()  # (call_id, name, args)
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
         self._results: dict[str, Any] = {}
+        # v2.4 / Phase C.8 — circuit breaker state.
+        self._tripped: bool = False
+        self._on_breaker_trip = on_breaker_trip
 
     def __call__(self, name: str, args: dict) -> Any:
         """Called from the worker thread. Blocks until cook-thread pump runs the tool."""
+        # v2.4 / Phase C.8 — fast-fail if the breaker is already tripped.
+        # Tripping happens after the first timeout in a paused-TD scenario;
+        # subsequent calls return immediately instead of each waiting the
+        # full timeout. ``start_turn`` resets the breaker between turns.
+        if self._tripped:
+            return {
+                "error": (
+                    f"Tool {name} aborted — TD dispatch suspended (circuit "
+                    "breaker tripped). Resume TouchDesigner playback "
+                    "(spacebar) and retry."
+                ),
+                "_tool_error": True,
+            }
         call_id = uuid.uuid4().hex
         self._pending.put((call_id, name, args))
         with self._cond:
@@ -102,7 +132,18 @@ class CookThreadDispatcher:
             while call_id not in self._results:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    return {"error": f"Tool {name} timed out after {self._timeout}s"}
+                    # v2.4 / Phase C.8 — first timeout trips the breaker
+                    # so the rest of this turn's queued tools fail fast
+                    # rather than each waiting their own 60s window.
+                    self._trip_breaker_locked(reason=f"{name} timed out")
+                    return {
+                        "error": (
+                            f"Tool {name} timed out after {self._timeout}s "
+                            "— TD likely paused. Subsequent tools in this "
+                            "turn will fail fast until you resume playback."
+                        ),
+                        "_tool_error": True,
+                    }
                 self._cond.wait(timeout=remaining)
             return self._results.pop(call_id)
 
@@ -136,13 +177,49 @@ class CookThreadDispatcher:
         # Drain the queue and produce timeout-style errors for everything
         # currently outstanding, so the worker returns instead of hanging.
         with self._cond:
-            while True:
-                try:
-                    call_id, name, _args = self._pending.get_nowait()
-                except Empty:
-                    break
-                self._results[call_id] = {"error": f"Tool {name} cancelled"}
+            self._cancel_pending_locked()
             self._cond.notify_all()
+
+    def _cancel_pending_locked(self) -> None:
+        """Internal helper — caller must hold ``self._lock``."""
+        while True:
+            try:
+                call_id, name, _args = self._pending.get_nowait()
+            except Empty:
+                break
+            self._results[call_id] = {"error": f"Tool {name} cancelled"}
+
+    def _trip_breaker_locked(self, reason: str) -> None:
+        """v2.4 / Phase C.8 — trip the breaker. Caller must hold ``self._lock``.
+
+        Drains anything already queued (so other waiting workers return
+        immediately) and fires the runtime callback so EV_HINT surfaces
+        the diagnosis to the user. Idempotent — re-tripping is a no-op.
+        """
+        if self._tripped:
+            return
+        self._tripped = True
+        self._cancel_pending_locked()
+        self._cond.notify_all()
+        # Fire the callback OUTSIDE the lock-held region in spirit
+        # (the runtime may push an event that re-enters via the WS
+        # path), but we're already inside the cond block — the
+        # callback's _push goes through a thread-safe Queue so this
+        # is fine in practice.
+        if self._on_breaker_trip is not None:
+            try:
+                self._on_breaker_trip(reason)
+            except Exception as exc:  # noqa: BLE001 — breaker must not raise back
+                print(f"[tdpilot_API/dispatcher] on_breaker_trip raised: {exc}")
+
+    def reset_breaker(self) -> None:
+        """v2.4 / Phase C.8 — re-arm the breaker. Called by ``start_turn``
+        so a new turn after a paused-TD episode gets a fresh attempt.
+        Drains any stale results that piled up while tripped."""
+        with self._cond:
+            self._tripped = False
+            self._results.clear()
+            self._cancel_pending_locked()
 
 
 # Event types pushed by the worker, drained by the cook thread.
@@ -613,7 +690,14 @@ class AgentRuntime:
         self._events: Queue = Queue()
         # The Agent always sees the cook-thread-safe wrapper so it never
         # touches TD from the worker thread.
-        self._cook_dispatcher = CookThreadDispatcher(dispatcher)
+        # v2.4 / Phase C.8 — wire on_breaker_trip so the circuit breaker
+        # can push an EV_HINT explaining the symptom (paused TD →
+        # tool dispatch suspended). Reason string travels into the hint
+        # so the chat UI can show specifics.
+        self._cook_dispatcher = CookThreadDispatcher(
+            dispatcher,
+            on_breaker_trip=self._on_dispatcher_breaker_trip,
+        )
         self._dispatcher = self._cook_dispatcher
         # Keep the RAW dispatcher reachable for handlers that need to
         # invoke other tools synchronously (e.g. handle_recipe_replay,
@@ -806,6 +890,12 @@ class AgentRuntime:
                 os.environ.get("TDPILOT_VISION_PIPELINE", "").strip()
                 in ("1", "true", "yes", "on")
             ),
+            # v2.4 / Phase C.9 — extended-thinking budget. Read from
+            # the Thinkingbudget COMP param (added to _API_PAGE in
+            # the v2.4 build), with env-var fallback for headless
+            # tests. 0 = disabled (legacy behaviour, byte-stable
+            # cache prefix). 8000 is the build-script schema default.
+            thinking_budget=self._read_thinking_budget(),
         )
 
     def _sync_model_tier_to_comp(self, new_tier: str) -> None:
@@ -1358,6 +1448,54 @@ class AgentRuntime:
     # as separate tech debt.
     # ------------------------------------------------------------------
 
+    def _read_thinking_budget(self) -> int:
+        """v2.4 / Phase C.9 — read the Thinkingbudget COMP param.
+
+        Order: COMP param first (added to _API_PAGE in v2.4 build),
+        env var ``TDPILOT_THINKING_BUDGET`` second (for headless
+        tests), 0 otherwise (disabled). Clamped to ≥ 0. Returns 0
+        for any parsing failure so a malformed value can't crash the
+        runtime construction path.
+        """
+        try:
+            comp = parent()  # type: ignore[name-defined] # noqa: F821
+            if comp is not None and hasattr(comp.par, "Thinkingbudget"):
+                value = int(comp.par.Thinkingbudget.val or 0)
+                return max(0, value)
+        except NameError:
+            pass  # not running inside TD
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/runtime] Thinkingbudget read failed: {exc}")
+        raw = os.environ.get("TDPILOT_THINKING_BUDGET", "").strip()
+        if raw:
+            try:
+                return max(0, int(raw))
+            except ValueError:
+                pass
+        return 0
+
+    def _on_dispatcher_breaker_trip(self, reason: str) -> None:
+        """v2.4 / Phase C.8 — CookThreadDispatcher fires this when the
+        circuit breaker trips on a tool timeout. Push EV_HINT so the
+        chat UI surfaces a paused-TD diagnosis instead of going silent
+        for the rest of the turn. Called from the worker thread; uses
+        the existing thread-safe _push pathway.
+        """
+        message = (
+            "Tool dispatch suspended — TouchDesigner cook thread isn't "
+            "responding (likely paused). Subsequent tool calls in this "
+            "turn will fail fast until you press Spacebar to resume "
+            "playback. The original tool timed out: " + reason
+        )
+        self._push(
+            EV_HINT,
+            {
+                "kind": "dispatcher_breaker_tripped",
+                "message": message,
+                "tools": [],
+            },
+        )
+
     def _is_td_paused(self) -> bool:
         """Return True if TouchDesigner playback is paused.
 
@@ -1382,6 +1520,13 @@ class AgentRuntime:
             return False
         if self._worker is not None and self._worker.is_alive():
             return False
+        # v2.4 / Phase C.8 — re-arm the dispatcher's circuit breaker
+        # at every turn boundary. If TD was paused last turn and the
+        # breaker tripped, the user has hopefully resumed playback
+        # before sending the next message; give them a fresh attempt
+        # without requiring a Reset pulse.
+        if self._cook_dispatcher is not None:
+            self._cook_dispatcher.reset_breaker()
         # v2.1.1 — paused-TD UX trap. See _is_td_paused docstring above.
         # Emit BEFORE any other turn-prep work so the warning lands
         # in the chat even if a downstream step raises.
