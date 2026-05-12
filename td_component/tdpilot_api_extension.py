@@ -795,6 +795,21 @@ class TDPilotAPIExt:
                 self.owner.par.Activemodel.val = short[:60]
             except Exception:
                 pass
+            # B-004 (live-debug 2026-05-13, follow-up) — push the per-turn
+            # model event to the chat WS so the badge populates. The
+            # Phase 2 (1.8.0) broadcast was orphaned by commit b1345e3
+            # (B-003) which inserted the EV_TIER_SYNC branch between
+            # EV_MODEL's COMP write and its broadcast tail. tier/picked/
+            # short were left referenced from the wrong scope, silently
+            # NameError'ing and leaving the badge empty.
+            self._broadcast(
+                {
+                    "type": "model",
+                    "tier": str(tier),
+                    "model": str(picked),
+                    "short": str(short),
+                }
+            )
         elif kind == EV_TIER_SYNC:
             # v2.4 / B-003 (live-debug 2026-05-13) — deferred sync of the
             # Modeltier COMP param after an Agent-side sticky promotion
@@ -809,16 +824,18 @@ class TDPilotAPIExt:
                     self.owner.par.Modeltier.val = new_tier
                 except Exception as exc:  # noqa: BLE001
                     debug(f"[tdpilot_API/ext] Modeltier sync failed: {exc}")
-            # Phase 2 (1.8.0) — push a structured `model` event to the
-            # chat. The status-bar code uses tier + picked separately
-            # to render a short-form badge ("pro" vs "flash") and a
-            # tooltip with the full model name.
+            # B-004 follow-up — broadcast a tier-only model event so the
+            # badge reflects the sticky promotion immediately, even
+            # before the next turn fires its own EV_MODEL. picked/short
+            # are unknown at promotion time (the actual routed model
+            # depends on the next user prompt), so leave them blank;
+            # the next EV_MODEL will fill them in.
             self._broadcast(
                 {
                     "type": "model",
-                    "tier": str(tier),
-                    "model": str(picked),
-                    "short": str(short),
+                    "tier": new_tier,
+                    "model": "",
+                    "short": new_tier if new_tier in ("auto", "flash", "pro") else "",
                 }
             )
         elif kind == EV_USAGE:
