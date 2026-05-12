@@ -459,6 +459,12 @@ class Agent:
         # entire tool-use chain so DeepSeek's auto-cache (model-keyed)
         # doesn't bust mid-turn.
         self._active_model: str = self.model
+        # v2.4 / B-008-C (live-debug 2026-05-13) — reactive escalation flag.
+        # Set to True by ``run_turn`` when the previous turn died on
+        # ``CycleDetected``. Consumed (and reset) by ``_resolve_model`` on
+        # the NEXT auto-tier turn to force pro for one shot. Costs ~3× on
+        # that single turn, but only fires after a known stuck pattern.
+        self._cycle_escalate_next_turn: bool = False
         self.on_model_change = on_model_change
         self.on_tier_change = on_tier_change
         self.base_url = base_url.rstrip("/")
@@ -564,6 +570,15 @@ class Agent:
         try:
             return self._loop()
         except BaseException as exc:  # noqa: BLE001 — fan out to callback
+            # v2.4 / B-008-C (live-debug 2026-05-13) — name-match on
+            # CycleDetected (avoids the late-import / module-reload class-
+            # identity issue that motivated B-005). Setting the flag here
+            # ensures the very next ``_resolve_model`` call promotes auto
+            # → pro for one turn. Same name-match defense that B-005's
+            # ``_run_safe`` fallback uses in the runtime — keep the two
+            # branches in lock-step.
+            if type(exc).__name__ == "CycleDetected":
+                self._cycle_escalate_next_turn = True
             self.on_error(exc)
             raise
 
@@ -648,12 +663,22 @@ class Agent:
             return self.flash_model
         if self.model_tier == "pro":
             return self.model
-        # auto
+        # 3. v2.4 / B-008-C (live-debug 2026-05-13) — REACTIVE ESCALATION.
+        # If the previous turn died on CycleDetected (caught in run_turn's
+        # except), the next auto-tier turn forces pro. Rationale: flash's
+        # weaker working memory is the most common cause of the identical-
+        # probe loop that trips the cycle ledger. One pro turn usually
+        # breaks the loop; we then drop back to auto. Costs ~3× on that
+        # one turn, but only fires after a known stuck pattern.
+        if self._cycle_escalate_next_turn:
+            self._cycle_escalate_next_turn = False
+            return self.model
+        # 4. Auto heuristic (improved 2026-05-13).
         text = (user_text or "").lower()
         score = 0
         if len(text) > 300:
             score += 1
-        # Imperative / build-leaning verbs — RouteLLM features (arXiv:2406.18665)
+        # Imperative / build-leaning verbs — RouteLLM features (arXiv:2406.18665).
         pro_keywords = (
             "build",
             "create",
@@ -665,6 +690,7 @@ class Agent:
             "optimize",
             "rewrite",
             "rewire",
+            "audit",
         )
         if any(kw in text for kw in pro_keywords):
             score += 1
@@ -676,6 +702,42 @@ class Agent:
         # handles long chains better.
         tool_keywords = ("create node", "set param", "connect", "wire", "inspect", "screenshot", "patch")
         if sum(1 for kw in tool_keywords if kw in text) >= 2:
+            score += 1
+        # v2.4 / B-008-A (live-debug 2026-05-13) — STRUCTURAL-COMPLEXITY
+        # NOUNS. Short imperative prompts like "Build a kaleidoscope
+        # feedback loop" (3-noun phrase ending in "loop") routed to flash
+        # under the pre-2026-05-13 heuristic — verb scored +1 but nothing
+        # else hit, so score=1 < threshold=2 → flash. These nouns signal
+        # system-shaped work (multi-node wiring, recursion, downstream
+        # consumers) which flash struggles with. Combined with the verb
+        # signal, "Build a X feedback loop"-style prompts now score 2 →
+        # pro, while single-target mutations like "fix the parameter on
+        # this op" stay on flash (verb alone scores 1).
+        #
+        # Design note: deliberately NOT adding a separate imperative-
+        # starter bonus on top of the verb-anywhere check — that would
+        # double-count the verb on "fix the parameter ..."-style short
+        # mutation prompts and erode the cost-tier intent. The verb +
+        # structural-noun pair is enough signal for the genuine multi-
+        # step build tasks without overshooting.
+        structural_nouns = (
+            "feedback",
+            "loop",
+            "chain",
+            "network",
+            "system",
+            "pipeline",
+            "graph",
+            "tree",
+            "rig",
+            "shader",
+            "renderer",
+            "compositor",
+            "kaleidoscope",
+            "fractal",
+            "particle",
+        )
+        if any(kw in text for kw in structural_nouns):
             score += 1
         return self.model if score >= 2 else self.flash_model
 
