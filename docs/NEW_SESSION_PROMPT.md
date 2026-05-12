@@ -27,10 +27,16 @@ cloned to.
 
 ### Current state
 
-- Latest shipped release: **v2.1.5** (May 2026 — Codex P2 follow-up
-  on v2.1.4's `isWorkingAgentState` idle-suffix predicate bug).
-- Most recent merged PR: **#32** (AGENTS.md added at repo root).
-- Branch you should start from: `origin/main`.
+- Latest shipped release: **v2.3.0** (May 11, 2026 — bilateral-audit
+  release closing 9 bugs + adding scoped snapshot tools; tool count
+  91 → 93). v2.3.1 fixes have also landed (4-bug audit: ClassVar +
+  watchdog + sticky-tier + exec-mode) at commit `8f087cd` on `main`.
+- **v2.4 is in planning** — see
+  [`docs/plans/v2.4_IMPLEMENTATION_PLAN.md`](./plans/v2.4_IMPLEMENTATION_PLAN.md)
+  for the cold-start executable plan covering Phases A–E.
+- Most recent merged PR: **#43** (4-bug audit).
+- Branch you should start from: `origin/main` (or use the
+  worktree referenced in the v2.4 plan if continuing prior work).
 
 ### Today's task
 

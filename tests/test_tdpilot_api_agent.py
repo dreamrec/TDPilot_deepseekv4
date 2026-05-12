@@ -825,3 +825,228 @@ def test_dynamic_context_empty_list_means_no_prefix():
     msgs = captured[0]["messages"]
     assert len(msgs) == 1
     assert msgs[0]["content"][0]["text"] == "hi"
+
+
+# ---------------------------------------------------------------------------
+# v2.4 / Phase A.5 — retry-with-backoff for DeepSeek 429 / 5xx.
+#
+# Pre-2.4 any 429 raised AgentError on the first hit and killed the turn;
+# users had to manually resend. These tests pin the new behaviour:
+#
+#   * 429 → 200 succeeds with one retry, fires on_hint("api_retry").
+#   * 503 → 503 → 200 succeeds with two retries.
+#   * Repeated 429 past max_retries raises with on_hint("api_retry_exhausted").
+#   * Non-retryable codes (401) raise immediately — single attempt.
+#   * Retry-After header is honoured (we set it tiny in tests for speed).
+#   * stop_flag set during backoff aborts the loop without further retries.
+# ---------------------------------------------------------------------------
+
+
+def _http_error(code: int, retry_after: str | None = None, body: bytes = b"{}"):
+    """Build an HTTPError with optional Retry-After header for retry tests."""
+    import urllib.error
+
+    hdrs = None
+    if retry_after is not None:
+        # ``email.message.Message`` is what urllib uses for response headers;
+        # for the test it's enough to give .get() the right behaviour.
+        from email.message import Message
+
+        hdrs = Message()
+        hdrs["Retry-After"] = retry_after
+    return urllib.error.HTTPError(
+        url="https://api.deepseek.com/anthropic/v1/messages",
+        code=code,
+        msg=f"HTTP {code}",
+        hdrs=hdrs,
+        fp=io.BytesIO(body),
+    )
+
+
+def test_a5_429_triggers_one_retry_then_succeeds():
+    """A single 429 followed by a 200 → 2 HTTP calls + on_hint('api_retry')."""
+    hints_seen: list[tuple[str, str]] = []
+    texts_seen: list[str] = []
+    call_count = {"n": 0}
+
+    def side_effect(*_a, **_k):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise _http_error(429, retry_after="0")
+        return _mk_response(_text_only("recovered after retry"))
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        max_retries=3,
+        initial_backoff=0.001,  # tiny so the test is fast even without Retry-After
+        on_text=texts_seen.append,
+        on_hint=lambda kind, msg: hints_seen.append((kind, msg)),
+    )
+    agent.add_user_message("ping")
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        agent.run_turn()
+
+    assert call_count["n"] == 2, "expected one retry after the 429"
+    assert any(k == "api_retry" for k, _ in hints_seen), (
+        f"expected api_retry hint, got {hints_seen}"
+    )
+    assert texts_seen == ["recovered after retry"]
+
+
+def test_a5_503_chain_with_two_retries_then_succeeds():
+    """503 → 503 → 200 succeeds with 3 total HTTP calls (2 retries)."""
+    hints_seen: list[tuple[str, str]] = []
+    call_count = {"n": 0}
+
+    def side_effect(*_a, **_k):
+        call_count["n"] += 1
+        if call_count["n"] <= 2:
+            raise _http_error(503, retry_after="0")
+        return _mk_response(_text_only("third time's the charm"))
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        max_retries=3,
+        initial_backoff=0.001,
+        on_hint=lambda kind, msg: hints_seen.append((kind, msg)),
+    )
+    agent.add_user_message("ping")
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        agent.run_turn()
+
+    assert call_count["n"] == 3
+    retry_hints = [k for k, _ in hints_seen if k == "api_retry"]
+    assert len(retry_hints) == 2, f"expected 2 retry hints, got {hints_seen}"
+
+
+def test_a5_429_exhaustion_raises_with_diagnosis_hint():
+    """If 429 persists past max_retries → AgentError + 'api_retry_exhausted' hint."""
+    hints_seen: list[tuple[str, str]] = []
+
+    def always_429(*_a, **_k):
+        raise _http_error(429, retry_after="0")
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        max_retries=2,
+        initial_backoff=0.001,
+        on_hint=lambda kind, msg: hints_seen.append((kind, msg)),
+    )
+    agent.add_user_message("ping")
+
+    with patch("urllib.request.urlopen", side_effect=always_429):
+        with pytest.raises(AgentError) as exc_info:
+            agent.run_turn()
+
+    assert "429" in str(exc_info.value)
+    assert "Diagnosis" in str(exc_info.value), (
+        "exhausted-retries error must carry the diagnosis text"
+    )
+    assert any(k == "api_retry_exhausted" for k, _ in hints_seen), (
+        f"expected api_retry_exhausted hint, got {hints_seen}"
+    )
+
+
+def test_a5_401_raises_immediately_without_retry():
+    """401 is non-retryable — must raise on the first attempt."""
+    call_count = {"n": 0}
+
+    def fail(*_a, **_k):
+        call_count["n"] += 1
+        raise _http_error(401, body=b'{"error":"bad key"}')
+
+    agent = Agent(
+        api_key="sk-bad",
+        dispatcher=lambda *a: None,
+        max_retries=5,  # would retry many times if 401 were retryable
+        initial_backoff=0.001,
+    )
+    agent.add_user_message("anything")
+
+    with patch("urllib.request.urlopen", side_effect=fail):
+        with pytest.raises(AgentError) as exc_info:
+            agent.run_turn()
+
+    assert call_count["n"] == 1, "401 must NOT be retried"
+    assert "401" in str(exc_info.value)
+
+
+def test_a5_retry_after_header_honoured_over_exponential_default():
+    """Server-provided Retry-After overrides our exponential backoff."""
+    hints_seen: list[tuple[str, str]] = []
+    call_count = {"n": 0}
+
+    def side_effect(*_a, **_k):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # Retry-After: 0.05 — short enough for a fast test, but distinct
+            # from initial_backoff=10.0 so we can detect which path ran.
+            raise _http_error(429, retry_after="0.05")
+        return _mk_response(_text_only("ok"))
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        max_retries=3,
+        initial_backoff=10.0,  # if used, the test would hang for ~10s
+        on_hint=lambda kind, msg: hints_seen.append((kind, msg)),
+    )
+    agent.add_user_message("ping")
+
+    import time as _t
+
+    started = _t.monotonic()
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        agent.run_turn()
+    elapsed = _t.monotonic() - started
+
+    assert call_count["n"] == 2
+    # Retry-After=0.05 means total time well under 1s; initial_backoff=10.0
+    # would put this near 10s. 2.0s gives generous CI headroom.
+    assert elapsed < 2.0, (
+        f"Retry-After header not honoured — backoff took {elapsed:.2f}s"
+    )
+
+
+def test_a5_stop_flag_aborts_during_backoff():
+    """stop() set mid-backoff aborts the retry loop without another HTTP call."""
+    call_count = {"n": 0}
+
+    def side_effect(*_a, **_k):
+        call_count["n"] += 1
+        # First call → 503; the backoff window is long enough that the
+        # main thread can set stop_flag before the wait returns naturally.
+        if call_count["n"] == 1:
+            raise _http_error(503)
+        return _mk_response(_text_only("should never reach here"))
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
+        max_retries=5,
+        initial_backoff=2.0,  # long backoff so we have time to set stop_flag
+    )
+    agent.add_user_message("ping")
+
+    import threading as _th
+
+    # Set stop_flag 50ms after run_turn starts — squarely inside the backoff.
+    timer = _th.Timer(0.05, agent.stop)
+    timer.daemon = True
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        timer.start()
+        with pytest.raises(AgentError) as exc_info:
+            agent.run_turn()
+        timer.cancel()
+
+    assert call_count["n"] == 1, (
+        f"stop_flag during backoff should prevent further retries, got "
+        f"{call_count['n']} HTTP calls"
+    )
+    assert "interrupted" in str(exc_info.value).lower()

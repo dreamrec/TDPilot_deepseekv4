@@ -293,6 +293,46 @@ SYSTEM_PROMPT_BASE = (
     "  4. Be token-frugal: avoid td_screenshot unless explicitly needed.\n"
     "  5. For risky multi-step builds, call td_project_lifecycle action=save "
     "FIRST so you can undo back if something breaks.\n\n"
+    "**Parallel inspection via tool_batch.** When you need 2+ independent "
+    "READ-ONLY lookups in the same turn (info + errors + audit, or "
+    "memory_recall + knowledge_search + td_get_hints), issue them as a "
+    "single ``tool_batch`` call instead of N sequential tool_use blocks. "
+    "Sub-calls run serially on the cook thread (TD's API isn't thread-safe), "
+    "so the win is round-trip latency, not per-tool wall time — but that "
+    "round-trip win is 3–9 seconds per turn on inspection-heavy work. "
+    "Reserve serial tool_use for genuinely sequential operations where each "
+    "call's args depend on the previous call's output (create → connect → "
+    "set parameters).\n"
+    "  Schema reminder: ``tool_batch({\"calls\": [{\"tool\": \"<name>\", "
+    "\"args\": {...}}, ...]})``. Sub-calls use the field ``tool`` (NOT "
+    "``name``). Max 8 per batch. Nested tool_batch is rejected. A failed "
+    "sub-call does NOT abort the batch — the rest still run and the failure "
+    "is reported in ``results[i].error``.\n"
+    "  Worked examples (under cost-no-constraint posture, prefer these "
+    "patterns over serial tool_use):\n"
+    "    • Pre-build inspection (3 calls, one round-trip):\n"
+    "        tool_batch({\"calls\": [\n"
+    "          {\"tool\": \"td_get_nodes\",      \"args\": {\"path\": \"/project1\"}},\n"
+    "          {\"tool\": \"td_get_errors\",     \"args\": {\"path\": \"/project1\"}},\n"
+    "          {\"tool\": \"td_audit_project\",  \"args\": {}}\n"
+    "        ]})\n"
+    "    • Memory + knowledge recall before creating anything (3 calls, "
+    "one round-trip):\n"
+    "        tool_batch({\"calls\": [\n"
+    "          {\"tool\": \"memory_recall\",    \"args\": {\"query\": \"audio reactive noise\"}},\n"
+    "          {\"tool\": \"knowledge_search\", \"args\": {\"query\": \"audio reactive noise\"}},\n"
+    "          {\"tool\": \"td_get_hints\",     \"args\": {\"context\": \"audio reactive\"}}\n"
+    "        ]})\n"
+    "    • Post-edit verification (3 calls, one round-trip):\n"
+    "        tool_batch({\"calls\": [\n"
+    "          {\"tool\": \"td_get_errors\",    \"args\": {\"path\": \"/project1\"}},\n"
+    "          {\"tool\": \"td_screenshot\",    \"args\": {\"path\": \"/project1/render1\"}},\n"
+    "          {\"tool\": \"td_cooking_info\",  \"args\": {\"sort_by\": \"cookTime\", \"limit\": 5}}\n"
+    "        ]})\n"
+    "  Anti-pattern: do NOT batch operations that depend on each other's "
+    "output (e.g., td_create_node followed by td_set_params on the new "
+    "node — the second needs the first's returned path, which serial "
+    "tool_use exposes but tool_batch does not).\n\n"
     "Critical rules for TouchDesigner type names:\n"
     "  * Operator types ALWAYS include the family suffix in camelCase: "
     "'noiseTOP', 'levelTOP', 'boxSOP', 'sphereSOP', 'gridSOP', "
@@ -721,6 +761,15 @@ class AgentRuntime:
             # status bar. Sanitised to int-or-zero so the frontend
             # never sees a stray non-numeric field.
             on_usage=lambda usage: self._push(EV_USAGE, _sanitise_usage(usage)),
+            # v2.4 / Phase A.5 — Agent emits soft hints during HTTP retry
+            # so the chat UI can render "retrying in 5s…" instead of
+            # going silent for the duration of a 429-rate-limit window.
+            # Same payload shape as the validation/cycle-detection hints
+            # already in this file: {"kind", "message", "tools"}.
+            on_hint=lambda kind, message: self._push(
+                EV_HINT,
+                {"kind": kind, "message": message, "tools": []},
+            ),
             # Phase 1.1 (v2.2.0) — auto-rollback on error regression.
             # ``_build_rollback_guard_factory`` honours
             # TDPILOT_DISABLE_AUTO_ROLLBACK and returns ``None`` when

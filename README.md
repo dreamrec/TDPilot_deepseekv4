@@ -20,9 +20,9 @@
 
 An AI assistant that lives inside TouchDesigner. It can inspect your network, build new operators, wire them up, debug errors, take screenshots, remember things between sessions, replay successful patterns, surface relevant memories before each turn, batch tool calls, recover from failures with actionable hints, and survive long conversations via context compaction.
 
-> **v2.3.0 just shipped (May 11, 2026)** — bilateral-audit release driven by a deep end-to-end test of the live `tdpilot_API` chat tox against a real DeepSeek session. **Closes 9 confirmed bugs** (4 latent security gaps that survived v1.7.1: header-flatten case-sensitivity disabled the entire auth+CORS+JSON-envelope stack on TD 2025.32820; Authmode default flipped to `"token"`; bm25 retrieval pollution causing drive-by tool execution from short prompts; WebSocket dead-client leak via silent-fail `webSocketSendText`) plus **adds the new `snapshot_save_scoped` / `snapshot_restore_scoped` agent tools** (Bug 19) so the agent can save and restore scoped project state mid-conversation without `project.load()` destroying its own COMP. Tool count 91 → 93. See [CHANGELOG](CHANGELOG.md#230---2026-05-11) for v2.3.0 details, or [v2.2.0](CHANGELOG.md#220---2026-05-11) for the prior Phase-1-reliability-foundation release (auto-rollback + cycle detection + drag-and-go UX).
+## How to install — pick a path
 
-There are two ways to run it. Pick whichever fits — they coexist in the same TD project if you want both.
+Two ways to run it. They coexist in the same TD project if you want both.
 
 | | **Standalone .tox** | **Claude Code CLI** |
 |---|---|---|
@@ -33,7 +33,14 @@ There are two ways to run it. Pick whichever fits — they coexist in the same T
 | **TD port** | 9987 | 9985 + 9986 |
 | **Config dir** | `~/.tdpilot-api/` | `~/.tdpilot-dpsk4/` |
 
-**New here?** Start with the standalone — it's working in under two minutes. Read on, or jump straight to [`docs/MANUAL.md`](docs/MANUAL.md) for the deep reference.
+**Start here.** If you just want to chat with TouchDesigner → **standalone `.tox`** (drop-in, two minutes). If you already use Claude Code → **Claude Code CLI**. If you want MCP in some other client (Cursor, Continue, custom integrations) → the same npm package, `npx tdpilot-dpsk4`, exposes the MCP server standalone. Jump straight to [`docs/MANUAL.md`](docs/MANUAL.md) for the deep reference, or read on for the install walkthroughs.
+
+<details>
+<summary><b>Release highlights — v2.3.0 (May 11, 2026)</b> (click to expand)</summary>
+
+**v2.3.0** — bilateral-audit release driven by a deep end-to-end test of the live `tdpilot_API` chat tox against a real DeepSeek session. **Closes 9 confirmed bugs** (4 latent security gaps that survived v1.7.1: header-flatten case-sensitivity disabled the entire auth+CORS+JSON-envelope stack on TD 2025.32820; Authmode default flipped to `"token"`; bm25 retrieval pollution causing drive-by tool execution from short prompts; WebSocket dead-client leak via silent-fail `webSocketSendText`) plus **adds the new `snapshot_save_scoped` / `snapshot_restore_scoped` agent tools** (Bug 19) so the agent can save and restore scoped project state mid-conversation without `project.load()` destroying its own COMP. Tool count 91 → 93. See [CHANGELOG](CHANGELOG.md#230---2026-05-11) for v2.3.0 details, or [v2.2.0](CHANGELOG.md#220---2026-05-11) for the prior Phase-1-reliability-foundation release (auto-rollback + cycle detection + drag-and-go UX).
+
+</details>
 
 ---
 

@@ -436,6 +436,7 @@ If a project uses POPX (community POP extension), the mental model is `Generator
 - **Always squash-merge**. Match the existing release-history style.
 - **Use `gh` CLI for everything** (`gh pr create`, `gh pr merge --squash`, `gh release create`, `gh workflow run`). The worktree-conflict warning from `gh pr merge` is harmless — see step 10 of the release flow.
 - **Codex review cadence**: after every release merge, the `chatgpt-codex-connector` bot leaves an automated review with P1/P2 findings. Pattern that's emerged across v2.1.3/4/5/PR#31: each release tends to surface 1-2 real edge regressions in its own fixes. **Don't dismiss these reviews** — they catch real bugs. Ship the followup as a separate small PR (no version bump needed if it's CI/scripts/docs only — see PR #31 as the reference).
+- **Update `docs/NEW_SESSION_PROMPT.md` before closing every release PR.** The "Current state" block (latest shipped release, most-recent merged PR, branch to start from) drifts the moment a release ships; a fresh agent that picks up the stale prompt plans work already shipped. Treat the prompt's Current-state block like a version manifest — it has to move in lockstep with `CHANGELOG.md`. The same drift discipline applies to `docs/ROADMAP.md` when phases close. (Maintenance convention added per v2.4 plan §A.1.)
 
 ---
 

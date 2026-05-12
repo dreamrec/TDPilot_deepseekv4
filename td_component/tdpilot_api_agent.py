@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import ssl
 import threading
 import urllib.error
@@ -149,6 +150,44 @@ def _build_ssl_context() -> ssl.SSLContext:
         "the system certificate store. On Linux/Mac, set SSL_CERT_FILE to "
         "a CA bundle path or `pip install certifi` into TD's Python."
     )
+
+
+# ---------------------------------------------------------------------------
+# v2.4 / Phase A.5 — retry-with-backoff for DeepSeek 429 / 5xx.
+# Pre-2.4 any 429 raised AgentError and killed the turn; users had to manually
+# resend. The retry path handles transient rate-limits + upstream-service
+# degradation without surfacing as a user-visible failure on the first hit.
+# Cumulative wait is bounded by max_retries × (_MAX_BACKOFF_SECONDS + per-call
+# request_timeout) so a misbehaving Retry-After: 9999 can't wedge us forever.
+# ---------------------------------------------------------------------------
+
+_MAX_BACKOFF_SECONDS = 60.0
+# Codes that should NEVER be retried — they reflect client-side configuration
+# bugs (bad key, missing endpoint, malformed body) that retry won't fix.
+_NON_RETRYABLE_HTTP_CODES = frozenset({400, 401, 403, 404})
+
+
+def _parse_retry_after(headers: Any, default: float) -> float:
+    """Parse a Retry-After header into seconds, falling back to ``default``.
+
+    Accepts the integer-seconds form ("60", "0.5"). The HTTP-date form is
+    rare in practice for rate-limit headers; we fall back to the computed
+    backoff if the value isn't a plain number. Returns at least 0.1s so
+    callers can use the result as an Event.wait timeout without raising
+    on negative values.
+    """
+    if headers is None:
+        return default
+    try:
+        raw = headers.get("Retry-After") or headers.get("retry-after") or ""
+    except Exception:
+        return default
+    if not raw:
+        return default
+    try:
+        return max(0.1, float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return default
 
 
 class AgentError(Exception):
@@ -312,6 +351,21 @@ class Agent:
         # BaseException catch and out via ``on_error`` → ``EV_ERROR``.
         # Wired by AgentRuntime to honour ``TDPILOT_DISABLE_CYCLE_DETECTION``.
         cycle_ledger_factory: Callable[[], Any] | None = None,
+        # v2.4 / Phase A.5 — retry policy for DeepSeek 429 / 5xx. ``max_retries``
+        # is the number of retry attempts AFTER the first failure (so
+        # ``max_retries=3`` allows up to 4 total HTTP calls). ``initial_backoff``
+        # is the base for exponential backoff in seconds: attempt N waits
+        # ``initial_backoff * 2**N + jitter`` (capped at _MAX_BACKOFF_SECONDS,
+        # or replaced by the server's Retry-After header when present).
+        max_retries: int = 3,
+        initial_backoff: float = 2.0,
+        # v2.4 / Phase A.5 — soft-nudge UI surface. ``on_hint(kind, message)``
+        # fires on each retry attempt AND on retry exhaustion before the
+        # final raise. AgentRuntime wires this to EV_HINT so the chat UI
+        # can render "retrying in 5s…" mid-turn rather than going silent.
+        # ``kind`` is a short stable identifier ("api_retry",
+        # "api_retry_exhausted"); ``message`` is a human-readable string.
+        on_hint: Callable[[str, str], None] = _noop,
     ) -> None:
         if not api_key:
             raise AgentError("api_key is required")
@@ -361,6 +415,13 @@ class Agent:
         self.on_usage = on_usage
         self.rollback_guard_factory = rollback_guard_factory
         self.cycle_ledger_factory = cycle_ledger_factory
+
+        # v2.4 / Phase A.5 — retry config + hint callback. Clamp to safe
+        # values so a bad COMP-param value can't disable retries entirely
+        # (negative) or set a sub-millisecond backoff (zero / NaN).
+        self.max_retries = max(0, int(max_retries))
+        self.initial_backoff = max(0.1, float(initial_backoff))
+        self.on_hint = on_hint
 
         self.messages: list[dict] = []
         self._stop_flag = threading.Event()
@@ -875,20 +936,91 @@ class Agent:
             },
             data=data,
         )
-        try:
-            ctx = _build_ssl_context()
-            with urllib.request.urlopen(req, timeout=self.request_timeout, context=ctx) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
+        # v2.4 / Phase A.5 — retry-with-backoff for transient HTTP failures.
+        # 429 (rate limit) + any 5xx → exponential backoff with jitter, or
+        # Retry-After header when the server provides one. Client-side errors
+        # (400/401/403/404) raise immediately — they reflect bad config, not
+        # transient load. Network/I/O errors raise on the first failure (the
+        # plan's scope is HTTP retry only; network-error retry can land in a
+        # follow-up if it shows up in usage data).
+        ctx = _build_ssl_context()
+        attempt = 0
+        while True:
+            if self._stop_flag.is_set():
+                raise AgentError("Interrupted before API call")
             try:
-                detail = exc.read().decode("utf-8")
-            except Exception:
-                detail = ""
-            raise AgentError(f"HTTP {exc.code} from /v1/messages: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise AgentError(f"Network error to {self.base_url}: {exc.reason}") from exc
-        except (TimeoutError, OSError) as exc:
-            raise AgentError(f"I/O error talking to {self.base_url}: {exc}") from exc
+                with urllib.request.urlopen(
+                    req, timeout=self.request_timeout, context=ctx
+                ) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                try:
+                    detail = exc.read().decode("utf-8")
+                except Exception:
+                    detail = ""
+                # Non-retryable client error → raise immediately.
+                if exc.code in _NON_RETRYABLE_HTTP_CODES:
+                    raise AgentError(
+                        f"HTTP {exc.code} from /v1/messages: {detail}"
+                    ) from exc
+                # Retryable: 429 (rate limit) + any 5xx (server-side).
+                retryable = exc.code == 429 or 500 <= exc.code < 600
+                if not retryable:
+                    raise AgentError(
+                        f"HTTP {exc.code} from /v1/messages: {detail}"
+                    ) from exc
+                if attempt >= self.max_retries:
+                    if exc.code == 429:
+                        diagnosis = (
+                            f"API rate-limited {attempt + 1}× — wait a minute "
+                            "and retry. If this keeps happening, your DeepSeek "
+                            "key is over its quota or the upstream service is "
+                            "having a bad day."
+                        )
+                    else:
+                        diagnosis = (
+                            f"API returned HTTP {exc.code} {attempt + 1}× — "
+                            "upstream service is degraded. Check "
+                            "status.deepseek.com or try again in a minute."
+                        )
+                    self.on_hint("api_retry_exhausted", diagnosis)
+                    raise AgentError(
+                        f"HTTP {exc.code} from /v1/messages after "
+                        f"{attempt + 1} attempts: {detail}. Diagnosis: "
+                        f"{diagnosis}"
+                    ) from exc
+                # Compute backoff. Prefer server-provided Retry-After
+                # over our exponential default; clamp so a misbehaving
+                # Retry-After: 9999 can't wedge the cook for hours.
+                wait_default = self.initial_backoff * (2**attempt) + random.uniform(
+                    0, 0.5
+                )
+                wait_seconds = _parse_retry_after(
+                    getattr(exc, "headers", None), wait_default
+                )
+                wait_seconds = min(wait_seconds, _MAX_BACKOFF_SECONDS)
+                self.on_hint(
+                    "api_retry",
+                    f"HTTP {exc.code} from /v1/messages — retrying in "
+                    f"{wait_seconds:.1f}s "
+                    f"(attempt {attempt + 1}/{self.max_retries}).",
+                )
+                # Cooperative cancellation: Event.wait returns True if
+                # the flag is set during the sleep window. We honour
+                # stop mid-backoff so a user-initiated cancel doesn't
+                # have to wait out the full delay.
+                if self._stop_flag.wait(timeout=wait_seconds):
+                    raise AgentError("Interrupted during retry backoff") from exc
+                attempt += 1
+                continue
+            except urllib.error.URLError as exc:
+                raise AgentError(
+                    f"Network error to {self.base_url}: {exc.reason}"
+                ) from exc
+            except (TimeoutError, OSError) as exc:
+                raise AgentError(
+                    f"I/O error talking to {self.base_url}: {exc}"
+                ) from exc
 
 
 def _stringify(result: Any) -> str:
