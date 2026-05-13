@@ -83,8 +83,56 @@ class CycleDetected(AgentError):
 # ---------------------------------------------------------------------------
 
 
+def _deep_canonicalize(value):
+    """Recursively normalize a JSON-shaped value for deep order-independent
+    comparison. v2.4 / B-010 (live-debug 2026-05-13):
+
+    Pre-fix ``args_hash`` used ``json.dumps(args, sort_keys=True, ...)``
+    which only sorts top-level dict KEYS, not nested list VALUES. A
+    live monitor on 2026-05-13 caught the agent calling:
+
+        td_analyze_frame({modes: ['histogram', 'luminance'], path: X})
+        td_analyze_frame({modes: ['luminance', 'histogram'], path: X})
+
+    Both should be the same identity for cycle-detect purposes — the
+    end effect of the probe is identical — but they hashed differently
+    so the second call didn't trip the ledger. The agent could (and
+    occasionally did, stochastically) evade detection by permuting list
+    elements until some other limit caught it.
+
+    This helper recursively:
+      * Sorts dict keys (json.dumps already did this; we re-do here for
+        consistency through the recursion).
+      * Sorts list elements by their canonicalized JSON repr (stable
+        ordering across runs, deterministic for the same multiset).
+      * Leaves scalars unchanged.
+
+    Tool-batch's ``calls`` list is intentionally affected: re-running
+    the same batch in different sub-call order counts as the same
+    identity because the END EFFECT on the project is the same. That
+    matches the cycle-detector's purpose (catch "agent is stuck"
+    repeating equivalent work) rather than its literal call signature.
+    """
+    if isinstance(value, dict):
+        return {k: _deep_canonicalize(value[k]) for k in sorted(value.keys(), key=str)}
+    if isinstance(value, list):
+        canonized = [_deep_canonicalize(x) for x in value]
+        try:
+            return sorted(
+                canonized,
+                key=lambda x: json.dumps(x, sort_keys=True, default=str, separators=(",", ":")),
+            )
+        except (TypeError, ValueError):
+            # Non-JSON-serializable items in the list — fall back to
+            # the un-sorted canonized list. Worse than nothing for
+            # cycle-detect, but it's defensive (don't crash the agent
+            # over an edge case).
+            return canonized
+    return value
+
+
 def args_hash(args: dict | None) -> str:
-    """Stable, order-independent hash for a tool-args dict.
+    """Stable, deeply order-independent hash for a tool-args dict.
 
     Used as the second half of the ``(tool_name, args_hash)`` ledger
     key. Implementation notes:
@@ -92,8 +140,10 @@ def args_hash(args: dict | None) -> str:
       * ``None`` and ``{}`` collapse to the same string ``"{}"`` so a
         no-args call is the same identity regardless of how the agent
         framed it.
-      * ``sort_keys=True`` makes the order in which the LLM emitted
-        the keys irrelevant.
+      * ``_deep_canonicalize`` (B-010, 2026-05-13) recursively sorts
+        nested list elements AND dict keys. Pre-fix only top-level
+        dict keys were sorted, so the agent could evade detection
+        by permuting list args (modes=['a','b'] vs ['b','a']).
       * ``separators=(",", ":")`` is the most compact form — fewer
         bytes through the dict-keying path.
       * ``default=str`` is defensive: tool args come from the LLM as
@@ -108,9 +158,18 @@ def args_hash(args: dict | None) -> str:
     if args is None or args == {}:
         return "{}"
     try:
-        return json.dumps(args, sort_keys=True, default=str, separators=(",", ":"))
-    except (TypeError, ValueError):
-        return repr(args)
+        canonical = _deep_canonicalize(args)
+        return json.dumps(canonical, default=str, separators=(",", ":"))
+    except (TypeError, ValueError, RecursionError):
+        # RecursionError covers cyclic references in the input — pre-B-010
+        # ``json.dumps`` would have raised ValueError on a cycle, but our
+        # _deep_canonicalize walks the structure first and trips
+        # RecursionError before json.dumps gets a chance. Either way we
+        # fall back to repr — the agent never crashes on weird args.
+        try:
+            return repr(args)
+        except Exception:  # noqa: BLE001 — last-resort safety net
+            return "<unhashable-args>"
 
 
 def _format_args_summary(args: dict | None, max_len: int = 80) -> str:
