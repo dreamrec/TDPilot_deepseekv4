@@ -95,11 +95,21 @@ def test_runtime_defines_ev_usage(runtime_src: str):
     assert 'EV_USAGE = "usage"' in runtime_src
 
 
-def test_runtime_pushes_ev_usage_via_lambda(runtime_src: str):
-    """on_usage callback in _build_agent must push EV_USAGE through
-    the sanitiser so non-int / hostile fields are dropped before
-    they reach the WS payload."""
-    assert "on_usage=lambda usage: self._push(EV_USAGE, _sanitise_usage(usage))" in runtime_src
+def test_runtime_pushes_ev_usage_via_handler(runtime_src: str):
+    """on_usage callback in _build_agent must route through the
+    _handle_usage method (v2.4 / Phase C.7), which sanitises the
+    payload AND accumulates per-session totals. Pre-C.7 this was a
+    lambda; the handler refactor preserves the sanitisation contract
+    while adding the cost-tracking surface."""
+    # Wire-up: _build_agent passes self._handle_usage as on_usage.
+    assert "on_usage=self._handle_usage" in runtime_src
+    # Contract: _handle_usage MUST still call _sanitise_usage and
+    # push EV_USAGE through it.
+    assert "def _handle_usage(self, usage: Any) -> None:" in runtime_src
+    assert "sanitised = _sanitise_usage(usage)" in runtime_src
+    assert "self._push(EV_USAGE, sanitised)" in runtime_src
+    # Phase C.7 additions — also fires EV_USAGE_SESSION with rolling totals.
+    assert "self._push(EV_USAGE_SESSION, self._session_totals_payload())" in runtime_src
 
 
 def test_sanitise_usage_helper_drops_non_int_fields(runtime_src: str):

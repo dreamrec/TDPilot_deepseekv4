@@ -700,9 +700,11 @@ class TDPilotAPIExt:
             EV_SUB_TEXT,
             EV_SUB_TOOL,
             EV_TEXT,
+            EV_TIER_SYNC,
             EV_TOOL_CALL,
             EV_TOOL_RESULT,
             EV_USAGE,
+            EV_USAGE_SESSION,
         )
 
         if kind == EV_TEXT:
@@ -793,16 +795,47 @@ class TDPilotAPIExt:
                 self.owner.par.Activemodel.val = short[:60]
             except Exception:
                 pass
-            # Phase 2 (1.8.0) — push a structured `model` event to the
-            # chat. The status-bar code uses tier + picked separately
-            # to render a short-form badge ("pro" vs "flash") and a
-            # tooltip with the full model name.
+            # B-004 (live-debug 2026-05-13, follow-up) — push the per-turn
+            # model event to the chat WS so the badge populates. The
+            # Phase 2 (1.8.0) broadcast was orphaned by commit b1345e3
+            # (B-003) which inserted the EV_TIER_SYNC branch between
+            # EV_MODEL's COMP write and its broadcast tail. tier/picked/
+            # short were left referenced from the wrong scope, silently
+            # NameError'ing and leaving the badge empty.
             self._broadcast(
                 {
                     "type": "model",
                     "tier": str(tier),
                     "model": str(picked),
                     "short": str(short),
+                }
+            )
+        elif kind == EV_TIER_SYNC:
+            # v2.4 / B-003 (live-debug 2026-05-13) — deferred sync of the
+            # Modeltier COMP param after an Agent-side sticky promotion
+            # (e.g. "use only pro this session"). Pre-fix the runtime
+            # callback wrote parent().par.Modeltier from the worker
+            # thread, tripping TD's THREAD CONFLICT detector. Now the
+            # callback only pushes the event; this drain handler runs
+            # on the cook thread and performs the actual write safely.
+            new_tier = str(payload) if payload else ""
+            if new_tier in ("auto", "flash", "pro"):
+                try:
+                    self.owner.par.Modeltier.val = new_tier
+                except Exception as exc:  # noqa: BLE001
+                    debug(f"[tdpilot_API/ext] Modeltier sync failed: {exc}")
+            # B-004 follow-up — broadcast a tier-only model event so the
+            # badge reflects the sticky promotion immediately, even
+            # before the next turn fires its own EV_MODEL. picked/short
+            # are unknown at promotion time (the actual routed model
+            # depends on the next user prompt), so leave them blank;
+            # the next EV_MODEL will fill them in.
+            self._broadcast(
+                {
+                    "type": "model",
+                    "tier": new_tier,
+                    "model": "",
+                    "short": new_tier if new_tier in ("auto", "flash", "pro") else "",
                 }
             )
         elif kind == EV_USAGE:
@@ -813,6 +846,17 @@ class TDPilotAPIExt:
                 {
                     "type": "usage",
                     "usage": payload if isinstance(payload, dict) else {},
+                }
+            )
+        elif kind == EV_USAGE_SESSION:
+            # v2.4 / Phase C.7 — rolling per-session totals. Chat UI
+            # renders these in the footer ("Session: 12.3K in · ...
+            # · ~$0.001"). Pushed once per EV_USAGE so the footer
+            # updates without polling.
+            self._broadcast(
+                {
+                    "type": "usage_session",
+                    "session": payload if isinstance(payload, dict) else {},
                 }
             )
         elif kind == EV_SUB_TEXT:

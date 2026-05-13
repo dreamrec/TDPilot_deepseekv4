@@ -620,8 +620,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "td_cooking_info",
         "description": (
             "Get cook-time stats for a node (or recursively under a path) — "
-            "great for diagnosing 'why is my project slow' questions. Returns "
-            "cook time, CPU time, and cook-frame counters."
+            "great for diagnosing 'why is my project slow' questions. Each "
+            "row now includes cookTime (total wall), cpuCookTime, gpuCookTime "
+            "(v2.4: GPU-only — 0 for non-TOP operators), cookFrame, and (TOPs "
+            "only) cudaMemoryBytes — per-TOP VRAM footprint via cudaMemory(). "
+            "Use sort_by='gpuCookTime' to surface GLSL / feedback-loop hot "
+            "spots, sort_by='cudaMemoryBytes' to find VRAM hogs."
         ),
         "input_schema": {
             "type": "object",
@@ -630,7 +634,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "recurse": {"type": "boolean", "default": False},
                 "sort_by": {
                     "type": "string",
-                    "enum": ["cookTime", "cpuCookTime"],
+                    "enum": [
+                        "cookTime",
+                        "cpuCookTime",
+                        "gpuCookTime",  # v2.4 / Phase A.4
+                        "cudaMemoryBytes",  # v2.4 / Phase A.4
+                    ],
                     "default": "cookTime",
                 },
                 "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 200},
@@ -697,6 +706,21 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "content": {
                     "type": "string",
                     "description": "Markdown body of the memory.",
+                },
+                "content_type": {
+                    "type": "string",
+                    "enum": ["instruction", "reference", "fact"],
+                    "description": (
+                        "How pre-turn BM25 retrieval should treat this entry. "
+                        "Default 'reference' — entry freely surfaces on any "
+                        "matching query. Pick 'instruction' for step lists, "
+                        "recipes, 'how to do X' procedures — those entries "
+                        "are then HIDDEN from generic queries and surface "
+                        "only when the user explicitly names them. "
+                        "(Prevents drive-by tool execution from short prompts "
+                        "matching instruction-shaped memories.) Pick 'fact' "
+                        "for assertions / static knowledge."
+                    ),
                 },
             },
             "required": ["name", "type", "content"],
@@ -876,6 +900,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "description": "reference / guide / catalog / tutorial / project.",
                 },
                 "content": {"type": "string", "description": "Markdown body."},
+                "content_type": {
+                    "type": "string",
+                    "enum": ["instruction", "reference", "fact"],
+                    "description": (
+                        "How pre-turn BM25 retrieval should treat this entry. "
+                        "Default 'reference' — entry surfaces freely on matching "
+                        "queries (the right pick for descriptive knowledge: "
+                        "operator docs, API surfaces, conventions). Pick "
+                        "'instruction' for step-list guides — those then surface "
+                        "only when the user explicitly names them, avoiding "
+                        "drive-by tool execution from incidental short-prompt "
+                        "matches."
+                    ),
+                },
             },
             "required": ["name", "content"],
         },
@@ -934,6 +972,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "required": ["tool"],
                     },
                     "description": "List of {tool, args} dicts — the executable replay sequence.",
+                },
+                "content_type": {
+                    "type": "string",
+                    "enum": ["instruction", "reference", "fact"],
+                    "description": (
+                        "How pre-turn BM25 retrieval should treat this recipe. "
+                        "Default 'instruction' — recipes are step lists by "
+                        "design, so they surface ONLY when the user explicitly "
+                        "names them (avoids drive-by replay from incidental "
+                        "matches). Pass 'reference' for documentation-style "
+                        "recipes the user should be able to search by content."
+                    ),
                 },
             },
             "required": ["name", "replay"],
@@ -1905,6 +1955,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "standalone (memory/knowledge/recipes/skills/patches/user_tools/"
             "subagents/macros/official_docs/td2025_native/introspect/bm25). "
             "Plus active model tier, exec mode, and bundled corpus counts."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "td_get_capabilities_summary",
+        "description": (
+            "v2.4 / Phase C.6 — return a grouped human-readable capability "
+            "index with example prompts per group. Use when the user asks "
+            "'what can you do?' or to render UI affordances (the chat HTML "
+            "renders 5–6 'featured prompt' chips from `featured_prompts` "
+            "on first load). Pure data — no live TD calls."
         ),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },

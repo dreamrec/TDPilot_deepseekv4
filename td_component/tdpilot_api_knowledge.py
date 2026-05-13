@@ -56,6 +56,13 @@ except ImportError:
     USER_KNOWLEDGE_DIR = Path.home() / ".tdpilot-api" / "knowledge"
 KB_CONTAINER_NAME = "kb"
 KB_DAT_PREFIX = "kb_"
+# v2.4 / Phase B.4 — content_type controls pre-turn BM25 retrieval visibility.
+# Knowledge entries are descriptive material by definition (operator docs,
+# API surfaces, conventions). Default "reference" keeps them freely searchable
+# — the same protection memory/recipes give to step lists doesn't apply to
+# knowledge content unless the author explicitly opts in.
+VALID_CONTENT_TYPES = ("instruction", "reference", "fact")
+DEFAULT_CONTENT_TYPE = "reference"
 
 # External "docsbrain" corpora — pre-normalised pages.jsonl files produced
 # by the dpsk4 / Claude variants' build pipeline. We auto-discover any
@@ -158,6 +165,8 @@ def _bundled_entries() -> list[dict]:
                     "name": meta.get("name") or name,
                     "description": meta.get("description") or "",
                     "category": meta.get("category") or "reference",
+                    # v2.4 / Phase B.4 — propagate content_type with default-on-read.
+                    "content_type": (meta.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower(),
                     "text": body,
                 }
             )
@@ -181,6 +190,8 @@ def _user_entries() -> list[dict]:
                     "name": meta.get("name") or p.stem,
                     "description": meta.get("description") or "",
                     "category": meta.get("category") or "reference",
+                    # v2.4 / Phase B.4 — propagate content_type with default-on-read.
+                    "content_type": (meta.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower(),
                     "text": body,
                 }
             )
@@ -416,6 +427,12 @@ def _query_sqlite_fts(
             {
                 "name": name,
                 "category": doc_type or "reference",
+                # v2.4 / Phase B.4 — SQLite FTS rows pre-date the
+                # content_type field; the chunks table has no such
+                # column. External corpora are reference material by
+                # convention (operator docs, official references), so
+                # surfacing them as "reference" matches their intent.
+                "content_type": DEFAULT_CONTENT_TYPE,
                 "description": description,
                 "source": f"corpus:{corpus_id}",
                 "score": round(score, 3),
@@ -521,6 +538,10 @@ def _parse_pages_jsonl(path: Path, corpus_name: str) -> list[dict]:
                         "name": title,
                         "description": desc,
                         "category": page.get("doc_type") or "reference",
+                        # v2.4 / Phase B.4 — content_type. JSONL pages are
+                        # descriptive corpora (operator docs, official
+                        # references) — treat as "reference" by default.
+                        "content_type": (page.get("content_type") or DEFAULT_CONTENT_TYPE),
                         "text": text,
                         "url": page.get("url") or "",
                         "corpus": corpus_name,
@@ -787,6 +808,9 @@ def handle_knowledge_get(body: dict) -> dict:
                 "name": title or chunk_id,
                 "filename": (chunk_id or title) + ".md",
                 "category": category or "reference",
+                # v2.4 / Phase B.4 — external corpora pre-date content_type;
+                # default to "reference" (descriptive material).
+                "content_type": DEFAULT_CONTENT_TYPE,
                 "description": "",
                 "source": f"corpus:{desc['corpus']}",
                 "url": url or "",
@@ -835,22 +859,35 @@ def handle_knowledge_add(body: dict) -> dict:
     description = (body.get("description") or "").strip()
     category = (body.get("category") or "reference").strip().lower() or "reference"
     content = (body.get("content") or "").strip()
+    # v2.4 / Phase B.4 — content_type opt-in. Default "reference" because
+    # knowledge is descriptive material; an author who wants generic-query
+    # hiding for an instruction-shaped knowledge entry can pass
+    # content_type="instruction".
+    content_type = (body.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower()
 
     if not name:
         return {"error": "Missing required field: name"}
     if not content:
         return {"error": "Missing required field: content"}
+    if content_type not in VALID_CONTENT_TYPES:
+        return {
+            "error": (f"Invalid content_type: {content_type!r}. Must be one of {list(VALID_CONTENT_TYPES)}."),
+        }
 
     _ensure_user_dir()
     filename = _slugify(name) + ".md"
     filepath = USER_KNOWLEDGE_DIR / filename
 
-    full = f"---\nname: {name}\ndescription: {description}\ncategory: {category}\n---\n\n{content}\n"
+    full = (
+        f"---\nname: {name}\ndescription: {description}\n"
+        f"category: {category}\ncontent_type: {content_type}\n---\n\n{content}\n"
+    )
     filepath.write_text(full, encoding="utf-8")
     return {
         "ok": True,
         "filename": filename,
         "path": str(filepath),
+        "content_type": content_type,
     }
 
 
@@ -878,6 +915,9 @@ def _bm25_search(query: str, docs: list[dict], top_k: int) -> list[dict]:
             {
                 "name": doc.get("name"),
                 "category": doc.get("category"),
+                # v2.4 / Phase B.4 — surface content_type for the pre-turn
+                # retrieval filter in tdpilot_api_runtime._run_pre_turn_retrieval.
+                "content_type": doc.get("content_type") or DEFAULT_CONTENT_TYPE,
                 "description": doc.get("description"),
                 "source": doc.get("source"),
                 "score": round(score, 3),

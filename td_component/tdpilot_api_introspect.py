@@ -217,6 +217,131 @@ def handle_get_capabilities(body: dict) -> dict:
     return caps
 
 
+# v2.4 / Phase C.6 — capability summary for UI discoverability.
+# Static data, allocated once on module load. Mirrors the MCP-side
+# constant in src/td_mcp/registry/tools_info.py — keep them in sync
+# when you add a new tool family. Each group's `examples` are <= 50
+# chars so they fit as chips below the chat input.
+_CAPABILITIES_SUMMARY: dict[str, Any] = {
+    "schema_version": 1,
+    "groups": [
+        {
+            "id": "build",
+            "title": "Build",
+            "blurb": "Create operators, wire networks, scaffold recipes.",
+            "primary_tools": [
+                "td_create_node",
+                "td_connect_nodes",
+                "td_set_params",
+                "patch_apply",
+            ],
+            "examples": [
+                "Build a kaleidoscope feedback loop",
+                "Add a Constant TOP wired to a Composite TOP",
+                "Replay my 'audio-react' recipe",
+            ],
+        },
+        {
+            "id": "diagnose",
+            "title": "Diagnose",
+            "blurb": "Find errors, profile cooks, detect drift.",
+            "primary_tools": [
+                "td_audit_project",
+                "td_get_errors",
+                "td_cooking_info",
+                "td_detect_instability",
+            ],
+            "examples": [
+                "Audit this project for problems",
+                "Why is the framerate dropping?",
+                "Show recent errors",
+            ],
+        },
+        {
+            "id": "inspect",
+            "title": "Inspect",
+            "blurb": "Survey nodes, describe surface, screenshot.",
+            "primary_tools": [
+                "td_get_nodes",
+                "td_describe_surface",
+                "td_screenshot",
+                "td_get_node_detail",
+            ],
+            "examples": [
+                "List the top 20 nodes by cook time",
+                "Screenshot the network",
+                "Describe this component",
+            ],
+        },
+        {
+            "id": "remember",
+            "title": "Remember",
+            "blurb": "Save techniques and recall them by topic.",
+            "primary_tools": [
+                "memory_save",
+                "memory_recall",
+                "memory_list",
+                "knowledge_save",
+            ],
+            "examples": [
+                "Remember this as 'soft-glow'",
+                "What memories about feedback?",
+                "List my memories",
+            ],
+        },
+        {
+            "id": "recipes",
+            "title": "Recipes",
+            "blurb": "Replay saved techniques or save a new one.",
+            "primary_tools": [
+                "recipe_replay",
+                "recipe_save",
+                "recipe_recall",
+            ],
+            "examples": [
+                "Replay 'audio-react' here",
+                "Save this network as a recipe",
+                "Show favorite recipes",
+            ],
+        },
+        {
+            "id": "learn",
+            "title": "Learn / Lookup",
+            "blurb": "Search docs, find examples, get operator help.",
+            "primary_tools": [
+                "knowledge_search",
+                "td_find_official_example",
+                "td_get_operator_doc",
+            ],
+            "examples": [
+                "How does Trail CHOP work?",
+                "Find an example using Particle GPU",
+                "Snippet for vertex shader",
+            ],
+        },
+    ],
+    "featured_prompts": [
+        "Build a kaleidoscope feedback loop",
+        "Audit this project for problems",
+        "Replay my 'audio-react' recipe",
+        "Screenshot the network",
+        "Why is the framerate dropping?",
+        "What memories about feedback?",
+    ],
+}
+
+
+def handle_get_capabilities_summary(body: dict) -> dict:
+    """v2.4 / Phase C.6 — return the grouped capability index.
+
+    Pure-data tool: no live TD calls, no side effects. The chat UI
+    fetches it on first load to populate "featured prompt" chips
+    below the input field; the agent can also call it directly to
+    answer "what can you do?".
+    """
+    return _CAPABILITIES_SUMMARY
+
+
 # ---------------------------------------------------------------------------
 # Phase 5.2 — first-run detection
 # ---------------------------------------------------------------------------
@@ -299,11 +424,43 @@ def firstrun_status() -> dict:
 
     is_first_run = not (has_api_key or has_memory or has_brains)
 
+    # v2.4 / Phase B.2 — detect Authmode so the chat UI can prompt
+    # legacy COMPs (built pre-v2.3.0, when the default was "open") to
+    # opt INTO token mode. Reads the COMP param directly so the wizard
+    # accurately reflects current state, not the build-script default.
+    authmode = ""
+    try:
+        comp = parent()  # type: ignore[name-defined] # noqa: F821
+        if comp is not None and hasattr(comp.par, "Authmode"):
+            authmode = str(comp.par.Authmode.val or "").strip().lower()
+    except NameError:
+        # Not running inside TD (e.g. in tests) — leave empty.
+        authmode = ""
+    except Exception:
+        authmode = ""
+    authmode_is_open = authmode == "open"
+
     # Steps the chat UI should highlight. Order matches the wizard
     # flow: paste key first (everything else is gated on it), then
     # invite the user to save a memory once they've had a real
     # conversation, then optionally install a brain.
     next_steps: list[dict] = []
+    # v2.4 / Phase B.2 — surface the Authmode migration BEFORE other
+    # steps so legacy-open users see it first. Acts as a soft nudge,
+    # not a forced switch (drag-and-go convenience is preserved for
+    # users who genuinely want it).
+    if authmode_is_open:
+        next_steps.append(
+            {
+                "name": "switch_to_token_auth",
+                "label": (
+                    "Auth is OPEN — any local browser tab can drive "
+                    "TouchDesigner. Recommended: switch to token auth."
+                ),
+                "done": False,
+                "recommended_action": "switch_to_token",
+            }
+        )
     if not has_api_key:
         next_steps.append(
             {
@@ -335,5 +492,8 @@ def firstrun_status() -> dict:
         "has_api_key": has_api_key,
         "has_memory": has_memory,
         "has_brains": has_brains,
+        # v2.4 / Phase B.2 — Authmode surface for the migration wizard.
+        "authmode": authmode,
+        "authmode_is_open": authmode_is_open,
         "next_steps": next_steps,
     }

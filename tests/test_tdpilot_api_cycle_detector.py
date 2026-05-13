@@ -44,10 +44,29 @@ class TestArgsHash:
         b = {"path": "/x", "options": {"b": 2, "a": 1}}
         assert cd.args_hash(a) == cd.args_hash(b)
 
-    def test_lists_are_order_sensitive(self):
-        # Lists DO encode order (it matters for most TD tools — connect
-        # source/dest, draw call sequence, etc.).
-        assert cd.args_hash({"steps": [1, 2, 3]}) != cd.args_hash({"steps": [3, 2, 1]})
+    def test_lists_are_order_independent_for_cycle_detect(self):
+        """v2.4 / B-010 (live-debug 2026-05-13) — pre-fix this test
+        asserted the OPPOSITE: that lists encode order. That was the
+        bug — the agent could permute list args (e.g. modes=['a','b']
+        vs ['b','a']) to evade cycle detection. Post-fix, list order
+        is canonicalized for the hash because:
+
+          * The cycle-detector's purpose is to catch "agent is stuck
+            repeating equivalent work", not to literally compare call
+            signatures. Re-running the same probe with permuted list
+            args has the same end effect — should count as identical.
+          * Tool-batch's ``calls`` list IS conceptually ordered, but
+            re-running the same batch in different order also has
+            the same end effect on the project, so this is correct
+            for that use case too.
+          * Genuinely different list CONTENTS (not just order) still
+            hash differently — covered by the B-010 pin tests.
+
+        If you arrive here because cycle-detection got noisier, the
+        right fix is to lower the threshold OR scope the cycle-ledger
+        to specific tool families, NOT to re-introduce order-sensitivity.
+        """
+        assert cd.args_hash({"steps": [1, 2, 3]}) == cd.args_hash({"steps": [3, 2, 1]})
 
     def test_default_str_handles_path_like_values(self):
         # default=str lets through non-JSON values without raising

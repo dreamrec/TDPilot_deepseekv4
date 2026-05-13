@@ -11,6 +11,8 @@ TD2025_TOOLS = {
     "td_tdresources_inspect",
     "td_component_standardize",
     "td_color_pipeline",
+    # v2.4 / Phase C.2 — MIDI device enumeration via app.midiDeviceManager
+    "td_midi_devices",
 }
 
 

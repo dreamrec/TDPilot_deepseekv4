@@ -85,6 +85,10 @@ def test_tool_registry_contains_core_and_v2_surfaces():
         "td_tdresources_inspect",
         "td_component_standardize",
         "td_color_pipeline",
+        # v2.4 Phase C.2 — MIDI device enumeration
+        "td_midi_devices",
+        # v2.4 Phase C.6 — grouped capability index for UI discoverability
+        "td_get_capabilities_summary",
         # v1.3.2 official recommendation tools
         "td_recommend_official_component",
         "td_find_official_example",

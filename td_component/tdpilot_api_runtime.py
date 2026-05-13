@@ -22,6 +22,7 @@ The COMP's extension wires:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -82,18 +83,48 @@ class CookThreadDispatcher:
     Construct with the dispatcher that does the actual TD work (typically
     `make_dispatcher(handlers_module)` from tdpilot_api_dispatcher). Pass
     THIS object to the Agent as its dispatcher.
+
+    v2.4 / Phase C.8 — circuit breaker. When TD is paused mid-turn the cook
+    thread doesn't fire ``pump`` and EVERY queued call waits the full
+    ``timeout`` (60s default). A 10-tool turn would hang 600s. The breaker
+    trips on the first timeout: ``cancel_pending`` drains anything already
+    queued, ``_tripped`` short-circuits subsequent ``__call__`` entries to
+    return immediately, and ``on_breaker_trip`` lets the runtime push an
+    EV_HINT explaining the symptom. ``reset_breaker`` re-arms the
+    dispatcher for the next turn (called by ``start_turn``).
     """
 
-    def __init__(self, raw_dispatcher: Callable[[str, dict], Any], timeout: float = DEFAULT_TOOL_TIMEOUT):
+    def __init__(
+        self,
+        raw_dispatcher: Callable[[str, dict], Any],
+        timeout: float = DEFAULT_TOOL_TIMEOUT,
+        on_breaker_trip: Callable[[str], None] | None = None,
+    ):
         self._raw = raw_dispatcher
         self._timeout = timeout
         self._pending: Queue = Queue()  # (call_id, name, args)
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
         self._results: dict[str, Any] = {}
+        # v2.4 / Phase C.8 — circuit breaker state.
+        self._tripped: bool = False
+        self._on_breaker_trip = on_breaker_trip
 
     def __call__(self, name: str, args: dict) -> Any:
         """Called from the worker thread. Blocks until cook-thread pump runs the tool."""
+        # v2.4 / Phase C.8 — fast-fail if the breaker is already tripped.
+        # Tripping happens after the first timeout in a paused-TD scenario;
+        # subsequent calls return immediately instead of each waiting the
+        # full timeout. ``start_turn`` resets the breaker between turns.
+        if self._tripped:
+            return {
+                "error": (
+                    f"Tool {name} aborted — TD dispatch suspended (circuit "
+                    "breaker tripped). Resume TouchDesigner playback "
+                    "(spacebar) and retry."
+                ),
+                "_tool_error": True,
+            }
         call_id = uuid.uuid4().hex
         self._pending.put((call_id, name, args))
         with self._cond:
@@ -101,7 +132,18 @@ class CookThreadDispatcher:
             while call_id not in self._results:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    return {"error": f"Tool {name} timed out after {self._timeout}s"}
+                    # v2.4 / Phase C.8 — first timeout trips the breaker
+                    # so the rest of this turn's queued tools fail fast
+                    # rather than each waiting their own 60s window.
+                    self._trip_breaker_locked(reason=f"{name} timed out")
+                    return {
+                        "error": (
+                            f"Tool {name} timed out after {self._timeout}s "
+                            "— TD likely paused. Subsequent tools in this "
+                            "turn will fail fast until you resume playback."
+                        ),
+                        "_tool_error": True,
+                    }
                 self._cond.wait(timeout=remaining)
             return self._results.pop(call_id)
 
@@ -135,13 +177,49 @@ class CookThreadDispatcher:
         # Drain the queue and produce timeout-style errors for everything
         # currently outstanding, so the worker returns instead of hanging.
         with self._cond:
-            while True:
-                try:
-                    call_id, name, _args = self._pending.get_nowait()
-                except Empty:
-                    break
-                self._results[call_id] = {"error": f"Tool {name} cancelled"}
+            self._cancel_pending_locked()
             self._cond.notify_all()
+
+    def _cancel_pending_locked(self) -> None:
+        """Internal helper — caller must hold ``self._lock``."""
+        while True:
+            try:
+                call_id, name, _args = self._pending.get_nowait()
+            except Empty:
+                break
+            self._results[call_id] = {"error": f"Tool {name} cancelled"}
+
+    def _trip_breaker_locked(self, reason: str) -> None:
+        """v2.4 / Phase C.8 — trip the breaker. Caller must hold ``self._lock``.
+
+        Drains anything already queued (so other waiting workers return
+        immediately) and fires the runtime callback so EV_HINT surfaces
+        the diagnosis to the user. Idempotent — re-tripping is a no-op.
+        """
+        if self._tripped:
+            return
+        self._tripped = True
+        self._cancel_pending_locked()
+        self._cond.notify_all()
+        # Fire the callback OUTSIDE the lock-held region in spirit
+        # (the runtime may push an event that re-enters via the WS
+        # path), but we're already inside the cond block — the
+        # callback's _push goes through a thread-safe Queue so this
+        # is fine in practice.
+        if self._on_breaker_trip is not None:
+            try:
+                self._on_breaker_trip(reason)
+            except Exception as exc:  # noqa: BLE001 — breaker must not raise back
+                print(f"[tdpilot_API/dispatcher] on_breaker_trip raised: {exc}")
+
+    def reset_breaker(self) -> None:
+        """v2.4 / Phase C.8 — re-arm the breaker. Called by ``start_turn``
+        so a new turn after a paused-TD episode gets a fresh attempt.
+        Drains any stale results that piled up while tripped."""
+        with self._cond:
+            self._tripped = False
+            self._results.clear()
+            self._cancel_pending_locked()
 
 
 # Event types pushed by the worker, drained by the cook thread.
@@ -157,6 +235,20 @@ EV_MODEL = "model"  # payload: {"tier": str, "model": str} — Sprint 4.3
 # per-turn meter and resets on EV_DONE / EV_ERROR. All fields optional
 # — DeepSeek's compat layer may omit some depending on model version.
 EV_USAGE = "usage"  # payload: {"input_tokens": int, "output_tokens": int, "cache_read_input_tokens": int}
+# v2.4 / Phase C.7 — rolling per-session token totals. Pushed once
+# after every EV_USAGE so the chat footer reflects the running cost
+# without polling /stats. Payload is the same shape /stats returns
+# under response["session"] (one source of truth).
+EV_USAGE_SESSION = "usage_session"  # payload: {input_tokens, output_tokens, cache_hits, cache_misses, approx_usd, started_at, model_pricing_version}
+# v2.4 / B-003 (live-debug 2026-05-13) — deferred COMP-param sync for
+# the sticky-tier feature. ``on_tier_change`` fires from the worker
+# thread (Agent._maybe_promote_tier inside Agent._loop). Pre-fix the
+# callback wrote ``parent().par.Modeltier = new_tier`` directly,
+# triggering TD's THREAD CONFLICT detector on ``td.ParentShortcut``.
+# Now the callback only pushes this event; the cook-thread drain
+# handler in tdpilot_api_extension.py performs the actual COMP
+# param write. Payload is the new tier string ("auto"/"flash"/"pro").
+EV_TIER_SYNC = "tier_sync"  # payload: str (new model tier)
 # Phase 1.3 — severity-tracked validation hint. Emitted at turn end
 # when high-severity mutations went out without a follow-up validator
 # call. Soft signal; chat UI renders as a subtle nudge below the
@@ -241,6 +333,39 @@ _USAGE_FIELDS = (
 )
 
 
+# v2.4 / Phase C.7 — DeepSeek published rates as of 2026-05. Values
+# are USD per 1M tokens. The version stamp ships with /stats so the
+# chat footer can label estimates that came from an outdated build.
+# When DeepSeek revises pricing, bump _PRICING_VERSION and the three
+# constants together; the wire format is forward-compatible.
+_PRICING_VERSION = "2026-05-01"
+_PRICE_INPUT_FRESH_PER_M = 0.27  # USD/M uncached input tokens
+_PRICE_INPUT_CACHED_PER_M = 0.027  # 10x discount on cache hits
+_PRICE_OUTPUT_PER_M = 1.10  # USD/M output tokens
+
+
+def _estimate_usd(input_tokens: int, output_tokens: int, cache_hits: int) -> float:
+    """Best-effort USD estimate. Labelled 'approximate' in every UI
+    surface that consumes this — DeepSeek can revise rates between
+    releases. ``cache_hits`` is the count of API calls where the
+    request hit the cache; we don't currently track per-token cache
+    splits, so the estimate assumes all input was uncached (worst
+    case, gives a conservative upper bound that won't surprise the
+    user with a bigger-than-displayed bill).
+    """
+    fresh_cost = (input_tokens / 1_000_000.0) * _PRICE_INPUT_FRESH_PER_M
+    out_cost = (output_tokens / 1_000_000.0) * _PRICE_OUTPUT_PER_M
+    return round(fresh_cost + out_cost, 6)
+
+
+def _now_iso() -> str:
+    """Return current UTC time as ISO-8601 string. Used for
+    session-start timestamps in /stats responses."""
+    import datetime as _dt
+
+    return _dt.datetime.utcnow().isoformat() + "Z"
+
+
 def _sanitise_usage(usage: Any) -> dict[str, int]:
     """Coerce a raw usage dict to ``{field: int}`` with non-int and
     missing fields dropped to 0. The frontend treats every key as
@@ -292,7 +417,58 @@ SYSTEM_PROMPT_BASE = (
     "and surface any remaining warnings.\n"
     "  4. Be token-frugal: avoid td_screenshot unless explicitly needed.\n"
     "  5. For risky multi-step builds, call td_project_lifecycle action=save "
-    "FIRST so you can undo back if something breaks.\n\n"
+    "FIRST so you can undo back if something breaks.\n"
+    "  6. **Never re-call a diagnostic tool with identical args after a "
+    "'no-change' result.** If td_get_errors, td_analyze_frame, "
+    "td_get_node_detail, td_cooking_info, or td_get_connections returns "
+    "substantively the same payload twice this turn for the same args, do "
+    "NOT issue a third call — the cycle-detector terminates your turn after "
+    "3 identical calls. On the second matching result, SWITCH STRATEGY: "
+    "probe a different node, take ONE screenshot of the suspect TOP, "
+    "inspect upstream connections via td_get_connections, force a recook "
+    "via td_exec_python and then probe a DIFFERENT downstream node, or "
+    "report the stuckness to the user. Repeating a probe expecting "
+    "different output is an infinite-loop pattern, not progress.\n\n"
+    "**Parallel inspection via tool_batch.** When you need 2+ independent "
+    "READ-ONLY lookups in the same turn (info + errors + audit, or "
+    "memory_recall + knowledge_search + td_get_hints), issue them as a "
+    "single ``tool_batch`` call instead of N sequential tool_use blocks. "
+    "Sub-calls run serially on the cook thread (TD's API isn't thread-safe), "
+    "so the win is round-trip latency, not per-tool wall time — but that "
+    "round-trip win is 3–9 seconds per turn on inspection-heavy work. "
+    "Reserve serial tool_use for genuinely sequential operations where each "
+    "call's args depend on the previous call's output (create → connect → "
+    "set parameters).\n"
+    '  Schema reminder: ``tool_batch({"calls": [{"tool": "<name>", '
+    '"args": {...}}, ...]})``. Sub-calls use the field ``tool`` (NOT '
+    "``name``). Max 8 per batch. Nested tool_batch is rejected. A failed "
+    "sub-call does NOT abort the batch — the rest still run and the failure "
+    "is reported in ``results[i].error``.\n"
+    "  Worked examples (under cost-no-constraint posture, prefer these "
+    "patterns over serial tool_use):\n"
+    "    • Pre-build inspection (3 calls, one round-trip):\n"
+    '        tool_batch({"calls": [\n'
+    '          {"tool": "td_get_nodes",      "args": {"path": "/project1"}},\n'
+    '          {"tool": "td_get_errors",     "args": {"path": "/project1"}},\n'
+    '          {"tool": "td_audit_project",  "args": {}}\n'
+    "        ]})\n"
+    "    • Memory + knowledge recall before creating anything (3 calls, "
+    "one round-trip):\n"
+    '        tool_batch({"calls": [\n'
+    '          {"tool": "memory_recall",    "args": {"query": "audio reactive noise"}},\n'
+    '          {"tool": "knowledge_search", "args": {"query": "audio reactive noise"}},\n'
+    '          {"tool": "td_get_hints",     "args": {"context": "audio reactive"}}\n'
+    "        ]})\n"
+    "    • Post-edit verification (3 calls, one round-trip):\n"
+    '        tool_batch({"calls": [\n'
+    '          {"tool": "td_get_errors",    "args": {"path": "/project1"}},\n'
+    '          {"tool": "td_screenshot",    "args": {"path": "/project1/render1"}},\n'
+    '          {"tool": "td_cooking_info",  "args": {"sort_by": "cookTime", "limit": 5}}\n'
+    "        ]})\n"
+    "  Anti-pattern: do NOT batch operations that depend on each other's "
+    "output (e.g., td_create_node followed by td_set_params on the new "
+    "node — the second needs the first's returned path, which serial "
+    "tool_use exposes but tool_batch does not).\n\n"
     "Critical rules for TouchDesigner type names:\n"
     "  * Operator types ALWAYS include the family suffix in camelCase: "
     "'noiseTOP', 'levelTOP', 'boxSOP', 'sphereSOP', 'gridSOP', "
@@ -328,6 +504,16 @@ SYSTEM_PROMPT_BASE = (
     "reference). Record from BOTH corrections AND successes — if you "
     "only save corrections you'll drift away from approaches the user "
     "has already validated.\n"
+    "  * v2.4 — also pick a ``content_type`` (instruction/reference/fact). "
+    "'instruction' marks step lists / recipe-shaped procedures so they're "
+    "hidden from generic BM25 retrieval (surfaced only when the user "
+    "names them) — saves you from drive-by tool execution on short "
+    "ambiguous prompts. 'reference' (the default) is right for "
+    "descriptive material. 'fact' for short assertions / static knowledge. "
+    "Pre-retrieved entries surfaced under 'Pre-turn retrieval' that are "
+    "marked instruction-shaped in their content body should be treated "
+    "as off-limits unless the user EXPLICITLY asked for that procedure "
+    "in the current turn.\n"
     "  * RECALL memory when relevant — call memory_get on a specific "
     "indexed entry, or memory_recall(query) for BM25 search. Do this "
     "BEFORE asking the user clarifying questions when you suspect the "
@@ -560,9 +746,25 @@ class AgentRuntime:
         if system_prompt is None:
             system_prompt = build_system_prompt()
         self._events: Queue = Queue()
+        # v2.4 / Phase C.7 — per-session token + cache accumulators.
+        # Updated by _handle_usage on every EV_USAGE; reset by reset();
+        # survive stop(). Worker writes, cook reads from /stats. Integers
+        # are word-sized writes in CPython so no lock needed.
+        self._session_input_tokens: int = 0
+        self._session_output_tokens: int = 0
+        self._session_cache_hits: int = 0  # cache_read_input_tokens > 0
+        self._session_cache_misses: int = 0  # input_tokens > 0 AND read == 0
+        self._session_started_iso: str = _now_iso()
         # The Agent always sees the cook-thread-safe wrapper so it never
         # touches TD from the worker thread.
-        self._cook_dispatcher = CookThreadDispatcher(dispatcher)
+        # v2.4 / Phase C.8 — wire on_breaker_trip so the circuit breaker
+        # can push an EV_HINT explaining the symptom (paused TD →
+        # tool dispatch suspended). Reason string travels into the hint
+        # so the chat UI can show specifics.
+        self._cook_dispatcher = CookThreadDispatcher(
+            dispatcher,
+            on_breaker_trip=self._on_dispatcher_breaker_trip,
+        )
         self._dispatcher = self._cook_dispatcher
         # Keep the RAW dispatcher reachable for handlers that need to
         # invoke other tools synchronously (e.g. handle_recipe_replay,
@@ -717,10 +919,29 @@ class AgentRuntime:
             # so the promotion survives a chat-panel reload (start_turn
             # re-reads the COMP param every turn).
             on_tier_change=self._sync_model_tier_to_comp,
+            # v2.4 / B-009 (live-debug 2026-05-13) — heartbeat. Fires every
+            # ``heartbeat_interval`` (default 30s) while the agent is
+            # blocked on a urlopen to DeepSeek. We push EV_STATE("thinking")
+            # so the WS event re-arms the JS activity watchdog. Without
+            # this, pro extended-thinking turns of 60-180s tripped a false
+            # 'idle (timeout)' in the chat panel.
+            on_heartbeat=lambda: self._push(EV_STATE, "thinking"),
             # Phase 2 (1.8.0) — per-call token usage to the chat
             # status bar. Sanitised to int-or-zero so the frontend
             # never sees a stray non-numeric field.
-            on_usage=lambda usage: self._push(EV_USAGE, _sanitise_usage(usage)),
+            # v2.4 / Phase C.7 — handler accumulates session totals
+            # and pushes both EV_USAGE (per-call) and EV_USAGE_SESSION
+            # (rolling) so the chat footer can render running cost.
+            on_usage=self._handle_usage,
+            # v2.4 / Phase A.5 — Agent emits soft hints during HTTP retry
+            # so the chat UI can render "retrying in 5s…" instead of
+            # going silent for the duration of a 429-rate-limit window.
+            # Same payload shape as the validation/cycle-detection hints
+            # already in this file: {"kind", "message", "tools"}.
+            on_hint=lambda kind, message: self._push(
+                EV_HINT,
+                {"kind": kind, "message": message, "tools": []},
+            ),
             # Phase 1.1 (v2.2.0) — auto-rollback on error regression.
             # ``_build_rollback_guard_factory`` honours
             # TDPILOT_DISABLE_AUTO_ROLLBACK and returns ``None`` when
@@ -734,24 +955,54 @@ class AgentRuntime:
             # the factory; ``None`` means cycle detection is off
             # for the lifetime of this Agent instance.
             cycle_ledger_factory=self._build_cycle_ledger_factory(),
+            # v2.4 / Phase B.1 — screenshot vision pipeline. Off by
+            # default; flip to ON by setting env var
+            # TDPILOT_VISION_PIPELINE=1 (or COMP param if we add one
+            # later). Needs a live DeepSeek call to verify the compat
+            # layer accepts ``image`` content blocks in user content —
+            # if it doesn't, the call 400s and the legacy
+            # embedded-base64 behavior is restored by setting the env
+            # var back to 0.
+            enable_vision_pipeline=(
+                os.environ.get("TDPILOT_VISION_PIPELINE", "").strip() in ("1", "true", "yes", "on")
+            ),
+            # v2.4 / Phase C.9 — extended-thinking budget. Read from
+            # the Thinkingbudget COMP param (added to _API_PAGE in
+            # the v2.4 build), with env-var fallback for headless
+            # tests. 0 = disabled (legacy behaviour, byte-stable
+            # cache prefix). 8000 is the build-script schema default.
+            thinking_budget=self._read_thinking_budget(),
         )
 
     def _sync_model_tier_to_comp(self, new_tier: str) -> None:
         """Mirror an Agent-side sticky-tier promotion back to the COMP
-        ``Modeltier`` param. Best-effort: if the COMP isn't reachable
-        (e.g. headless tests, parent() not callable) the in-memory mutation
-        still holds for the lifetime of this Agent instance.
+        ``Modeltier`` param.
+
+        v2.4 / B-003 (live-debug 2026-05-13) — pre-fix this method wrote
+        ``parent().par.Modeltier = new_tier`` directly. But this method
+        is wired as ``on_tier_change`` and fires from inside
+        ``Agent._maybe_promote_tier`` which runs on the WORKER thread
+        (Agent._loop). Touching ``parent()`` / a ``td.ParentShortcut``
+        from the worker thread trips TD's THREAD CONFLICT detector with
+        a "may behave unpredictably or terminate" dialog. The fix
+        defers the COMP-param write to the cook thread by pushing an
+        EV_TIER_SYNC event; the drain handler in
+        ``tdpilot_api_extension.py`` performs the actual write under
+        ``onFrameStart`` (cook-thread context). The in-memory
+        ``self._config`` update stays here because dict ops are
+        thread-safe in CPython.
         """
         if new_tier not in ("auto", "flash", "pro"):
             return
         # Keep the runtime's cached config in sync so the next start_turn's
-        # live-refresh (line ~1282 reading parent().par.Modeltier) doesn't
-        # immediately fight the agent's mutation.
+        # live-refresh (line ~1644 reading parent().par.Modeltier) doesn't
+        # immediately fight the agent's mutation. dict mutation is
+        # thread-safe in CPython — no parent() touch here.
         self._config["model_tier"] = new_tier
-        try:
-            parent().par.Modeltier = new_tier  # type: ignore[name-defined]
-        except Exception:
-            pass
+        # Defer the COMP-param write to the cook thread via the event
+        # queue. _push uses a thread-safe Queue, so calling it from the
+        # worker is fine.
+        self._push(EV_TIER_SYNC, new_tier)
 
     def _build_rollback_guard_factory(self) -> Callable[..., Any] | None:
         """Return a factory ``(dispatcher, tool_names) -> AutoRollbackGuard``
@@ -1128,6 +1379,34 @@ class AgentRuntime:
         if not hits:
             return ""
 
+        # v2.4 / Phase B.4 — content_type filter. "instruction"-typed
+        # hits (recipes, step lists, how-to entries) are step-by-step
+        # procedures the model would otherwise execute drive-by from
+        # a generic prompt. Surface them ONLY when the user's message
+        # contains the entry's name as a substring — explicit reference
+        # is the gate. "reference" / "fact" hits flow through unchanged.
+        # Layered on top of the existing 16-char floor and per-length
+        # score thresholds (defense in depth — three independent gates
+        # protect against the over-eager-tool-use scenario from memory
+        # entry project_tdpilot_api_agent_overeager_tool_use.md).
+        lowered_text = text.lower()
+
+        def _user_named(hit: dict) -> bool:
+            name = (hit.get("name") or hit.get("filename") or "").lower().strip()
+            # Strip a trailing ".md" so a memory called "noise_recipe"
+            # matches both "run noise_recipe" and "run noise_recipe.md".
+            if name.endswith(".md"):
+                name = name[:-3]
+            # Require at least 4 chars to avoid false-matching generic
+            # short names (e.g. an entry called "fps" appearing in any
+            # message mentioning fps).
+            return bool(name) and len(name) >= 4 and name in lowered_text
+
+        hits = [h for h in hits if (h.get("content_type") or "reference") != "instruction" or _user_named(h)]
+
+        if not hits:
+            return ""
+
         # Sort by score descending; threshold below which a hit is
         # too weak to be useful. BM25 over short queries can return
         # near-zero scores — those would only confuse the model.
@@ -1253,6 +1532,93 @@ class AgentRuntime:
     # as separate tech debt.
     # ------------------------------------------------------------------
 
+    def _handle_usage(self, usage: Any) -> None:
+        """v2.4 / Phase C.7 — accumulate session token + cache counts
+        and emit EV_USAGE + EV_USAGE_SESSION.
+
+        Cache classification: a call that reports
+        ``cache_read_input_tokens > 0`` counts as a hit; a call where
+        input_tokens > 0 AND cache_read_input_tokens == 0 counts as a
+        miss. Other shapes (zero-input keep-alives, missing fields)
+        don't change either counter.
+        """
+        sanitised = _sanitise_usage(usage)
+        self._session_input_tokens += sanitised.get("input_tokens", 0)
+        self._session_output_tokens += sanitised.get("output_tokens", 0)
+        read = sanitised.get("cache_read_input_tokens", 0)
+        fresh = sanitised.get("input_tokens", 0)
+        if read > 0:
+            self._session_cache_hits += 1
+        elif fresh > 0:
+            self._session_cache_misses += 1
+        self._push(EV_USAGE, sanitised)
+        self._push(EV_USAGE_SESSION, self._session_totals_payload())
+
+    def _session_totals_payload(self) -> dict[str, Any]:
+        """v2.4 / Phase C.7 — return the current session-totals dict.
+        Same shape pushed via EV_USAGE_SESSION and returned by /stats."""
+        return {
+            "input_tokens": self._session_input_tokens,
+            "output_tokens": self._session_output_tokens,
+            "cache_hits": self._session_cache_hits,
+            "cache_misses": self._session_cache_misses,
+            "approx_usd": _estimate_usd(
+                self._session_input_tokens,
+                self._session_output_tokens,
+                self._session_cache_hits,
+            ),
+            "started_at": self._session_started_iso,
+            "model_pricing_version": _PRICING_VERSION,
+        }
+
+    def _read_thinking_budget(self) -> int:
+        """v2.4 / Phase C.9 — read the Thinkingbudget COMP param.
+
+        Order: COMP param first (added to _API_PAGE in v2.4 build),
+        env var ``TDPILOT_THINKING_BUDGET`` second (for headless
+        tests), 0 otherwise (disabled). Clamped to ≥ 0. Returns 0
+        for any parsing failure so a malformed value can't crash the
+        runtime construction path.
+        """
+        try:
+            comp = parent()  # type: ignore[name-defined] # noqa: F821
+            if comp is not None and hasattr(comp.par, "Thinkingbudget"):
+                value = int(comp.par.Thinkingbudget.val or 0)
+                return max(0, value)
+        except NameError:
+            pass  # not running inside TD
+        except Exception as exc:  # noqa: BLE001
+            print(f"[tdpilot_API/runtime] Thinkingbudget read failed: {exc}")
+        raw = os.environ.get("TDPILOT_THINKING_BUDGET", "").strip()
+        if raw:
+            try:
+                return max(0, int(raw))
+            except ValueError:
+                pass
+        return 0
+
+    def _on_dispatcher_breaker_trip(self, reason: str) -> None:
+        """v2.4 / Phase C.8 — CookThreadDispatcher fires this when the
+        circuit breaker trips on a tool timeout. Push EV_HINT so the
+        chat UI surfaces a paused-TD diagnosis instead of going silent
+        for the rest of the turn. Called from the worker thread; uses
+        the existing thread-safe _push pathway.
+        """
+        message = (
+            "Tool dispatch suspended — TouchDesigner cook thread isn't "
+            "responding (likely paused). Subsequent tool calls in this "
+            "turn will fail fast until you press Spacebar to resume "
+            "playback. The original tool timed out: " + reason
+        )
+        self._push(
+            EV_HINT,
+            {
+                "kind": "dispatcher_breaker_tripped",
+                "message": message,
+                "tools": [],
+            },
+        )
+
     def _is_td_paused(self) -> bool:
         """Return True if TouchDesigner playback is paused.
 
@@ -1277,6 +1643,13 @@ class AgentRuntime:
             return False
         if self._worker is not None and self._worker.is_alive():
             return False
+        # v2.4 / Phase C.8 — re-arm the dispatcher's circuit breaker
+        # at every turn boundary. If TD was paused last turn and the
+        # breaker tripped, the user has hopefully resumed playback
+        # before sending the next message; give them a fresh attempt
+        # without requiring a Reset pulse.
+        if self._cook_dispatcher is not None:
+            self._cook_dispatcher.reset_breaker()
         # v2.1.1 — paused-TD UX trap. See _is_td_paused docstring above.
         # Emit BEFORE any other turn-prep work so the warning lands
         # in the chat even if a downstream step raises.
@@ -1408,6 +1781,14 @@ class AgentRuntime:
         # A reset starts a fresh session, so previously-triggered
         # skills should NOT carry over into the new conversation.
         self._session_skills_activated.clear()
+        # v2.4 / Phase C.7 — zero session token + cache counters and
+        # refresh the started-at timestamp. The chat footer's
+        # "Session: X in · Y out · ~$Z" pill resets to 0 on next push.
+        self._session_input_tokens = 0
+        self._session_output_tokens = 0
+        self._session_cache_hits = 0
+        self._session_cache_misses = 0
+        self._session_started_iso = _now_iso()
         # Phase 1.3 — same logic for the per-turn validation ledger.
         self._turn_tool_calls = []
         # Phase 2 (1.8.0) — drop any straggling latency-clock entries.
@@ -1475,8 +1856,23 @@ class AgentRuntime:
             self._push(EV_STATE, "idle")
             print(f"[tdpilot_API/runtime] AgentError surfaced: {exc}")
         except Exception as exc:  # noqa: BLE001
-            self._push(EV_ERROR, redact(f"Worker crash: {type(exc).__name__}: {exc}"))
-            self._push(EV_STATE, "idle")
+            # B-005 (live-debug 2026-05-13) — TD's textDAT module reload
+            # can break class identity: ``CycleDetected`` inherits from
+            # ``AgentError`` at definition time, but after a reload the
+            # two modules may hold different class objects, so
+            # ``except AgentError`` silently misses it. Result: the user
+            # sees a misleading "Worker crash:" prefix on what was
+            # actually a controlled cycle abort already surfaced via
+            # on_error. Fix: also match agent-side controlled failures
+            # by class NAME, which survives module reloads. Real
+            # unexpected exceptions still surface as "Worker crash:".
+            type_name = type(exc).__name__
+            if type_name in ("AgentError", "TurnBudgetExceeded", "CycleDetected"):
+                self._push(EV_STATE, "idle")
+                print(f"[tdpilot_API/runtime] {type_name} surfaced (name-match): {exc}")
+            else:
+                self._push(EV_ERROR, redact(f"Worker crash: {type_name}: {exc}"))
+                self._push(EV_STATE, "idle")
         finally:
             # Brief grace period so a rapid second start_turn doesn't race
             # with the still-finishing thread.

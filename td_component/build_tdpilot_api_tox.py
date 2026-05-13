@@ -138,6 +138,16 @@ _API_PAGE = [
     ("Maxtokens", "Int", "Max Tokens (out, max 384000)", 32768),
     ("Temperature", "Float", "Temperature", 0.7),
     ("Turnbudget", "Int", "Turn Budget (tool rounds)", 100),
+    # v2.4 / Phase C.9 — extended-thinking budget.
+    #
+    # When > 0, the agent adds ``{"thinking": {"type": "enabled",
+    # "budget_tokens": N}}`` to every /v1/messages request body.
+    # DeepSeek's Anthropic-compat layer support for this field is
+    # undocumented as of 2026-05; if it 400s, set this to 0 to
+    # disable. 0 = disabled (legacy pre-v2.4 behaviour). 8000 is the
+    # plan's recommended default — deep reasoning compounds, and
+    # cost is not a constraint under the v2.4 operating posture.
+    ("Thinkingbudget", "Int", "Thinking Budget (0 = disabled)", 8000),
     ("Soundondone", "Toggle", "Sound on completion", True),
     ("Soundvolume", "Float", "Sound Volume (0-1)", 0.7),
     ("Autoopenpanel", "Toggle", "Auto-open chat in browser on load", True),

@@ -1,5 +1,49 @@
 # Changelog
 
+## 2.4.0 - 2026-05-13
+
+**Multi-phase v2.4 release** — Phase A (zero-risk MCP additions) + Phase B (vision pipeline + auth wizard + content_type) + most of Phase C (cost tracking, capability summary, MIDI, circuit breaker, thinking budget), plus a same-day live-debug stack closing **10 bugs (B-001..B-010)** surfaced while running the canonical failing prompt "Build a kaleidoscope feedback loop" end-to-end. The kaleidoscope task that failed every attempt before this release now succeeds with smooth-trail feedback. Tool count 93 → 105.
+
+### v2.4 phases
+
+- **Phase A — zero-risk quick wins** (commit `c73f750`). Five small MCP additions: `td_get_capabilities_summary` (single-call discovery), extended `td_cooking_info` sort_by enum (`gpuCookTime` + `cudaMemoryBytes` — Bug B-001 fix to chat-pipe schema), retry-with-backoff on `/v1/messages` (429 + 5xx with Retry-After honour), `tool_batch` for parallel READ-only inspection (saves 3–9s round-trip per turn), and a soft-nudge `on_hint` UI surface for retry/exhaustion visibility.
+
+- **Phase B — vision pipeline + auth wizard + content_type** (commit `e21fe8e`). The screenshot pipeline now strips `data_base64` from tool_results and injects a sibling `image` content block so DeepSeek's vision-capable variants can actually see the screenshot (off by default until live-confirmed against compat layer). The first-run auth wizard ships `Authmode=token` by default with a one-click "open mode" override for solo machines. Memory/knowledge/recipe entries now have an explicit `content_type` field (instruction | reference | fact) so the LLM can distinguish "procedure to execute" from "information to read".
+
+- **Phase C — partial** (commits `93dbbdd`, `befa9f3`, `c2346dd`, `ff4e805`). New tools: `td_midi_devices` for MIDI I/O inspection + a hint pack for common MIDI mappings; per-session cost tracking with a footer pill (Phase C.7) including over-$1 escalation styling; circuit breaker (C.8) to stop the agent if a tool family fails N times in a turn; thinking-budget budget (C.9) configurable from the COMP for pro models. C.6 added a featured-prompts chip row + the `td_get_capabilities_summary` tool. C.1 (DMX) deferred to v2.5.
+
+### Live-debug — 10 bugs closed (B-001..B-010)
+
+- **B-001 (Schema)** — `td_cooking_info` chat-pipe sort_by enum was missing GPU/CUDA values. Agent's `sort_by="gpuCookTime"` was refused by the chat-pipe runtime even though the same call worked through the MCP server.
+- **B-003 (Threading)** — Sticky-tier promotion ("use only pro this session") triggered TD's THREAD CONFLICT detector because the on_tier_change callback wrote `parent().par.Modeltier` from the worker thread. Now defers via a new `EV_TIER_SYNC` event drained on the cook thread.
+- **B-004 (Wiring)** — Model badge in the chat panel stayed empty after the B-003 commit inadvertently inserted `EV_TIER_SYNC` between EV_MODEL's COMP-param write and its WS broadcast tail, orphaning the broadcast. Both layers (agent fires `on_model_change` every turn AND extension always broadcasts) now fixed.
+- **B-005 (Resilience)** — `_run_safe` now name-matches `AgentError` / `CycleDetected` / `TurnBudgetExceeded` in the fallback branch. Pre-fix a TD textDAT module reload could create a class-identity drift where `isinstance(exc, AgentError)` returned False on a real AgentError, double-firing the error event with a confusing "Worker crash:" prefix.
+- **B-007 (Prompt)** — New protocol point 6 in `SYSTEM_PROMPT_BASE` forbidding re-calling `td_get_errors` / `td_analyze_frame` / `td_get_node_detail` / `td_cooking_info` / `td_get_connections` with identical args after a no-change result. Directs the agent to switch strategy instead of looping. Live-verified: agent voluntarily switched at count=2 instead of waiting for the cycle-ledger to fire at count=3.
+- **B-008-A (Router)** — Auto-tier heuristic missed short imperative-build prompts. "Build a kaleidoscope feedback loop" scored 1 (just "build" verb), routing to flash and failing every attempt. Added structural-noun signal (`feedback`, `loop`, `chain`, `network`, `system`, `pipeline`, `graph`, `tree`, `rig`, `shader`, `renderer`, `compositor`, `kaleidoscope`, `fractal`, `particle`) plus "audit" to the existing verb set.
+- **B-008-C (Router)** — `run_turn` catches `CycleDetected` and arms an escalation flag; the next auto-tier turn forces pro. Uses name-match (not isinstance) for the same TD-reload-defence reason as B-005.
+- **B-008-T (Router)** — Task-sticky pro. User feedback: "once he detected he needs to be on pro mode, till the user confirms the task is done he should stay on pro. the costs are small and very transparent (UI)". Heuristic-pro routing or cycle-escalation now latches `_task_sticky_pro = True`; subsequent auto-tier turns stay on pro. Cleared by `_TASK_DONE_RE` regex on the next user message (thanks/perfect/done/that works/looks good/ship it). Mixed messages ("thanks, now also fix Y") deliberately keep sticky via a negative lookahead.
+- **B-009 (UX)** — False 'idle (timeout)' fired during long pro extended-thinking turns (60–180s urlopen blocks emit no events). Three-layer fix: backend heartbeat thread pulses `EV_STATE("thinking")` every 30s during urlopen, frontend `TURN_END_SAFETY_MS` bumped 90s → 240s, and `applyMessage` auto-recovers from a false timeout when a `tool_call` / `tool_result` / `append` event arrives.
+- **B-010 (Cycle-detect)** — `args_hash` deep-canonicalization. Pre-fix only sorted top-level dict keys; the agent could permute list values (`modes=['a','b']` vs `['b','a']`) to evade detection. Now recursively sorts dict keys AND list elements. Tool-batch's `calls` list is intentionally affected — same batch in different order has the same end effect.
+
+### UX polish
+
+- Cost-pill in the chat footer now uses `--text` (body-copy near-white) at full opacity for high contrast against the dim token-meter, with `--error-fg` + bold escalation when the running session passes $1.
+- Cycle-detector error rows surface as a single clean line (B-005), no double-emission with "Worker crash:" prefix.
+
+### Live verification — kaleidoscope task
+
+The canonical failing prompt "Build a kaleidoscope feedback loop" was retested end-to-end against the v2.4 stack on 2026-05-13:
+
+- Routed to pro from turn 1 (B-008-A structural-noun signal)
+- Sticky-pro held across 30+ debug turns (B-008-T)
+- Two cycle-detect events surfaced cleanly (B-005), each forcing strategy switches
+- Agent self-diagnosed the actual numerical bug: per-frame decay `0.85 × 0.9 = 0.765` was too aggressive for visible feedback accumulation; chose `0.95 × 1.0 = 0.95/frame` for smooth trails
+- 174 chat rows, 118K input / 27K output / **59 cache hits / 0 misses / $0.062 total**
+
+### Test count
+
+1939 → **2000 passed** (live-debug B-fixes added pin tests).
+
 ## 2.3.0 - 2026-05-11
 
 **Bilateral-audit release.** Same-day follow-up to v2.2.0 driven by a deep end-to-end audit of the `tdpilot_API` chat tox running live against a real DeepSeek session. Closes 9 confirmed bugs (4 of which were latent security gaps that survived the v1.7.1 hardening), adds a new agent-callable scoped-snapshot system (Bug 19), and tightens the chat-pipe webserver against several TD 2025.32820/macOS-specific quirks discovered during the audit. **No breaking changes** for existing users.

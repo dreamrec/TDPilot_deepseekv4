@@ -87,6 +87,14 @@ try:
 except ImportError:
     RECIPES_DIR = Path.home() / ".tdpilot-api" / "recipes"
 RECIPES_INDEX = RECIPES_DIR / "INDEX.md"
+# v2.4 / Phase B.4 — content_type controls pre-turn BM25 retrieval visibility.
+# Recipes are inherently step lists (the whole point is to replay them), so
+# the safe default is "instruction" — the pre-turn filter then surfaces a
+# recipe only when the user explicitly names it. A user who wants a recipe
+# to behave like reference material (e.g. "this recipe just documents the
+# approach for context, don't auto-replay it") can pass content_type="reference".
+VALID_CONTENT_TYPES = ("instruction", "reference", "fact")
+DEFAULT_CONTENT_TYPE = "instruction"
 MAX_INDEX_LINES = 200
 
 
@@ -220,6 +228,11 @@ def handle_recipe_save(body: dict) -> dict:
     goal = (body.get("goal") or "").strip()
     steps = body.get("steps") or []  # list of human-readable strings
     replay = body.get("replay") or []  # list of {tool, args} dicts
+    # v2.4 / Phase B.4 — content_type. Default "instruction" because the
+    # whole point of a recipe is the replay step list. A recipe author who
+    # explicitly wants generic BM25 visibility (e.g. for searchable
+    # documentation) can pass content_type="reference".
+    content_type = (body.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower()
 
     if not name:
         return {"error": "Missing required field: name"}
@@ -227,6 +240,10 @@ def handle_recipe_save(body: dict) -> dict:
         return {"error": "Missing required field: replay (list of {tool, args} dicts)"}
     if not isinstance(replay, list) or not all(isinstance(s, dict) for s in replay):
         return {"error": "replay must be a list of {tool, args} dicts"}
+    if content_type not in VALID_CONTENT_TYPES:
+        return {
+            "error": (f"Invalid content_type: {content_type!r}. Must be one of {list(VALID_CONTENT_TYPES)}."),
+        }
 
     _ensure_dir()
     filename = _resolve_filename(name)
@@ -248,6 +265,7 @@ def handle_recipe_save(body: dict) -> dict:
         f"tags: {tags_yaml}\n"
         f"created: {created}\n"
         f"tool_calls: {len(replay)}\n"
+        f"content_type: {content_type}\n"
         f"---\n\n"
         f"## Goal\n{goal or description or name}\n\n"
         f"## Steps\n{steps_md}\n\n"
@@ -259,6 +277,7 @@ def handle_recipe_save(body: dict) -> dict:
         "ok": True,
         "filename": filename,
         "path": str(filepath),
+        "content_type": content_type,
         "tool_calls": len(replay),
     }
 
@@ -340,6 +359,12 @@ def handle_recipe_recall(body: dict) -> dict:
                 "name": meta.get("name") or p.stem,
                 "description": meta.get("description") or "",
                 "tags": " ".join(tags) if tags else "",
+                # v2.4 / Phase B.4 — propagate content_type with default-on-read.
+                # Legacy recipes (no field) default to "instruction" matching
+                # the new save default, so pre-existing recipes are hidden
+                # from generic queries — the same protection their step-list
+                # nature deserves.
+                "content_type": (meta.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower(),
                 "text": body_text,
             }
         )
@@ -606,6 +631,9 @@ def _bm25_search(query: str, docs: list[dict], top_k: int) -> list[dict]:
                 "name": doc.get("name"),
                 "description": doc.get("description"),
                 "tags": doc.get("tags"),
+                # v2.4 / Phase B.4 — surface content_type for the pre-turn
+                # retrieval filter in tdpilot_api_runtime._run_pre_turn_retrieval.
+                "content_type": doc.get("content_type") or DEFAULT_CONTENT_TYPE,
                 "score": round(score, 3),
                 "snippet": snippet,
             }

@@ -252,7 +252,14 @@ async def td_cooking_info(
         str,
         Field(
             default="cookTime",
-            description="Sort by: 'cookTime' or 'cpuCookTime'",
+            description=(
+                "Sort by one of: 'cookTime' (total wall time, CPU+GPU), "
+                "'cpuCookTime' (CPU only), 'gpuCookTime' (GPU only — note "
+                "non-TOP operators report 0 here, so a 'gpuCookTime' sort "
+                "of a mixed subtree will surface zeros below the real "
+                "TOP hits), or 'cudaMemoryBytes' (per-TOP VRAM footprint; "
+                "non-TOPs sort to the bottom)."
+            ),
         ),
     ] = "cookTime",
     limit: Annotated[
@@ -260,7 +267,16 @@ async def td_cooking_info(
         Field(default=20, ge=1, le=100, description="Max nodes to return"),
     ] = 20,
 ) -> str:
-    """Get cooking/performance info for a subtree."""
+    """Get cooking/performance info for a subtree.
+
+    Returns per-node CPU cook time, GPU cook time, and (for TOPs only)
+    CUDA / VRAM bytes. Use this to find performance bottlenecks:
+    ``sort_by="gpuCookTime"`` surfaces heavy GLSL TOPs and feedback
+    loops; ``sort_by="cudaMemoryBytes"`` surfaces VRAM hogs (large
+    rendertargets, high-bit-depth comps). For mixed CPU/GPU bottlenecks
+    leave ``sort_by="cookTime"`` (the wall-time total) — that's the
+    default and matches TD's Cook Time display.
+    """
     return await _tr._forward(
         ctx,
         "td_cooking_info",

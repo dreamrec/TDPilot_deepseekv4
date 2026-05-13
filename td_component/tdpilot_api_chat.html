@@ -138,6 +138,30 @@
     color: var(--muted);
   }
   #token-meter:empty { display: none; }
+  /* v2.4 / Phase C.7 — session-totals meter. Dimmer than the per-turn
+     token meter so it doesn't compete visually; shows running session
+     input/output + approximate USD. Hover for full breakdown. */
+  #session-meter {
+    color: var(--muted);
+    opacity: 0.55;
+    cursor: help;
+  }
+  #session-meter:empty { display: none; }
+  /* Cost token gets its own color so it pops against the dim
+     #token-meter (--muted) sitting next to it, AND can swap to a
+     warning red once the running session passes ~$1. Default uses
+     --text (the body-copy near-white) at full opacity — clearly the
+     brightest element in the status bar without screaming for
+     attention. Over $1 → soft red (--error-fg) + bold to escalate. */
+  #session-meter .cost {
+    color: var(--text);
+    opacity: 1;
+  }
+  #session-meter .cost.over-dollar {
+    color: var(--error-fg);
+    opacity: 1;
+    font-weight: 600;
+  }
   /* Faint divider between state, model, tokens, cursor. */
   #status-bar .rhs > span + span:not(:empty)::before {
     content: '·';
@@ -673,6 +697,29 @@
     content: "✓ ";
     color: var(--accent);
   }
+  /* v2.4 / Phase C.6 — featured-prompt chips. Compact pills below the
+     welcome wizard; click to prefill the input field. Hidden until
+     loadChips() populates them on first load. */
+  .welcome .chips {
+    margin: 14px auto 4px;
+    max-width: 520px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+  }
+  .welcome .chip {
+    background: rgba(107, 71, 255, 0.12);
+    border: 1px solid rgba(107, 71, 255, 0.5);
+    color: var(--accent);
+    font: 11px/1.3 inherit;
+    padding: 4px 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .welcome .chip:hover { background: rgba(107, 71, 255, 0.28); }
+  .welcome .chip:active { transform: translateY(1px); }
   .welcome .wizard .opt {
     color: var(--muted);
     font-size: 10px;
@@ -778,7 +825,7 @@
   <div id="status-bar">
     <span class="lhs" data-prefix="▰▰▰"><span id="ws-label">tdpilot_api</span> · ws <span id="ws-state">connecting</span></span>
     <span class="rhs">
-      <span id="status-text">idle</span><span id="model-badge"></span><span id="token-meter"></span><span class="cursor">█</span>
+      <span id="status-text">idle</span><span id="model-badge"></span><span id="token-meter"></span><span id="session-meter"></span><span class="cursor">█</span>
     </span>
     <button id="quiet-toggle" type="button"
             title="Quiet mode — hide tool-call detail (Cmd/Ctrl + .)"
@@ -828,6 +875,8 @@
   const SEND_URL = `http://${TD_HOST}:${TD_PORT}/send`;
   const STOP_URL = `http://${TD_HOST}:${TD_PORT}/stop`;
   const FIRSTRUN_URL = `http://${TD_HOST}:${TD_PORT}/firstrun`;
+  // v2.4 / Phase C.6 — capability summary endpoint for featured-prompt chips.
+  const CAP_SUMMARY_URL = `http://${TD_HOST}:${TD_PORT}/capabilities-summary`;
 
   // Per-launch session token, server-injected at GET / time. The literal
   // `__TDPILOT_TOKEN__` value means the page was loaded out-of-band
@@ -861,6 +910,11 @@
             type a message and press <kbd>enter</kbd><br/>
             <kbd>shift</kbd>+<kbd>enter</kbd> for newline
           </div>
+          <!-- v2.4 / Phase C.6 — featured-prompt chips. Populated by
+               loadChips() from /capabilities-summary on first load;
+               hidden until at least one chip arrives. Click to
+               prefill the input field. -->
+          <div id="chips" class="chips" style="display:none;"></div>
         </div>`;
 
   const $history = document.getElementById('history');
@@ -1021,9 +1075,14 @@
   // catches it (no message lost).
   let awaitingTurnEnd = false;
   let pendingTurnEndTimer = null;
-  // 90s — covers slow DeepSeek turns + tool chains; a stuck button
-  // beyond this is the worse failure mode.
-  const TURN_END_SAFETY_MS = 90000;
+  // v2.4 / B-009 (live-debug 2026-05-13) — bumped from 90s → 240s.
+  // Live observation: pro extended-thinking turns on complex prompts
+  // ("Build a kaleidoscope feedback loop") routinely take 60-180s
+  // for ONE DeepSeek API call (no events emitted during the urlopen).
+  // The 90s ceiling tripped the watchdog idle-timeout while the agent was
+  // still thinking. 240s gives pro enough room for the slowest
+  // single-call observed; longer = real WS drop / worker hang.
+  const TURN_END_SAFETY_MS = 240000;
 
   function clearAwaitingTurnEnd() {
     if (pendingTurnEndTimer !== null) {
@@ -1119,6 +1178,49 @@
         span.textContent = ' (optional)';
         li.appendChild(span);
       }
+      // v2.4 / Phase B.2 — Authmode=open → token migration wizard.
+      // Surfaces a one-click switch when the COMP is in legacy open
+      // mode (default Authmode flipped to token in v2.3.0 — this
+      // catches pre-v2.3.0 dropped-in COMPs).
+      if (step.name === 'switch_to_token_auth') {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Switch to token auth';
+        btn.style.cssText =
+          'margin-left:8px;padding:2px 10px;background:#6B47FF;' +
+          'color:#fff;border:none;border-radius:3px;cursor:pointer;' +
+          'font-size:11px;';
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          btn.textContent = 'Switching…';
+          try {
+            const resp = await fetch(
+              `http://${TD_HOST}:${TD_PORT}/set-authmode`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...AUTH_HEADERS,
+                },
+                body: JSON.stringify({ mode: 'token' }),
+              },
+            );
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            // Server rotated the token. The current tab's TOKEN const
+            // is now stale — easiest correct path is a reload. The
+            // GET / response injects the fresh token via the
+            // __TDPILOT_TOKEN__ template substitution. Other open
+            // tabs will hit 401 on their next request and the
+            // existing reconnect-banner picks them up.
+            window.location.reload();
+          } catch (e) {
+            btn.disabled = false;
+            btn.textContent = 'Retry switch';
+            console.warn('[tdpilot] /set-authmode failed', e);
+          }
+        });
+        li.appendChild(btn);
+      }
       ol.appendChild(li);
     }
     wizard.style.display = '';
@@ -1156,6 +1258,50 @@
     }
   }
   pollFirstRun();
+
+  // v2.4 / Phase C.6 — load featured-prompt chips from /capabilities-summary.
+  // Best-effort: failures are silent (chips are a nice-to-have, not a
+  // blocker on actually chatting). One-shot fetch on welcome render; the
+  // chips vanish naturally with the welcome screen on first user message.
+  async function loadChips() {
+    if (!welcomed) return;
+    try {
+      const resp = await fetch(CAP_SUMMARY_URL, {
+        method: 'GET',
+        headers: { ...AUTH_HEADERS },
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (!welcomed) return;  // user already typed
+      const chips = document.getElementById('chips');
+      const prompts = Array.isArray(data && data.featured_prompts)
+        ? data.featured_prompts.slice(0, 6)
+        : [];
+      if (!chips || prompts.length === 0) return;
+      // Clear any prior content via removeChild loop (safer than
+      // assigning to .innerHTML — a security-linter substring rule
+      // in this codebase flags that pattern even on empty strings).
+      while (chips.firstChild) chips.removeChild(chips.firstChild);
+      for (const p of prompts) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chip';
+        btn.textContent = p;
+        btn.addEventListener('click', () => {
+          $input.value = p;
+          $input.focus();
+          // NOTE: deliberately don't auto-send — user reviews + presses enter.
+        });
+        chips.appendChild(btn);
+      }
+      chips.style.display = '';
+    } catch (_e) {
+      // Best-effort: chips are nice-to-have. Silent failure preserves
+      // the chat surface for users on locked-down networks where
+      // even loopback HTTP gets odd quirks.
+    }
+  }
+  loadChips();
 
   // Phase 2 (1.8.0) — scroll-aware autoscroll. We only auto-snap to
   // bottom when the user is already at (or very near) the bottom; if
@@ -1933,6 +2079,43 @@
     refreshTokenMeter();
   }
 
+  // v2.4 / Phase C.7 — session-cost meter. Pushed by the runtime
+  // after every per-call EV_USAGE so the footer reflects the running
+  // total. "Approximate" warning + pricing-version stamp travel in
+  // the tooltip so the user knows the rate assumed.
+  function updateSessionMeter(session) {
+    const $sm = document.getElementById('session-meter');
+    if (!$sm) return;
+    // Empty / non-object → blank the pill so the :empty CSS rule hides it.
+    if (!session || typeof session !== 'object') {
+      while ($sm.firstChild) $sm.removeChild($sm.firstChild);
+      $sm.title = '';
+      return;
+    }
+    const inK = formatTokenCount(session.input_tokens || 0);
+    const outK = formatTokenCount(session.output_tokens || 0);
+    const usd = typeof session.approx_usd === 'number' ? session.approx_usd : 0;
+    // Rebuild as DOM nodes so the cost portion gets its own span — that
+    // lets us turn JUST the $X portion red without colouring the whole
+    // "Session: …" prefix. innerHTML would also work but the security
+    // hook in this repo (substring-matches "innerHTML =") complains
+    // even on assignments to safe content; removeChild + appendChild
+    // is the established pattern (see loadChips above).
+    while ($sm.firstChild) $sm.removeChild($sm.firstChild);
+    $sm.appendChild(document.createTextNode(`Session: ${inK} in · ${outK} out · ~`));
+    const $cost = document.createElement('span');
+    $cost.className = usd >= 1 ? 'cost over-dollar' : 'cost';
+    $cost.textContent = `$${usd.toFixed(4)}`;
+    $sm.appendChild($cost);
+    $sm.title =
+      `input:        ${session.input_tokens || 0}\n` +
+      `output:       ${session.output_tokens || 0}\n` +
+      `cache hits:   ${session.cache_hits || 0}\n` +
+      `cache misses: ${session.cache_misses || 0}\n` +
+      `pricing version: ${session.model_pricing_version || 'unknown'}\n` +
+      `(approximate — DeepSeek may revise rates)`;
+  }
+
   function setAgentStatus(text) {
     const newState = (text || 'idle').toLowerCase();
     const wasWorking = isWorkingAgentState(agentState);
@@ -2216,6 +2399,25 @@
 
   function applyMessage(msg) {
     if (!msg || !msg.type) return;
+    // v2.4 / B-009 (live-debug 2026-05-13) — false-timeout recovery.
+    // If the JS watchdog tripped the idle-timeout mid-turn (e.g. a slow
+    // pro extended-thinking call exceeded TURN_END_SAFETY_MS while
+    // emitting no events), the next runtime event proves the agent is
+    // still alive. tool_call / tool_result / append are unambiguous
+    // proof-of-life; restore the working state instead of letting the
+    // user keep staring at "idle (timeout)" while tool calls visibly
+    // stream into the chat. ('model' and 'usage' alone don't recover
+    // — they can arrive during shutdown bookkeeping after a real end.)
+    const isProofOfLife = (
+      msg.type === 'tool_call' ||
+      msg.type === 'tool_result' ||
+      msg.type === 'append'
+    );
+    if (isProofOfLife && !awaitingTurnEnd && agentState.startsWith('idle')) {
+      awaitingTurnEnd = true;
+      $send.disabled = true;
+      setAgentStatus('thinking…');
+    }
     switch (msg.type) {
       case 'append':       appendMessage(msg.role, msg.message); break;
       case 'tool_call':    appendToolCall(msg); break;
@@ -2223,6 +2425,7 @@
       case 'status':       setStatus(msg.status); break;
       case 'model':        setModel(msg); break;
       case 'usage':        recordUsage(msg); break;
+      case 'usage_session': updateSessionMeter(msg.session || {}); break;
       case 'fullSync':     fullSync(msg.rows || []); break;
       case 'clear':        fullSync([]); break;
     }
