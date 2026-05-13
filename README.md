@@ -7,33 +7,40 @@
    ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝
 ```
 
-# TDPilot — DeepSeek v4 · v2.3.0
+# TDPilot — DeepSeek v4 · v2.4.0
 
 [![CI](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/tdpilot-dpsk4?label=npm)](https://www.npmjs.com/package/tdpilot-dpsk4)
 [![downloads](https://img.shields.io/npm/dm/tdpilot-dpsk4?label=downloads)](https://www.npmjs.com/package/tdpilot-dpsk4)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![python](https://img.shields.io/badge/python-3.10%2B-blue)](./pyproject.toml)
-[![tools](https://img.shields.io/badge/tools-93%20%28standalone%29%20%C2%B7%20103%20%28CLI%29-blueviolet)](./docs/MANUAL.md)
+[![tools](https://img.shields.io/badge/tools-94%20%28standalone%29%20%C2%B7%20105%20%28CLI%29-blueviolet)](./docs/MANUAL.md)
 [![TouchDesigner](https://img.shields.io/badge/TouchDesigner-2025.30000%2B-ff6200)](https://derivative.ca)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-v4-00a86b)](https://deepseek.com)
 
 An AI assistant that lives inside TouchDesigner. It can inspect your network, build new operators, wire them up, debug errors, take screenshots, remember things between sessions, replay successful patterns, surface relevant memories before each turn, batch tool calls, recover from failures with actionable hints, and survive long conversations via context compaction.
 
-> **v2.3.0 just shipped (May 11, 2026)** — bilateral-audit release driven by a deep end-to-end test of the live `tdpilot_API` chat tox against a real DeepSeek session. **Closes 9 confirmed bugs** (4 latent security gaps that survived v1.7.1: header-flatten case-sensitivity disabled the entire auth+CORS+JSON-envelope stack on TD 2025.32820; Authmode default flipped to `"token"`; bm25 retrieval pollution causing drive-by tool execution from short prompts; WebSocket dead-client leak via silent-fail `webSocketSendText`) plus **adds the new `snapshot_save_scoped` / `snapshot_restore_scoped` agent tools** (Bug 19) so the agent can save and restore scoped project state mid-conversation without `project.load()` destroying its own COMP. Tool count 91 → 93. See [CHANGELOG](CHANGELOG.md#230---2026-05-11) for v2.3.0 details, or [v2.2.0](CHANGELOG.md#220---2026-05-11) for the prior Phase-1-reliability-foundation release (auto-rollback + cycle detection + drag-and-go UX).
+## How to install — pick a path
 
-There are two ways to run it. Pick whichever fits — they coexist in the same TD project if you want both.
+Two ways to run it. They coexist in the same TD project if you want both.
 
 | | **Standalone .tox** | **Claude Code CLI** |
 |---|---|---|
 | **Install effort** | Drag one file in, paste a key. | Install Claude Code, install the plugin, configure MCP. |
 | **Where chat lives** | Browser tab + a panel inside TD. | Your Claude Code terminal. |
-| **Tools** | 93 curated for in-TD use | 103 (full surface) |
+| **Tools** | 94 curated for in-TD use | 105 (full surface) |
 | **Best for** | Live performance, quick patches, demos, "no setup" use | Heavy multi-file projects, long sessions, full Claude Code ecosystem |
 | **TD port** | 9987 | 9985 + 9986 |
 | **Config dir** | `~/.tdpilot-api/` | `~/.tdpilot-dpsk4/` |
 
-**New here?** Start with the standalone — it's working in under two minutes. Read on, or jump straight to [`docs/MANUAL.md`](docs/MANUAL.md) for the deep reference.
+**Start here.** If you just want to chat with TouchDesigner → **standalone `.tox`** (drop-in, two minutes). If you already use Claude Code → **Claude Code CLI**. If you want MCP in some other client (Cursor, Continue, custom integrations) → the same npm package, `npx tdpilot-dpsk4`, exposes the MCP server standalone. Jump straight to [`docs/MANUAL.md`](docs/MANUAL.md) for the deep reference, or read on for the install walkthroughs.
+
+<details>
+<summary><b>Release highlights — v2.3.0 (May 11, 2026)</b> (click to expand)</summary>
+
+**v2.3.0** — bilateral-audit release driven by a deep end-to-end test of the live `tdpilot_API` chat tox against a real DeepSeek session. **Closes 9 confirmed bugs** (4 latent security gaps that survived v1.7.1: header-flatten case-sensitivity disabled the entire auth+CORS+JSON-envelope stack on TD 2025.32820; Authmode default flipped to `"token"`; bm25 retrieval pollution causing drive-by tool execution from short prompts; WebSocket dead-client leak via silent-fail `webSocketSendText`) plus **adds the new `snapshot_save_scoped` / `snapshot_restore_scoped` agent tools** (Bug 19) so the agent can save and restore scoped project state mid-conversation without `project.load()` destroying its own COMP. Tool count 91 → 93. See [CHANGELOG](CHANGELOG.md#230---2026-05-11) for v2.3.0 details, or [v2.2.0](CHANGELOG.md#220---2026-05-11) for the prior Phase-1-reliability-foundation release (auto-rollback + cycle detection + drag-and-go UX).
+
+</details>
 
 ---
 
@@ -114,7 +121,7 @@ If the browser tab shows nothing on first load, give it a second — the embedde
 
 ## Claude Code CLI — first-time install
 
-If you already use Claude Code and want the full 103-tool surface plus the plugin marketplace ecosystem:
+If you already use Claude Code and want the full 105-tool surface plus the plugin marketplace ecosystem:
 
 **1. Install Claude Code.**
 Follow the [Claude Code install docs](https://docs.claude.com/en/docs/claude-code).
@@ -155,7 +162,7 @@ Or paste this `.mcp.json` block into your project root:
 Drag `td_component/tdpilot-dpsk4.tox` into your TD `/local` container. Or run the auto-installer panel inside the .tox.
 
 **5. Talk to TD from your Claude Code terminal.**
-The 103 tools, 3 skills (`tdpilot-dpsk4-core`, `tdpilot-dpsk4-production`, `popx-touchdesigner`), and 2 slash commands (`/td-check`, `/td-snapshot`) are now available.
+The 105 tools, 3 skills (`tdpilot-dpsk4-core`, `tdpilot-dpsk4-production`, `popx-touchdesigner`), and 2 slash commands (`/td-check`, `/td-snapshot`) are now available.
 
 ---
 
@@ -202,7 +209,7 @@ Both variants run on the same DeepSeek backend and share the same TD-side handle
 | **First-run wizard** | The chat panel polls `/firstrun` and renders a 3-step quickstart checklist (paste key → install brain → save first memory) until completion |
 | **Doctor `--live`** | `python3 scripts/doctor_live.py [--deep]` probes webserver health, key validity, brain inventory, memory + user-tool dirs |
 
-The standalone has 93 tools that cover the everyday inspect → build → wire → verify loop, plus persistent memory, knowledge corpus, recipes, snapshots, subagents (parallel fan-out), multi-model routing (auto/flash/pro), macros, user-pluggable tools (drop a `.py` in `~/.tdpilot-api/tools/`), official-docs lookup against the derivative corpus, TD 2025 runtime introspection (Python env, threading, color pipeline), and project-audit + recipe-validation utilities.
+The standalone has 94 tools that cover the everyday inspect → build → wire → verify loop, plus persistent memory, knowledge corpus, recipes, snapshots, subagents (parallel fan-out), multi-model routing (auto/flash/pro), macros, user-pluggable tools (drop a `.py` in `~/.tdpilot-api/tools/`), official-docs lookup against the derivative corpus, TD 2025 runtime introspection (Python env, threading, color pipeline), and project-audit + recipe-validation utilities.
 
 **Run both at the same time.** The two .tox files coexist in the same TD project — different ports, different config dirs, different COMP names. Standalone in the browser for quick chat, CLI in the terminal for heavy work.
 
@@ -248,7 +255,7 @@ td_component/         TouchDesigner-side source (textDATs baked into the .tox)
   tdpilot_API.tox     Standalone .tox binary
   tdpilot-dpsk4.tox   CLI-bridge .tox binary
   build_tdpilot_api_tox.py   Build script for the standalone .tox
-src/td_mcp/           DPSK4 MCP server (Python, 103 tools)
+src/td_mcp/           DPSK4 MCP server (Python, 105 tools)
 skills/               Claude Code skills (CLI plugin)
 tests/                pytest suite (1848 tests + 12 agent-eval skeletons)
   agent_evals/        Live-integration evals (run with `pytest -m agent_eval`)

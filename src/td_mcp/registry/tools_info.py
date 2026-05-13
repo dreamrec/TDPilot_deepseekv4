@@ -1,14 +1,15 @@
 """Info/metadata tools — TD build, capabilities, runtime metrics.
 
 Part of the v1.5.0 Phase 2 module split. This is the final extraction
-— all 103 tools + 7 resources now live in themed submodules (the 5 new
+— all 104 tools + 7 resources now live in themed submodules (the 5 new
 td_patch_* tools landed in Phase 3).
 
-Tools in this module (4):
-    td_get_info            — TD build, version, mcp-component version
-    td_list_families       — enumerate operator families (COMP/TOP/CHOP/…)
-    td_get_capabilities    — client capabilities + component sync status
-    td_get_server_metrics  — runtime telemetry dashboard
+Tools in this module (5):
+    td_get_info                    — TD build, version, mcp-component version
+    td_list_families               — enumerate operator families (COMP/TOP/CHOP/…)
+    td_get_capabilities            — client capabilities + component sync status
+    td_get_capabilities_summary    — grouped human-readable capability index (v2.4 C.6)
+    td_get_server_metrics          — runtime telemetry dashboard
 
 ``td_get_capabilities`` and ``td_get_server_metrics`` are the heaviest
 aggregators — they pull from EVERY manager (safety, snapshot, job,
@@ -88,6 +89,141 @@ async def td_get_capabilities(ctx: Context) -> str:
         return _tr._as_json_output(payload)
     except Exception as exc:
         _tr._record_tool_error(ctx, "td_get_capabilities")
+        return format_tool_error(exc)
+    finally:
+        finish()
+
+
+# v2.4 / Phase C.6 — capability summary for UI discoverability.
+# Static payload — pure data, no live TD calls. Allocated once at
+# module load so repeat calls don't rebuild the dict.
+_CAPABILITIES_SUMMARY: dict[str, object] = {
+    "schema_version": 1,
+    "groups": [
+        {
+            "id": "build",
+            "title": "Build",
+            "blurb": "Create operators, wire networks, scaffold recipes.",
+            "primary_tools": [
+                "td_create_node",
+                "td_connect_nodes",
+                "td_set_params",
+                "td_patch_apply",
+            ],
+            "examples": [
+                "Build a kaleidoscope feedback loop",
+                "Add a Constant TOP wired to a Composite TOP",
+                "Replay my 'audio-react' recipe",
+            ],
+        },
+        {
+            "id": "diagnose",
+            "title": "Diagnose",
+            "blurb": "Find errors, profile cooks, detect drift.",
+            "primary_tools": [
+                "td_audit_project",
+                "td_get_errors",
+                "td_cooking_info",
+                "td_detect_instability",
+            ],
+            "examples": [
+                "Audit this project for problems",
+                "Why is the framerate dropping?",
+                "Show recent errors",
+            ],
+        },
+        {
+            "id": "inspect",
+            "title": "Inspect",
+            "blurb": "Survey nodes, describe surface, screenshot.",
+            "primary_tools": [
+                "td_get_nodes",
+                "td_describe_surface",
+                "td_screenshot",
+                "td_get_node_detail",
+            ],
+            "examples": [
+                "List the top 20 nodes by cook time",
+                "Screenshot the network",
+                "Describe this component",
+            ],
+        },
+        {
+            "id": "remember",
+            "title": "Remember",
+            "blurb": "Save techniques and recall them by topic.",
+            "primary_tools": [
+                "td_memory_save",
+                "td_memory_recall",
+                "td_memory_list",
+                "td_knowledge_save",
+            ],
+            "examples": [
+                "Remember this as 'soft-glow'",
+                "What memories about feedback?",
+                "List my memories",
+            ],
+        },
+        {
+            "id": "hardware",
+            "title": "Hardware",
+            "blurb": "Talk to MIDI controllers, sensors, GPU diagnostics.",
+            "primary_tools": [
+                "td_midi_devices",
+                "td_cooking_info",
+                "td_python_env_status",
+            ],
+            "examples": [
+                "List the MIDI controllers I have plugged in",
+                "Which TOPs use the most GPU time?",
+                "Check my Python environment inside TD",
+            ],
+        },
+        {
+            "id": "learn",
+            "title": "Learn / Lookup",
+            "blurb": "Search docs, find examples, get operator help.",
+            "primary_tools": [
+                "td_search_official_docs",
+                "td_find_official_example",
+                "td_get_operator_doc",
+                "td_lookup_snippets",
+            ],
+            "examples": [
+                "How does Trail CHOP work?",
+                "Find an example using Particle GPU",
+                "Snippet for vertex shader",
+            ],
+        },
+    ],
+    "featured_prompts": [
+        "Build a kaleidoscope feedback loop",
+        "Audit this project for problems",
+        "Replay my 'audio-react' recipe",
+        "Screenshot the network",
+        "Why is the framerate dropping?",
+        "What memories about feedback?",
+    ],
+}
+
+
+@mcp.tool(name="td_get_capabilities_summary")
+async def td_get_capabilities_summary(ctx: Context) -> str:
+    """Return a grouped human-readable index of agent capabilities.
+
+    v2.4 / Phase C.6 — UI affordance for the chat client (used to
+    render "featured prompt" chips) AND a fast model-side answer
+    to "what can you do?". Complement to ``td_get_capabilities``:
+    that tool reports tool-presence flags (Yes/No across feature
+    families); this one returns groupings + example prompts. Each
+    group's examples are <= 50 chars so they fit visually in a chip.
+    Pure data — no live TD calls, no side effects.
+    """
+    finish = _tr._start_tool(ctx, "td_get_capabilities_summary")
+    try:
+        return _tr._as_json_output(_CAPABILITIES_SUMMARY)
+    except Exception as exc:
+        _tr._record_tool_error(ctx, "td_get_capabilities_summary")
         return format_tool_error(exc)
     finally:
         finish()

@@ -11,8 +11,10 @@ Tools in this module:
     td_component_standardize   — enforce ``Version/Help/Creator`` params
                                   + optional auto-fix under undo block
     td_color_pipeline          — color space / gamma / HDR settings
+    td_midi_devices            — list MIDI input + output devices via
+                                  ``app.midiDeviceManager`` (v2.4 / C.2)
 
-All six delegate to TouchDesigner via ``exec`` with server-side Python
+All delegate to TouchDesigner via ``exec`` with server-side Python
 snippets, so the exec-safety helpers from tool_registry (``_check_exec_not_off``,
 ``_check_exec_mode_at_least``) are threaded in via ``_tr.`` module-attribute
 lookup.
@@ -346,6 +348,66 @@ async def td_color_pipeline(ctx: Context) -> dict[str, Any]:
         return data
     except Exception as exc:
         _tr._record_tool_error(ctx, "td_color_pipeline")
+        return {"error": str(exc)}
+    finally:
+        finish()
+
+
+@mcp.tool(name="td_midi_devices")
+async def td_midi_devices(ctx: Context) -> dict[str, Any]:
+    """List MIDI input and output devices known to TouchDesigner.
+
+    v2.4 / Phase C.2 — reads ``app.midiDeviceManager.inputDevices`` and
+    ``.outputDevices`` so the agent can answer "what MIDI controllers
+    are available?" without screenshots or guesswork. Pair with the
+    ``midiinmapCHOP`` hint pack and the ``midi_controller_bind``
+    macro template for end-to-end binding workflows.
+
+    Requires 'full' exec mode — ``app.midiDeviceManager`` isn't in the
+    standard / restricted allowlist. Returns
+    ``{"input_devices": [...], "output_devices": [...]}`` with each
+    entry shaped ``{"name": str, "id": int, "active": bool, "index": int}``.
+    """
+    finish = _tr._start_tool(ctx, "td_midi_devices")
+    try:
+        off_err = _tr._check_exec_not_off()
+        if off_err:
+            return off_err
+        mode_err = _tr._check_exec_mode_at_least("full", "td_midi_devices")
+        if mode_err:
+            return mode_err
+        client = _tr._get_client(ctx)
+        code = (
+            "import json\n"
+            "mgr = app.midiDeviceManager\n"
+            "def _row(d, i):\n"
+            "    return {\n"
+            "        'name': getattr(d, 'name', ''),\n"
+            "        'id': int(getattr(d, 'id', 0)),\n"
+            "        'active': bool(getattr(d, 'active', False)),\n"
+            "        'index': i,\n"
+            "    }\n"
+            "ins  = [_row(d, i) for i, d in enumerate(mgr.inputDevices)]\n"
+            "outs = [_row(d, i) for i, d in enumerate(mgr.outputDevices)]\n"
+            "result = {\n"
+            "    'ok': True,\n"
+            "    'input_devices': ins,\n"
+            "    'output_devices': outs,\n"
+            "    'input_count': len(ins),\n"
+            "    'output_count': len(outs),\n"
+            "}\n"
+            "__result__ = json.dumps(result)"
+        )
+        resp = await client.request("exec", {"code": code, "exec_mode": "full"})
+        raw = resp.get("result", "{}") if isinstance(resp, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            data = {"raw": raw}
+        _tr._audit_log(ctx, "td_midi_devices", {})
+        return data
+    except Exception as exc:
+        _tr._record_tool_error(ctx, "td_midi_devices")
         return {"error": str(exc)}
     finally:
         finish()

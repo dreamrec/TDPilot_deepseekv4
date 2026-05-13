@@ -187,4 +187,31 @@ def build_default_templates() -> dict[str, MacroTemplate]:
         exit_node="out",
     )
 
+    # v2.4 / Phase C.2 — MIDI controller binding chain. Pair with
+    # td_midi_devices() to discover the device name before this macro
+    # instantiates (the macro leaves the device blank so the agent can
+    # fill it in via td_set_params after enumeration). The choptoDAT
+    # mirror gives the agent something to td_get_content for visual
+    # binding verification without screenshots.
+    templates["midi_controller_bind"] = MacroTemplate(
+        name="midi_controller_bind",
+        description="MIDI controller binding chain: midiin → midiinmap → null, plus a CHOP-to-DAT mirror for visual feedback.",
+        nodes=[
+            NodeSpec("midiinCHOP", "midi_in", dx=0, dy=0, params={"active": True}),
+            NodeSpec("midiinmapCHOP", "midi_map", dx=220, dy=0, params={"active": True}),
+            NodeSpec("nullCHOP", "out", dx=440, dy=0),
+            NodeSpec("choptoDAT", "binding_view", dx=440, dy=160),
+        ],
+        connections=[
+            ConnectionSpec("midi_in", "midi_map"),
+            ConnectionSpec("midi_map", "out"),
+        ],
+        node_references=[
+            NodeRefParam(node="binding_view", param="chop", target_node="out"),
+        ],
+        param_schema={},
+        entry_node="midi_in",
+        exit_node="out",
+    )
+
     return templates

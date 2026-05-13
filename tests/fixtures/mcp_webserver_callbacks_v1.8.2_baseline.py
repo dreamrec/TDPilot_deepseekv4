@@ -1972,10 +1972,19 @@ def handle_pop_inspect(body):
 
 
 def handle_cooking_info(body):
-    """Get cooking/performance info for a node."""
+    """Get cooking/performance info for a node.
+
+    Reports CPU cook time (``cookTime``/``cpuCookTime``), GPU cook time
+    (``gpuCookTime`` — always 0 on non-TOP operators), and per-TOP VRAM
+    footprint (``cudaMemoryBytes`` — ``None`` on non-TOPs and when TD
+    can't measure). Use ``sort_by="gpuCookTime"`` to find GPU bottlenecks
+    (feedback loops, large GLSL TOPs, heavy compositors) or
+    ``sort_by="cudaMemoryBytes"`` to find VRAM hogs.
+    """
     path = body.get('path', '/')
     recurse = body.get('recurse', False)
-    sort_by = body.get('sort_by', 'cookTime')  # cookTime, cpuCookTime
+    # cookTime, cpuCookTime, gpuCookTime, cudaMemoryBytes
+    sort_by = body.get('sort_by', 'cookTime')
     limit = body.get('limit', 20)
 
     node = op(path)
@@ -1986,14 +1995,25 @@ def handle_cooking_info(body):
 
     def collect_cook(n):
         try:
-            results.append({
+            entry = {
                 'path': n.path,
                 'name': n.name,
                 'type': n.type,
                 'cookTime': n.cookTime if hasattr(n, 'cookTime') else 0,
                 'cpuCookTime': n.cpuCookTime if hasattr(n, 'cpuCookTime') else 0,
+                'gpuCookTime': float(getattr(n, 'gpuCookTime', 0.0) or 0.0),
                 'cookFrame': n.cookFrame if hasattr(n, 'cookFrame') else 0,
-            })
+            }
+            # cudaMemory() is per-pixel-format and exists only on TOPs.
+            # Omit pixelFormat so TD reports the current format.
+            if getattr(n, 'family', None) == 'TOP':
+                try:
+                    entry['cudaMemoryBytes'] = n.cudaMemory()
+                except Exception:
+                    entry['cudaMemoryBytes'] = None
+            else:
+                entry['cudaMemoryBytes'] = None
+            results.append(entry)
         except Exception:
             # Skip nodes that can't provide cook info (e.g., locked or internal)
             pass  # intentional — not all nodes expose cook timing

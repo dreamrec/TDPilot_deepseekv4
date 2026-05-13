@@ -2019,6 +2019,7 @@ from td_mcp.registry.tools_hints import (  # noqa: E402
 )
 from td_mcp.registry.tools_info import (  # noqa: E402
     td_get_capabilities,
+    td_get_capabilities_summary,  # v2.4 / Phase C.6
     td_get_info,
     td_get_server_metrics,
     td_list_families,
@@ -2114,6 +2115,7 @@ from td_mcp.registry.tools_system import (  # noqa: E402
     td_color_pipeline,
     td_component_standardize,
     td_logger_status,
+    td_midi_devices,  # v2.4 / Phase C.2
     td_python_env_status,
     td_tdresources_inspect,
     td_threading_status,

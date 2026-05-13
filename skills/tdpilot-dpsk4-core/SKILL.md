@@ -12,11 +12,28 @@ description: >
   project lifecycle, technique memory, everything.
 ---
 
-# TDPilot DPSK4 Core v2.3.0 — Patching Discipline (103 tools, TD 2025.32820)
+# TDPilot DPSK4 Core v2.4.0 — Patching Discipline (105 tools, TD 2025.32820)
 
 You are an AI assistant working live inside a TouchDesigner project. You have full control through 103 MCP tools — but control without discipline creates mess. This skill defines how you work.
 
 The goal: every action you take should leave the project cleaner, more readable, and more stable than you found it. You're not generating throwaway demos — you're working inside someone's real project.
+
+---
+
+## 0. Mandatory STOP Rules — Discipline Before Action
+
+These six rules MUST hold for every action. Violating any of them is the #1 source of session-killing bugs.
+
+1. **Never guess parameter names.** Before setting parameters on an unfamiliar operator type, call `td_get_param_help` for the parameter you intend to write, or inspect an existing instance with `td_get_node_detail`. A `tdAttributeError` from a bad param name forces a full backtrack.
+2. **On `tdAttributeError` or "param does not exist" — STOP.** Do not retry blindly. Call `td_get_param_help` for the operator type, read the actual param list, then resume.
+3. **Script callbacks use relative paths.** Inside an `executeDAT`, `scriptOp`, or panel callback (Python functions where `me` and `parent()` are bound), reach the host via `me.parent()` or `parent()`. NEVER hardcode `/project1/...` in callback bodies — the moment the COMP is reused or relocated, every absolute reference breaks. (Parameter **expressions** — `.expr` strings — are the opposite case and often need absolute paths; see §9.)
+4. **Prefer native MCP tools over `td_exec_python`.** `td_create_node`, `td_set_params`, `td_connect_nodes`, `td_custom_parameters`, `td_pop_inspect` are validated, batched, and audited. Reach for `td_exec_python` only when no native tool covers the operation.
+5. **Call `td_get_hints` before building an unfamiliar operator type.** Hints surface known wiring requirements, parameter quirks, and anti-patterns specific to that operator that would otherwise cost a debug cycle.
+6. **Snapshot + viewer flag before render-chain work.** `td_snapshot_scene` before any destructive change. `op(target).viewer = True` on test COMPs — otherwise `td_get_errors == 0` is a false greenlight (see §11) and red-bordered errors stay invisible.
+
+Discovery before mutation. Inspection before assumption. When in doubt, read first.
+
+For a consolidated index of failure modes that violate these rules in practice, see `references/anti-patterns.md`.
 
 ---
 
@@ -271,3 +288,10 @@ The `references/` directory contains deep-dive guides for specialized topics:
 
 - **`advanced-workflows.md`** — Optimization, safety system, snapshots, events, musical timescale, and the feedback-displacement fluid texture recipe.
 - **`preset-systems-and-ui.md`** — Complete guide to building preset management, parameter morphing, custom UI widgets, scene/cue launchers, MIDI/OSC auto-learn, SuperCollider-style pattern generators, and performance optimization in TouchDesigner. Covers TDStoreTools persistence, easing curves, random distributions, binding systems, and MVC architecture for preset engines.
+- **`audio-reactive-glsl.md`** — Field-tested audio-to-shader chain: AudioSpectrum FFT settings, Math gain calibration, CHOP-to-TOP layout, GLSL spectrum sampling at `y=0.25`, in-shader smoothing as a replacement for Lag/Filter CHOPs (which break timeslice). Includes the empirical magic numbers and the bands-by-x-coordinate map.
+- **`glsl-idioms.md`** — GLSL TOP in TouchDesigner: time via the Values page (no `uTDCurrentTime`), `sTD2DInputs` sampling patterns, the Feedback TOP `top`-parameter wiring trick, common compile errors, and multi-input compositor / displacement templates.
+- **`recording-and-export.md`** — License-tier codec matrix (ProRes / MJPEG / H.264 / H.265 / AV1 / VVC), Non-Commercial 1280×1280 resolution cap workaround, why `top.save()` fails for animation, TD 2025.32820 Movie File Out additions (AV1, AAC/Opus, spherical metadata), pre-recording checklist, and the render-then-encode pipeline.
+- **`anti-patterns.md`** — Consolidated catalog of traps that look right and aren't: destroy+recreate races, Lag-CHOP timeslice expansion, `top.save()` for animation, hardcoded paths in callbacks, blind trust in `td_get_errors == 0`, Feedback TOP self-wiring, `.expr` without `.mode`, and more. Cross-referenced from SKILL.md §0 and §11.
+- **`ndi-and-streaming.md`** — TD 2025.32820 NDI / Syphon / Spout pipelines: NDI In/Out TOP parameters, NDI DAT source discovery (verified-working pattern for replacing legacy `TDU.NDISources`/`app.ndiInputs`), platform-conditional Syphon (macOS) and Spout (Windows) wiring, multi-machine sync via timecode master, network gotchas (subnet/firewall/NDI vs HX), and anti-patterns including the "no separate Syphon Out / Spout Out operators exist" trap.
+- **`midi-osc-control.md`** — Live-input pipelines: MIDI In/Out/Map CHOP, OSC In/Out (DAT vs CHOP), auto-learn workflows, bidirectional feedback (motorized faders + LED rings), controller-specific notes (Push, Launchpad, BCF2000/BCR2000, FaderPort), timing gotchas (MIDI clock vs MTC, OSC port collisions, latency budgets), and anti-patterns (don't poll midiin in expressions, don't trust LED state).
+- **`depth-and-body-tracking.md`** — Sensor coverage matrix (Azure Kinect, ZED, RealSense, MediaPipe, Kinect v1/v2, Orbbec/Structure/TrueDepth) with TD operator names, resolutions/fps, coordinate spaces, and platform limits. Includes body-tracking → POP particle recipes, coordinate-space conversion snippets, multi-user/outdoor installation patterns, and anti-patterns (no skeleton polling in Python expressions, no sub-pixel trust on MediaPipe landmarks).

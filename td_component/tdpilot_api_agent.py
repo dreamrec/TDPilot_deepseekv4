@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import ssl
 import threading
 import urllib.error
@@ -151,6 +152,90 @@ def _build_ssl_context() -> ssl.SSLContext:
     )
 
 
+# ---------------------------------------------------------------------------
+# v2.4 / Phase A.5 — retry-with-backoff for DeepSeek 429 / 5xx.
+# Pre-2.4 any 429 raised AgentError and killed the turn; users had to manually
+# resend. The retry path handles transient rate-limits + upstream-service
+# degradation without surfacing as a user-visible failure on the first hit.
+# Cumulative wait is bounded by max_retries × (_MAX_BACKOFF_SECONDS + per-call
+# request_timeout) so a misbehaving Retry-After: 9999 can't wedge us forever.
+# ---------------------------------------------------------------------------
+
+_MAX_BACKOFF_SECONDS = 60.0
+# Codes that should NEVER be retried — they reflect client-side configuration
+# bugs (bad key, missing endpoint, malformed body) that retry won't fix.
+_NON_RETRYABLE_HTTP_CODES = frozenset({400, 401, 403, 404})
+
+
+# ---------------------------------------------------------------------------
+# v2.4 / Phase B.1 — screenshot vision pipeline (feature-flagged).
+# DeepSeek's Anthropic-compat /v1/messages endpoint cannot surface base64
+# inside ``tool_result`` blocks — the model literally cannot see screenshots
+# taken via td_screenshot today. The vision pipeline:
+#   1. Strips ``data_base64`` from the tool_result that lands in self.messages
+#      (saves cached-prefix tokens + keeps the JSON small).
+#   2. Injects a proper ``image`` content block in the SAME user turn (image
+#      blocks must live in user content per Anthropic spec; interleaving
+#      tool_result + image keeps role alternation clean).
+#   3. Still broadcasts the full base64 to the chat UI via the WS path —
+#      that surface lives in the runtime layer, untouched.
+#
+# Ships behind ``enable_vision_pipeline`` (default False) until a live
+# DeepSeek call confirms its compat layer accepts ``image`` blocks. If
+# DeepSeek returns 400 on the first call with an image block, set the
+# flag back to False and revert to the legacy embedded-base64 behavior.
+# ---------------------------------------------------------------------------
+
+
+def _split_screenshot_payload(tool_name: str, result: Any) -> tuple[Any, str | None, str]:
+    """Return ``(slim_result, b64_or_None, media_type)``.
+
+    For non-screenshot tools or non-dict results, returns the input unchanged
+    + ``None`` base64. For screenshot dicts carrying ``data_base64``, returns
+    a copy with that field replaced by a small ``image_omitted_for_compat``
+    marker, plus the raw base64 string the caller can pack into an image
+    content block.
+
+    ``media_type`` is a best-effort guess from the result's ``format`` field
+    (defaults to ``"image/jpeg"`` which matches handle_screenshot's current
+    output).
+    """
+    if tool_name != "td_screenshot" or not isinstance(result, dict):
+        return result, None, ""
+    b64 = result.get("data_base64")
+    if not isinstance(b64, str) or not b64:
+        return result, None, ""
+    fmt = str(result.get("format") or "jpeg").lower().lstrip(".")
+    media_type = "image/png" if fmt == "png" else "image/jpeg"
+    slim = {k: v for k, v in result.items() if k != "data_base64"}
+    slim["image_omitted_for_compat"] = True
+    slim["content_type"] = media_type
+    return slim, b64, media_type
+
+
+def _parse_retry_after(headers: Any, default: float) -> float:
+    """Parse a Retry-After header into seconds, falling back to ``default``.
+
+    Accepts the integer-seconds form ("60", "0.5"). The HTTP-date form is
+    rare in practice for rate-limit headers; we fall back to the computed
+    backoff if the value isn't a plain number. Returns at least 0.1s so
+    callers can use the result as an Event.wait timeout without raising
+    on negative values.
+    """
+    if headers is None:
+        return default
+    try:
+        raw = headers.get("Retry-After") or headers.get("retry-after") or ""
+    except Exception:
+        return default
+    if not raw:
+        return default
+    try:
+        return max(0.1, float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
 class AgentError(Exception):
     pass
 
@@ -215,6 +300,34 @@ _TIER_RESET_RE = re.compile(
     r"|\bauto\s+(?:tier|mode|routing)\b"
     r"|\breset\s+(?:tier|mode|routing)\b",
     re.IGNORECASE,
+)
+
+# v2.4 / B-008-T (live-debug 2026-05-13) — TASK-DONE signals. Once
+# task-sticky pro is active (entered by a heuristic-induced pro routing
+# OR by a CycleDetected escalation), the agent stays on pro until the
+# user sends one of these signals — at which point we drop back to the
+# normal auto heuristic. Cost-OK rationale: the user explicitly said
+# costs are small + transparent (visible in the cost pill), so staying
+# on pro across a multi-turn build is the right UX trade-off vs the
+# context-thrash of mid-task tier flips.
+#
+# Conservative set — only fires on CLEAR completion signals, not on
+# casual mid-task acks ("ok"/"yes"/"sure"). Negative signals ("still
+# broken", "not working") deliberately do NOT match — the agent must
+# stay on pro while the user is still asking for help.
+_TASK_DONE_RE = re.compile(
+    r"\b(?:thanks?(?:\s+you)?|thank\s+you|"
+    r"perfect|awesome|excellent|nailed\s+it|"
+    r"ship\s+it|"
+    r"(?:that|it)\s+works(?:\s+now)?|works\s+now|"
+    r"all\s+done|we'?re\s+done|that'?s\s+(?:it|done|all)|"
+    r"looks?\s+(?:good|great|perfect)|"
+    r"done|finished|completed?)\b"
+    # Hard guard: don't fire if the message is asking for MORE work in
+    # the same sentence ("thanks, now also fix Y" — keep on pro).
+    r"(?!.*\b(?:now|but|also|additionally|next|then|and)\b.+\b"
+    r"(?:fix|build|create|add|do|change|update|tweak|adjust)\b)",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -312,6 +425,49 @@ class Agent:
         # BaseException catch and out via ``on_error`` → ``EV_ERROR``.
         # Wired by AgentRuntime to honour ``TDPILOT_DISABLE_CYCLE_DETECTION``.
         cycle_ledger_factory: Callable[[], Any] | None = None,
+        # v2.4 / Phase A.5 — retry policy for DeepSeek 429 / 5xx. ``max_retries``
+        # is the number of retry attempts AFTER the first failure (so
+        # ``max_retries=3`` allows up to 4 total HTTP calls). ``initial_backoff``
+        # is the base for exponential backoff in seconds: attempt N waits
+        # ``initial_backoff * 2**N + jitter`` (capped at _MAX_BACKOFF_SECONDS,
+        # or replaced by the server's Retry-After header when present).
+        max_retries: int = 3,
+        initial_backoff: float = 2.0,
+        # v2.4 / Phase A.5 — soft-nudge UI surface. ``on_hint(kind, message)``
+        # fires on each retry attempt AND on retry exhaustion before the
+        # final raise. AgentRuntime wires this to EV_HINT so the chat UI
+        # can render "retrying in 5s…" mid-turn rather than going silent.
+        # ``kind`` is a short stable identifier ("api_retry",
+        # "api_retry_exhausted"); ``message`` is a human-readable string.
+        on_hint: Callable[[str, str], None] = _noop,
+        # v2.4 / B-009 (live-debug 2026-05-13) — heartbeat during long API
+        # calls. Pro extended-thinking turns can block on urlopen for
+        # 60-180s with no events emitted; the frontend's prior 90s activity
+        # watchdog tripped 'idle (timeout)' falsely while the agent was
+        # still thinking. Fires every ``heartbeat_interval`` seconds while
+        # urlopen is pending; the runtime wires this to push EV_STATE
+        # ("thinking") onto the event queue, which broadcasts via WS and
+        # re-arms the JS watchdog. No-op by default so unit tests don't
+        # need TD bindings to instantiate Agent.
+        on_heartbeat: Callable[[], None] = _noop,
+        # Interval between heartbeats during a single API call. 30s is
+        # well inside the bumped JS watchdog window (240s).
+        heartbeat_interval: float = 30.0,
+        # v2.4 / Phase B.1 — screenshot vision pipeline. When True, the
+        # _loop strips ``data_base64`` from td_screenshot tool_results and
+        # injects a sibling ``image`` content block in the same user turn
+        # so the model can actually see the screenshot. Default False
+        # until a live DeepSeek call confirms its compat layer accepts
+        # image blocks in user content. The WS broadcast path (chat UI)
+        # is untouched — full base64 still reaches the browser.
+        enable_vision_pipeline: bool = False,
+        # v2.4 / Phase C.9 — extended-thinking budget. When > 0, every
+        # /v1/messages request body includes ``"thinking": {"type":
+        # "enabled", "budget_tokens": N}``. DeepSeek's compat-layer
+        # support for this field is undocumented as of 2026-05 — if
+        # the server 400s, set this to 0 to disable. 0 = disabled
+        # (legacy pre-v2.4 behaviour, byte-stable cache prefix).
+        thinking_budget: int = 0,
     ) -> None:
         if not api_key:
             raise AgentError("api_key is required")
@@ -342,6 +498,23 @@ class Agent:
         # entire tool-use chain so DeepSeek's auto-cache (model-keyed)
         # doesn't bust mid-turn.
         self._active_model: str = self.model
+        # v2.4 / B-008-C (live-debug 2026-05-13) — reactive escalation flag.
+        # Set to True by ``run_turn`` when the previous turn died on
+        # ``CycleDetected``. Consumed (and reset) by ``_resolve_model`` on
+        # the NEXT auto-tier turn to force pro. With B-008-T integrated,
+        # this also enters task-sticky pro so subsequent turns of the
+        # recovery effort stay on pro until the user signals done.
+        self._cycle_escalate_next_turn: bool = False
+        # v2.4 / B-008-T (live-debug 2026-05-13, follow-up to A+C) —
+        # TASK-STICKY pro. When the auto heuristic OR cycle-escalation
+        # picks pro, latch this flag so the rest of the multi-turn task
+        # stays on pro (preserves working-memory + DeepSeek auto-cache
+        # across tool-chain turns). Cleared by ``_maybe_clear_task_sticky``
+        # when the user's message matches ``_TASK_DONE_RE`` (thanks /
+        # perfect / done / that works / ...). Explicit user pins
+        # (model_tier=flash/pro) and per-turn overrides take precedence
+        # — this only governs the auto-tier path.
+        self._task_sticky_pro: bool = False
         self.on_model_change = on_model_change
         self.on_tier_change = on_tier_change
         self.base_url = base_url.rstrip("/")
@@ -361,6 +534,23 @@ class Agent:
         self.on_usage = on_usage
         self.rollback_guard_factory = rollback_guard_factory
         self.cycle_ledger_factory = cycle_ledger_factory
+
+        # v2.4 / Phase A.5 — retry config + hint callback. Clamp to safe
+        # values so a bad COMP-param value can't disable retries entirely
+        # (negative) or set a sub-millisecond backoff (zero / NaN).
+        self.max_retries = max(0, int(max_retries))
+        self.initial_backoff = max(0.1, float(initial_backoff))
+        self.on_hint = on_hint
+        # v2.4 / B-009 (live-debug 2026-05-13) — heartbeat surface.
+        self.on_heartbeat = on_heartbeat
+        # Clamp to ≥ 1s to prevent pathological per-call thread storms
+        # from a misconfigured COMP param.
+        self.heartbeat_interval = max(1.0, float(heartbeat_interval))
+        # v2.4 / Phase B.1 — screenshot vision flag. Off by default.
+        self.enable_vision_pipeline = bool(enable_vision_pipeline)
+        # v2.4 / Phase C.9 — thinking budget. Clamped to ≥ 0 so a bad
+        # COMP-param value can't produce a negative budget.
+        self.thinking_budget = max(0, int(thinking_budget))
 
         self.messages: list[dict] = []
         self._stop_flag = threading.Event()
@@ -435,8 +625,42 @@ class Agent:
         try:
             return self._loop()
         except BaseException as exc:  # noqa: BLE001 — fan out to callback
+            # v2.4 / B-008-C (live-debug 2026-05-13) — name-match on
+            # CycleDetected (avoids the late-import / module-reload class-
+            # identity issue that motivated B-005). Setting the flag here
+            # ensures the very next ``_resolve_model`` call promotes auto
+            # → pro for one turn. Same name-match defense that B-005's
+            # ``_run_safe`` fallback uses in the runtime — keep the two
+            # branches in lock-step.
+            if type(exc).__name__ == "CycleDetected":
+                self._cycle_escalate_next_turn = True
             self.on_error(exc)
             raise
+
+    def _maybe_clear_task_sticky(self, user_text: str) -> bool:
+        """Clear ``_task_sticky_pro`` if the user's message signals task done.
+
+        Called by ``_loop`` BEFORE ``_resolve_model`` each turn so that the
+        very turn containing the "thanks" / "done" / "that works" signal
+        drops back to the auto heuristic — the user's follow-up question
+        (often a lookup) gets a cheap flash response.
+
+        Returns True if the flag was cleared, False otherwise. Idempotent
+        if the flag was already False (the regex is still evaluated, which
+        is fine — sub-millisecond on short messages).
+
+        Guard against "thanks, now also fix Y"-style mixed messages built
+        into _TASK_DONE_RE's negative lookahead — those keep the flag.
+        """
+        if not self._task_sticky_pro:
+            return False
+        text = user_text or ""
+        if not text:
+            return False
+        if _TASK_DONE_RE.search(text):
+            self._task_sticky_pro = False
+            return True
+        return False
 
     def _maybe_promote_tier(self, user_text: str) -> bool:
         """Mutate ``self.model_tier`` if the user expressed session-scope intent.
@@ -519,12 +743,29 @@ class Agent:
             return self.flash_model
         if self.model_tier == "pro":
             return self.model
-        # auto
+        # 3. v2.4 / B-008-C (live-debug 2026-05-13) — REACTIVE ESCALATION.
+        # If the previous turn died on CycleDetected (caught in run_turn's
+        # except), force pro AND latch task-sticky so the multi-turn
+        # recovery stays on pro until the user signals done. Pre-B-008-T
+        # this was a one-shot escalation; that lost context if the
+        # recovery itself took >1 turn (which it usually does).
+        if self._cycle_escalate_next_turn:
+            self._cycle_escalate_next_turn = False
+            self._task_sticky_pro = True
+            return self.model
+        # 3.5. v2.4 / B-008-T — TASK-STICKY pro. Honored AFTER cycle-
+        # escalate (which would set the same flag anyway) and BEFORE the
+        # heuristic recomputes. The flag is cleared by
+        # _maybe_clear_task_sticky on a task-done message, which runs
+        # in _loop BEFORE this method.
+        if self._task_sticky_pro:
+            return self.model
+        # 4. Auto heuristic (improved 2026-05-13).
         text = (user_text or "").lower()
         score = 0
         if len(text) > 300:
             score += 1
-        # Imperative / build-leaning verbs — RouteLLM features (arXiv:2406.18665)
+        # Imperative / build-leaning verbs — RouteLLM features (arXiv:2406.18665).
         pro_keywords = (
             "build",
             "create",
@@ -536,6 +777,7 @@ class Agent:
             "optimize",
             "rewrite",
             "rewire",
+            "audit",
         )
         if any(kw in text for kw in pro_keywords):
             score += 1
@@ -548,7 +790,50 @@ class Agent:
         tool_keywords = ("create node", "set param", "connect", "wire", "inspect", "screenshot", "patch")
         if sum(1 for kw in tool_keywords if kw in text) >= 2:
             score += 1
-        return self.model if score >= 2 else self.flash_model
+        # v2.4 / B-008-A (live-debug 2026-05-13) — STRUCTURAL-COMPLEXITY
+        # NOUNS. Short imperative prompts like "Build a kaleidoscope
+        # feedback loop" (3-noun phrase ending in "loop") routed to flash
+        # under the pre-2026-05-13 heuristic — verb scored +1 but nothing
+        # else hit, so score=1 < threshold=2 → flash. These nouns signal
+        # system-shaped work (multi-node wiring, recursion, downstream
+        # consumers) which flash struggles with. Combined with the verb
+        # signal, "Build a X feedback loop"-style prompts now score 2 →
+        # pro, while single-target mutations like "fix the parameter on
+        # this op" stay on flash (verb alone scores 1).
+        #
+        # Design note: deliberately NOT adding a separate imperative-
+        # starter bonus on top of the verb-anywhere check — that would
+        # double-count the verb on "fix the parameter ..."-style short
+        # mutation prompts and erode the cost-tier intent. The verb +
+        # structural-noun pair is enough signal for the genuine multi-
+        # step build tasks without overshooting.
+        structural_nouns = (
+            "feedback",
+            "loop",
+            "chain",
+            "network",
+            "system",
+            "pipeline",
+            "graph",
+            "tree",
+            "rig",
+            "shader",
+            "renderer",
+            "compositor",
+            "kaleidoscope",
+            "fractal",
+            "particle",
+        )
+        if any(kw in text for kw in structural_nouns):
+            score += 1
+        picked = self.model if score >= 2 else self.flash_model
+        # v2.4 / B-008-T — heuristic-induced pro routing latches task-
+        # sticky. The next turn (even a short clarification like "what's
+        # the framerate?") stays on pro, preserving working-memory and
+        # the DeepSeek auto-cache across the multi-turn build.
+        if picked == self.model:
+            self._task_sticky_pro = True
+        return picked
 
     def _loop(self) -> str | None:
         # Phase 4.3 — compact the conversation history if it has grown
@@ -585,12 +870,27 @@ class Agent:
         # before _resolve_model runs so the per-turn pick honours any
         # session-scope intent ("this session", "from now on", ...).
         self._maybe_promote_tier(last_user_text)
+        # v2.4 / B-008-T (live-debug 2026-05-13) — clear task-sticky pro
+        # if the user just signalled task completion ("thanks", "done",
+        # "that works", ...). Runs BEFORE _resolve_model so the very
+        # turn carrying the signal drops to flash for any follow-up
+        # lookup, without an extra round-trip on pro.
+        self._maybe_clear_task_sticky(last_user_text)
         chosen = self._resolve_model(last_user_text)
-        if chosen != self._active_model:
-            try:
-                self.on_model_change(self.model_tier, chosen)
-            except Exception:
-                pass
+        # B-004 (live-debug 2026-05-13) — fire on_model_change on EVERY
+        # turn, not only when the tier flips. Pre-fix the badge in the
+        # chat UI stayed empty after a tab reload IF the auto-router
+        # kept picking the same tier as the last turn (e.g. sticky pro,
+        # or a long-running build where every turn routes to pro). The
+        # badge depends on EV_MODEL ever firing, so a quiet "same tier
+        # again" turn left the user staring at just "thinking" with no
+        # idea which model was running. Now we fire every turn; the
+        # extension drain de-dupes idempotently (textContent assignment
+        # to the same value is a no-op).
+        try:
+            self.on_model_change(self.model_tier, chosen)
+        except Exception:
+            pass
         self._active_model = chosen
 
         # Phase 1.2 (v2.2.0) — per-turn cycle-detection ledger. Built
@@ -682,6 +982,12 @@ class Agent:
                     rollback_guard = None
 
             results_block: list[dict] = []
+            # v2.4 / Phase B.1 — vision-pipeline image-block buffer. Each
+            # entry is ``(tool_result_index, image_block)`` so we can
+            # interleave after the for-loop closes. Skipped entirely
+            # when the feature flag is off — preserves byte-for-byte
+            # legacy behavior pre-v2.4.
+            pending_image_blocks: list[tuple[int, dict]] = []
             try:
                 if rollback_guard is not None:
                     rollback_guard.__enter__()
@@ -720,15 +1026,41 @@ class Agent:
                             "error": f"{type(exc).__name__}: {exc}",
                         }
                         is_error = True
+                    # v2.4 / Phase B.1 — split screenshot payload so the
+                    # tool_result that lands in self.messages doesn't carry
+                    # base64 (which DeepSeek's compat layer can't decode
+                    # and which costs cached-prefix tokens on every turn).
+                    # The base64 itself becomes an ``image`` content block
+                    # appended right after this tool_result, in the same
+                    # user turn.
+                    history_result = result
+                    image_b64: str | None = None
+                    image_mt = ""
+                    if self.enable_vision_pipeline:
+                        history_result, image_b64, image_mt = _split_screenshot_payload(tool_name, result)
                     self.on_tool_result(tool_name, result, is_error)
                     results_block.append(
                         {
                             "type": "tool_result",
                             "tool_use_id": tool_id,
-                            "content": _stringify(result),
+                            "content": _stringify(history_result),
                             "is_error": is_error,
                         }
                     )
+                    if image_b64:
+                        pending_image_blocks.append(
+                            (
+                                len(results_block) - 1,
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": image_mt or "image/jpeg",
+                                        "data": image_b64,
+                                    },
+                                },
+                            )
+                        )
             finally:
                 if rollback_guard is not None:
                     # __exit__ runs the post-batch check + decides rollback;
@@ -743,6 +1075,15 @@ class Agent:
             # Logic extracted into ``_apply_rollback_hint`` for direct
             # unit-testing (Codex P2 followup on PR #34).
             self._apply_rollback_hint(rollback_guard, results_block)
+
+            # v2.4 / Phase B.1 — interleave pending image blocks after
+            # their matching tool_results so the user turn looks like
+            # [tool_result, image, tool_result, image, ...]. Walk in
+            # reverse so the index references stay valid as we insert.
+            if pending_image_blocks:
+                for tr_idx, image_block in reversed(pending_image_blocks):
+                    # Insert AFTER the tool_result at tr_idx.
+                    results_block.insert(tr_idx + 1, image_block)
 
             self.messages.append({"role": "user", "content": results_block})
 
@@ -860,6 +1201,19 @@ class Agent:
             body["system"] = self.system_prompt
         if self.tools:
             body["tools"] = self.tools
+        # v2.4 / Phase C.9 — extended-thinking budget. Adding the
+        # ``thinking`` block on every request keeps the cache prefix
+        # byte-stable as long as the budget value is fixed for the
+        # session (it's loaded once at AgentRuntime construction
+        # from the Thinkingbudget COMP param). DeepSeek's Anthropic-
+        # compat layer support is undocumented as of 2026-05; a 400
+        # here means the field isn't accepted — set Thinkingbudget=0
+        # to disable.
+        if self.thinking_budget > 0:
+            body["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self.thinking_budget,
+            }
 
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
@@ -875,20 +1229,108 @@ class Agent:
             },
             data=data,
         )
-        try:
-            ctx = _build_ssl_context()
-            with urllib.request.urlopen(req, timeout=self.request_timeout, context=ctx) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
+        # v2.4 / Phase A.5 — retry-with-backoff for transient HTTP failures.
+        # 429 (rate limit) + any 5xx → exponential backoff with jitter, or
+        # Retry-After header when the server provides one. Client-side errors
+        # (400/401/403/404) raise immediately — they reflect bad config, not
+        # transient load. Network/I/O errors raise on the first failure (the
+        # plan's scope is HTTP retry only; network-error retry can land in a
+        # follow-up if it shows up in usage data).
+        ctx = _build_ssl_context()
+        attempt = 0
+        while True:
+            if self._stop_flag.is_set():
+                raise AgentError("Interrupted before API call")
             try:
-                detail = exc.read().decode("utf-8")
-            except Exception:
-                detail = ""
-            raise AgentError(f"HTTP {exc.code} from /v1/messages: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise AgentError(f"Network error to {self.base_url}: {exc.reason}") from exc
-        except (TimeoutError, OSError) as exc:
-            raise AgentError(f"I/O error talking to {self.base_url}: {exc}") from exc
+                # v2.4 / B-009 (live-debug 2026-05-13) — heartbeat thread.
+                # urlopen blocks the worker thread for the full duration of
+                # the DeepSeek call (no streaming on this code path). With
+                # pro extended thinking that can be 60-180s. The frontend's
+                # activity watchdog only re-arms on incoming WS events, so
+                # the long silence used to trip a false 'idle (timeout)'.
+                # This thread pulses on_heartbeat → runtime pushes
+                # EV_STATE("thinking") → broadcast WS → frontend re-arms.
+                # Daemon + Event-stop pair so the heartbeat dies on the
+                # finally branch regardless of how urlopen exits (success,
+                # HTTPError, URLError, timeout).
+                _hb_stop = threading.Event()
+
+                def _heartbeat_loop(stop_event: threading.Event = _hb_stop) -> None:
+                    # Bind _hb_stop into the default-arg to avoid late-binding
+                    # over the retry-loop iteration variable (ruff B023).
+                    while not stop_event.wait(self.heartbeat_interval):
+                        try:
+                            self.on_heartbeat()
+                        except Exception:  # noqa: BLE001 — pulse must never crash worker
+                            pass
+
+                _hb_thread = threading.Thread(
+                    target=_heartbeat_loop,
+                    daemon=True,
+                    name="tdpilot-api-heartbeat",
+                )
+                _hb_thread.start()
+                try:
+                    with urllib.request.urlopen(req, timeout=self.request_timeout, context=ctx) as resp:
+                        return json.loads(resp.read().decode("utf-8"))
+                finally:
+                    _hb_stop.set()
+            except urllib.error.HTTPError as exc:
+                try:
+                    detail = exc.read().decode("utf-8")
+                except Exception:
+                    detail = ""
+                # Non-retryable client error → raise immediately.
+                if exc.code in _NON_RETRYABLE_HTTP_CODES:
+                    raise AgentError(f"HTTP {exc.code} from /v1/messages: {detail}") from exc
+                # Retryable: 429 (rate limit) + any 5xx (server-side).
+                retryable = exc.code == 429 or 500 <= exc.code < 600
+                if not retryable:
+                    raise AgentError(f"HTTP {exc.code} from /v1/messages: {detail}") from exc
+                if attempt >= self.max_retries:
+                    if exc.code == 429:
+                        diagnosis = (
+                            f"API rate-limited {attempt + 1}× — wait a minute "
+                            "and retry. If this keeps happening, your DeepSeek "
+                            "key is over its quota or the upstream service is "
+                            "having a bad day."
+                        )
+                    else:
+                        diagnosis = (
+                            f"API returned HTTP {exc.code} {attempt + 1}× — "
+                            "upstream service is degraded. Check "
+                            "status.deepseek.com or try again in a minute."
+                        )
+                    self.on_hint("api_retry_exhausted", diagnosis)
+                    raise AgentError(
+                        f"HTTP {exc.code} from /v1/messages after "
+                        f"{attempt + 1} attempts: {detail}. Diagnosis: "
+                        f"{diagnosis}"
+                    ) from exc
+                # Compute backoff. Prefer server-provided Retry-After
+                # over our exponential default; clamp so a misbehaving
+                # Retry-After: 9999 can't wedge the cook for hours.
+                wait_default = self.initial_backoff * (2**attempt) + random.uniform(0, 0.5)
+                wait_seconds = _parse_retry_after(getattr(exc, "headers", None), wait_default)
+                wait_seconds = min(wait_seconds, _MAX_BACKOFF_SECONDS)
+                self.on_hint(
+                    "api_retry",
+                    f"HTTP {exc.code} from /v1/messages — retrying in "
+                    f"{wait_seconds:.1f}s "
+                    f"(attempt {attempt + 1}/{self.max_retries}).",
+                )
+                # Cooperative cancellation: Event.wait returns True if
+                # the flag is set during the sleep window. We honour
+                # stop mid-backoff so a user-initiated cancel doesn't
+                # have to wait out the full delay.
+                if self._stop_flag.wait(timeout=wait_seconds):
+                    raise AgentError("Interrupted during retry backoff") from exc
+                attempt += 1
+                continue
+            except urllib.error.URLError as exc:
+                raise AgentError(f"Network error to {self.base_url}: {exc.reason}") from exc
+            except (TimeoutError, OSError) as exc:
+                raise AgentError(f"I/O error talking to {self.base_url}: {exc}") from exc
 
 
 def _stringify(result: Any) -> str:
