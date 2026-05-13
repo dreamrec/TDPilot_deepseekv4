@@ -187,9 +187,7 @@ _NON_RETRYABLE_HTTP_CODES = frozenset({400, 401, 403, 404})
 # ---------------------------------------------------------------------------
 
 
-def _split_screenshot_payload(
-    tool_name: str, result: Any
-) -> tuple[Any, str | None, str]:
+def _split_screenshot_payload(tool_name: str, result: Any) -> tuple[Any, str | None, str]:
     """Return ``(slim_result, b64_or_None, media_type)``.
 
     For non-screenshot tools or non-dict results, returns the input unchanged
@@ -985,10 +983,10 @@ class Agent:
 
             results_block: list[dict] = []
             # v2.4 / Phase B.1 — vision-pipeline image-block buffer. Each
-                # entry is ``(tool_result_index, image_block)`` so we can
-                # interleave after the for-loop closes. Skipped entirely
-                # when the feature flag is off — preserves byte-for-byte
-                # legacy behavior pre-v2.4.
+            # entry is ``(tool_result_index, image_block)`` so we can
+            # interleave after the for-loop closes. Skipped entirely
+            # when the feature flag is off — preserves byte-for-byte
+            # legacy behavior pre-v2.4.
             pending_image_blocks: list[tuple[int, dict]] = []
             try:
                 if rollback_guard is not None:
@@ -1039,9 +1037,7 @@ class Agent:
                     image_b64: str | None = None
                     image_mt = ""
                     if self.enable_vision_pipeline:
-                        history_result, image_b64, image_mt = (
-                            _split_screenshot_payload(tool_name, result)
-                        )
+                        history_result, image_b64, image_mt = _split_screenshot_payload(tool_name, result)
                     self.on_tool_result(tool_name, result, is_error)
                     results_block.append(
                         {
@@ -1275,9 +1271,7 @@ class Agent:
                 )
                 _hb_thread.start()
                 try:
-                    with urllib.request.urlopen(
-                        req, timeout=self.request_timeout, context=ctx
-                    ) as resp:
+                    with urllib.request.urlopen(req, timeout=self.request_timeout, context=ctx) as resp:
                         return json.loads(resp.read().decode("utf-8"))
                 finally:
                     _hb_stop.set()
@@ -1288,15 +1282,11 @@ class Agent:
                     detail = ""
                 # Non-retryable client error → raise immediately.
                 if exc.code in _NON_RETRYABLE_HTTP_CODES:
-                    raise AgentError(
-                        f"HTTP {exc.code} from /v1/messages: {detail}"
-                    ) from exc
+                    raise AgentError(f"HTTP {exc.code} from /v1/messages: {detail}") from exc
                 # Retryable: 429 (rate limit) + any 5xx (server-side).
                 retryable = exc.code == 429 or 500 <= exc.code < 600
                 if not retryable:
-                    raise AgentError(
-                        f"HTTP {exc.code} from /v1/messages: {detail}"
-                    ) from exc
+                    raise AgentError(f"HTTP {exc.code} from /v1/messages: {detail}") from exc
                 if attempt >= self.max_retries:
                     if exc.code == 429:
                         diagnosis = (
@@ -1320,12 +1310,8 @@ class Agent:
                 # Compute backoff. Prefer server-provided Retry-After
                 # over our exponential default; clamp so a misbehaving
                 # Retry-After: 9999 can't wedge the cook for hours.
-                wait_default = self.initial_backoff * (2**attempt) + random.uniform(
-                    0, 0.5
-                )
-                wait_seconds = _parse_retry_after(
-                    getattr(exc, "headers", None), wait_default
-                )
+                wait_default = self.initial_backoff * (2**attempt) + random.uniform(0, 0.5)
+                wait_seconds = _parse_retry_after(getattr(exc, "headers", None), wait_default)
                 wait_seconds = min(wait_seconds, _MAX_BACKOFF_SECONDS)
                 self.on_hint(
                     "api_retry",
@@ -1342,13 +1328,9 @@ class Agent:
                 attempt += 1
                 continue
             except urllib.error.URLError as exc:
-                raise AgentError(
-                    f"Network error to {self.base_url}: {exc.reason}"
-                ) from exc
+                raise AgentError(f"Network error to {self.base_url}: {exc.reason}") from exc
             except (TimeoutError, OSError) as exc:
-                raise AgentError(
-                    f"I/O error talking to {self.base_url}: {exc}"
-                ) from exc
+                raise AgentError(f"I/O error talking to {self.base_url}: {exc}") from exc
 
 
 def _stringify(result: Any) -> str:

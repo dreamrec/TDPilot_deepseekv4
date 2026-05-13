@@ -164,9 +164,7 @@ def test_b009_heartbeat_stops_when_call_returns():
     t.join(timeout=1.5)
     assert not t.is_alive(), "stop_event must wake the long wait"
     # Zero pulses because the 10s cadence never elapsed.
-    assert fires == [], (
-        "no pulses expected when stop_event is set before the first cadence"
-    )
+    assert fires == [], "no pulses expected when stop_event is set before the first cadence"
 
 
 def test_b009_heartbeat_callback_exception_does_not_crash_thread():
@@ -195,8 +193,7 @@ def test_b009_heartbeat_callback_exception_does_not_crash_thread():
     t.join(timeout=1.0)
 
     assert len(fires) >= 2, (
-        "heartbeat must survive callback exception and continue pulsing — "
-        f"got {len(fires)} fires"
+        f"heartbeat must survive callback exception and continue pulsing — got {len(fires)} fires"
     )
 
 
@@ -219,6 +216,7 @@ def test_b009_runtime_wires_on_heartbeat_to_ev_state_thinking(monkeypatch):
     assert rt._agent is not None
     # Invoke the wired heartbeat — must push EV_STATE("thinking").
     from queue import Empty
+
     # Drain any pre-existing events first.
     while True:
         try:
@@ -233,9 +231,7 @@ def test_b009_runtime_wires_on_heartbeat_to_ev_state_thinking(monkeypatch):
             drained.append(rt._events.get_nowait())
         except Empty:
             break
-    assert len(drained) == 1, (
-        f"heartbeat must push exactly one event, got: {drained}"
-    )
+    assert len(drained) == 1, f"heartbeat must push exactly one event, got: {drained}"
     kind, payload = drained[0]
     assert kind == EV_STATE
     assert payload == "thinking"

@@ -246,9 +246,7 @@ def handle_memory_save(body: dict) -> dict:
     # callers who don't pass it get BM25-visible entries (preserves prior
     # behaviour). Callers explicitly tagging step lists with "instruction"
     # opt INTO the safer hide-from-generic-queries discipline.
-    content_type = (
-        body.get("content_type") or DEFAULT_CONTENT_TYPE
-    ).strip().lower()
+    content_type = (body.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower()
 
     if not name:
         return {"error": "Missing required field: name"}
@@ -260,10 +258,7 @@ def handle_memory_save(body: dict) -> dict:
         }
     if content_type not in VALID_CONTENT_TYPES:
         return {
-            "error": (
-                f"Invalid content_type: {content_type!r}. "
-                f"Must be one of {list(VALID_CONTENT_TYPES)}."
-            ),
+            "error": (f"Invalid content_type: {content_type!r}. Must be one of {list(VALID_CONTENT_TYPES)}."),
         }
 
     _ensure_dir()
@@ -384,9 +379,7 @@ def handle_memory_recall(body: dict) -> dict:
                 "name": meta.get("name") or p.stem,
                 "description": meta.get("description") or "",
                 "type": mtype,
-                "content_type": (
-                    meta.get("content_type") or DEFAULT_CONTENT_TYPE
-                ).strip().lower(),
+                "content_type": (meta.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower(),
                 "text": body_text,
             }
         )

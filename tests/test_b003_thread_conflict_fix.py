@@ -44,6 +44,7 @@ def _build_runtime(monkeypatch):
 
 def _drain_events(rt) -> list[tuple[str, object]]:
     from queue import Empty
+
     out = []
     while True:
         try:
@@ -73,13 +74,9 @@ def test_b003_sync_pushes_ev_tier_sync(monkeypatch):
     rt._sync_model_tier_to_comp("pro")
     events = _drain_events(rt)
     kinds = [k for k, _ in events]
-    assert EV_TIER_SYNC in kinds, (
-        f"expected EV_TIER_SYNC in event queue after sync, got {kinds}"
-    )
+    assert EV_TIER_SYNC in kinds, f"expected EV_TIER_SYNC in event queue after sync, got {kinds}"
     payloads = [p for k, p in events if k == EV_TIER_SYNC]
-    assert payloads == ["pro"], (
-        f"EV_TIER_SYNC payload should be the tier string 'pro', got {payloads}"
-    )
+    assert payloads == ["pro"], f"EV_TIER_SYNC payload should be the tier string 'pro', got {payloads}"
 
 
 def test_b003_sync_updates_runtime_config(monkeypatch):
@@ -101,12 +98,8 @@ def test_b003_sync_invalid_tier_is_no_op(monkeypatch):
     rt._sync_model_tier_to_comp("garbage")
     events = _drain_events(rt)
     tier_sync_events = [k for k, _ in events if k == EV_TIER_SYNC]
-    assert tier_sync_events == [], (
-        f"invalid tier must NOT push EV_TIER_SYNC, got {tier_sync_events}"
-    )
-    assert rt._config.get("model_tier") == prev_tier, (
-        "invalid tier must NOT update _config"
-    )
+    assert tier_sync_events == [], f"invalid tier must NOT push EV_TIER_SYNC, got {tier_sync_events}"
+    assert rt._config.get("model_tier") == prev_tier, "invalid tier must NOT update _config"
 
 
 def test_b003_all_three_valid_tiers_accepted(monkeypatch):

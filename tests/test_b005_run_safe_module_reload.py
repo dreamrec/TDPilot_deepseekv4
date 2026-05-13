@@ -28,6 +28,7 @@ sys.path.insert(0, str(REPO_ROOT / "td_component"))
 def _build_runtime_with_failing_agent(monkeypatch, failure):
     """Build an AgentRuntime stub whose Agent.run_turn raises ``failure``."""
     import tdpilot_api_runtime as rt_mod
+
     monkeypatch.setattr(rt_mod, "fetch_api_key", lambda: "sk-fake")
     from tdpilot_api_runtime import AgentRuntime
 
@@ -36,9 +37,15 @@ def _build_runtime_with_failing_agent(monkeypatch, failure):
     class _StubAgent:
         def run_turn(self_inner):
             raise failure
-        def stop(self_inner): pass
-        def reset(self_inner): pass
-        def clear_stop(self_inner): pass
+
+        def stop(self_inner):
+            pass
+
+        def reset(self_inner):
+            pass
+
+        def clear_stop(self_inner):
+            pass
 
     rt._agent = _StubAgent()
     return rt
@@ -46,6 +53,7 @@ def _build_runtime_with_failing_agent(monkeypatch, failure):
 
 def _drain_events(rt) -> list[tuple[str, object]]:
     from queue import Empty
+
     out = []
     while True:
         try:
@@ -66,8 +74,7 @@ def test_b005_real_AgentError_caught_quietly(monkeypatch):
     events = _drain_events(rt)
     kinds = [k for k, _ in events]
     assert EV_ERROR not in kinds, (
-        f"AgentError must NOT push a second EV_ERROR (already emitted by Agent), "
-        f"got events: {kinds}"
+        f"AgentError must NOT push a second EV_ERROR (already emitted by Agent), got events: {kinds}"
     )
     assert EV_STATE in kinds
     state_payloads = [p for k, p in events if k == EV_STATE]
@@ -94,8 +101,7 @@ def test_b005_module_reload_impersonator_caught_by_name(monkeypatch):
     # CRITICAL: no "Worker crash:" EV_ERROR push.
     error_msgs = [p for k, p in events if k == EV_ERROR]
     assert not any("Worker crash" in str(m) for m in error_msgs), (
-        f"name-matched CycleDetected must NOT produce 'Worker crash:' "
-        f"event, got: {error_msgs}"
+        f"name-matched CycleDetected must NOT produce 'Worker crash:' event, got: {error_msgs}"
     )
     # State must still go to idle.
     state_payloads = [p for k, p in events if k == EV_STATE]

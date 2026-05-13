@@ -893,9 +893,7 @@ def test_a5_429_triggers_one_retry_then_succeeds():
         agent.run_turn()
 
     assert call_count["n"] == 2, "expected one retry after the 429"
-    assert any(k == "api_retry" for k, _ in hints_seen), (
-        f"expected api_retry hint, got {hints_seen}"
-    )
+    assert any(k == "api_retry" for k, _ in hints_seen), f"expected api_retry hint, got {hints_seen}"
     assert texts_seen == ["recovered after retry"]
 
 
@@ -948,9 +946,7 @@ def test_a5_429_exhaustion_raises_with_diagnosis_hint():
             agent.run_turn()
 
     assert "429" in str(exc_info.value)
-    assert "Diagnosis" in str(exc_info.value), (
-        "exhausted-retries error must carry the diagnosis text"
-    )
+    assert "Diagnosis" in str(exc_info.value), "exhausted-retries error must carry the diagnosis text"
     assert any(k == "api_retry_exhausted" for k, _ in hints_seen), (
         f"expected api_retry_exhausted hint, got {hints_seen}"
     )
@@ -1012,9 +1008,7 @@ def test_a5_retry_after_header_honoured_over_exponential_default():
     assert call_count["n"] == 2
     # Retry-After=0.05 means total time well under 1s; initial_backoff=10.0
     # would put this near 10s. 2.0s gives generous CI headroom.
-    assert elapsed < 2.0, (
-        f"Retry-After header not honoured — backoff took {elapsed:.2f}s"
-    )
+    assert elapsed < 2.0, f"Retry-After header not honoured — backoff took {elapsed:.2f}s"
 
 
 def test_a5_stop_flag_aborts_during_backoff():
@@ -1050,7 +1044,6 @@ def test_a5_stop_flag_aborts_during_backoff():
         timer.cancel()
 
     assert call_count["n"] == 1, (
-        f"stop_flag during backoff should prevent further retries, got "
-        f"{call_count['n']} HTTP calls"
+        f"stop_flag during backoff should prevent further retries, got {call_count['n']} HTTP calls"
     )
     assert "interrupted" in str(exc_info.value).lower()

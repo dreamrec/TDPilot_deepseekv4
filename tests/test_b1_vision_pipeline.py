@@ -135,9 +135,7 @@ def test_b1_flag_off_preserves_legacy_base64_in_tool_result():
         assert name == "td_screenshot"
         return _screenshot_result_dict()
 
-    responses = _tool_use_then_text(
-        "td_screenshot", {"path": "/project1/render1"}, "saw it"
-    )
+    responses = _tool_use_then_text("td_screenshot", {"path": "/project1/render1"}, "saw it")
     calls = iter(responses)
 
     def _urlopen(req, *_a, **_kw):
@@ -181,9 +179,7 @@ def test_b1_flag_on_strips_base64_and_injects_image_block():
     def dispatcher(name, args):
         return _screenshot_result_dict()
 
-    responses = _tool_use_then_text(
-        "td_screenshot", {"path": "/project1/render1"}, "described"
-    )
+    responses = _tool_use_then_text("td_screenshot", {"path": "/project1/render1"}, "described")
     calls = iter(responses)
 
     def _urlopen(req, *_a, **_kw):
@@ -232,9 +228,7 @@ def test_b1_flag_on_does_not_inject_for_non_screenshot_tools():
         # we don't auto-inject — only td_screenshot triggers.
         return {"ok": True, "rows": [["a", "b"]]}
 
-    responses = _tool_use_then_text(
-        "td_get_nodes", {"path": "/project1"}, "got it"
-    )
+    responses = _tool_use_then_text("td_get_nodes", {"path": "/project1"}, "got it")
     calls = iter(responses)
 
     def _urlopen(req, *_a, **_kw):
@@ -253,9 +247,7 @@ def test_b1_flag_on_does_not_inject_for_non_screenshot_tools():
 
     blocks = captured[1]["messages"][2]["content"]
     types = [b["type"] for b in blocks]
-    assert types == ["tool_result"], (
-        f"non-screenshot tool must not produce image block, got: {types}"
-    )
+    assert types == ["tool_result"], f"non-screenshot tool must not produce image block, got: {types}"
 
 
 def test_b1_flag_on_screenshot_with_error_no_image_block():
@@ -267,9 +259,7 @@ def test_b1_flag_on_screenshot_with_error_no_image_block():
         # Simulates handle_screenshot returning an error
         return {"_tool_error": True, "error": "viewer flag is off"}
 
-    responses = _tool_use_then_text(
-        "td_screenshot", {"path": "/project1/oops"}, "got error"
-    )
+    responses = _tool_use_then_text("td_screenshot", {"path": "/project1/oops"}, "got error")
     calls = iter(responses)
 
     def _urlopen(req, *_a, **_kw):
@@ -289,6 +279,4 @@ def test_b1_flag_on_screenshot_with_error_no_image_block():
     blocks = captured[1]["messages"][2]["content"]
     types = [b["type"] for b in blocks]
     # Error path: no image block, just the error tool_result
-    assert types == ["tool_result"], (
-        f"screenshot error must not produce image block, got: {types}"
-    )
+    assert types == ["tool_result"], f"screenshot error must not produce image block, got: {types}"

@@ -63,9 +63,7 @@ def test_b008a_build_kaleidoscope_feedback_loop_routes_to_pro(monkeypatch):
     in structural_nouns but the check is presence-based, +1 once.)"""
     a = _make_agent(monkeypatch)
     picked = a._resolve_model("Build a kaleidoscope feedback loop")
-    assert picked == "deepseek-v4-pro", (
-        f"the canonical B-008 failing prompt must route to pro, got {picked}"
-    )
+    assert picked == "deepseek-v4-pro", f"the canonical B-008 failing prompt must route to pro, got {picked}"
 
 
 def test_b008a_short_lookup_still_routes_to_flash(monkeypatch):
@@ -73,9 +71,7 @@ def test_b008a_short_lookup_still_routes_to_flash(monkeypatch):
     zero pro signals. Must stay on flash to keep the cost-tier intent."""
     a = _make_agent(monkeypatch)
     picked = a._resolve_model("what is the framerate?")
-    assert picked == "deepseek-v4-flash", (
-        f"short lookup must stay on flash, got {picked}"
-    )
+    assert picked == "deepseek-v4-flash", f"short lookup must stay on flash, got {picked}"
 
 
 def test_b008a_structural_noun_alone_is_not_enough(monkeypatch):
@@ -83,9 +79,7 @@ def test_b008a_structural_noun_alone_is_not_enough(monkeypatch):
     signal must NOT promote to pro — score 1 < 2."""
     a = _make_agent(monkeypatch)
     picked = a._resolve_model("explain the feedback parameter")
-    assert picked == "deepseek-v4-flash", (
-        f"structural noun alone should stay on flash, got {picked}"
-    )
+    assert picked == "deepseek-v4-flash", f"structural noun alone should stay on flash, got {picked}"
 
 
 def test_b008a_short_imperative_without_structural_stays_flash(monkeypatch):
@@ -96,9 +90,7 @@ def test_b008a_short_imperative_without_structural_stays_flash(monkeypatch):
     imperative-starter bonus."""
     a = _make_agent(monkeypatch)
     picked = a._resolve_model("fix the parameter on this op")
-    assert picked == "deepseek-v4-flash", (
-        f"single-target mutation must stay on flash, got {picked}"
-    )
+    assert picked == "deepseek-v4-flash", f"single-target mutation must stay on flash, got {picked}"
 
 
 def test_b008a_create_plus_pipeline_routes_pro(monkeypatch):
@@ -106,9 +98,7 @@ def test_b008a_create_plus_pipeline_routes_pro(monkeypatch):
     A genuine system-shaped task → pro."""
     a = _make_agent(monkeypatch)
     picked = a._resolve_model("create a rendering pipeline")
-    assert picked == "deepseek-v4-pro", (
-        f"imperative verb + structural noun must route to pro, got {picked}"
-    )
+    assert picked == "deepseek-v4-pro", f"imperative verb + structural noun must route to pro, got {picked}"
 
 
 def test_b008a_verb_anywhere_plus_structural_routes_pro(monkeypatch):
@@ -154,9 +144,7 @@ def test_b008c_cycle_detect_promotes_next_turn(monkeypatch):
     a._cycle_escalate_next_turn = True
     # A prompt that would normally route to flash:
     picked = a._resolve_model("what is the framerate?")
-    assert picked == "deepseek-v4-pro", (
-        f"post-cycle-detect must force pro for one turn, got {picked}"
-    )
+    assert picked == "deepseek-v4-pro", f"post-cycle-detect must force pro for one turn, got {picked}"
 
 
 def test_b008c_escalation_flag_consumed_and_promotes_to_sticky(monkeypatch):
@@ -178,9 +166,7 @@ def test_b008c_escalation_flag_consumed_and_promotes_to_sticky(monkeypatch):
     assert a._cycle_escalate_next_turn is False, (
         "the one-shot escalation flag is still consumed on its first use"
     )
-    assert a._task_sticky_pro is True, (
-        "cycle-escalation now latches task-sticky pro for the recovery effort"
-    )
+    assert a._task_sticky_pro is True, "cycle-escalation now latches task-sticky pro for the recovery effort"
 
 
 def test_b008c_run_turn_sets_flag_on_cycle_detected(monkeypatch):
@@ -202,9 +188,7 @@ def test_b008c_run_turn_sets_flag_on_cycle_detected(monkeypatch):
     assert a._cycle_escalate_next_turn is False, "pre-condition"
     with pytest.raises(CycleDetected):
         a.run_turn()
-    assert a._cycle_escalate_next_turn is True, (
-        "run_turn must set _cycle_escalate_next_turn on CycleDetected"
-    )
+    assert a._cycle_escalate_next_turn is True, "run_turn must set _cycle_escalate_next_turn on CycleDetected"
 
 
 def test_b008c_run_turn_does_not_set_flag_on_other_exceptions(monkeypatch):
@@ -221,9 +205,7 @@ def test_b008c_run_turn_does_not_set_flag_on_other_exceptions(monkeypatch):
 
     with pytest.raises(ValueError):
         a.run_turn()
-    assert a._cycle_escalate_next_turn is False, (
-        "non-cycle exceptions must NOT arm escalation"
-    )
+    assert a._cycle_escalate_next_turn is False, "non-cycle exceptions must NOT arm escalation"
 
 
 def test_b008c_run_turn_uses_name_match_not_isinstance(monkeypatch):
@@ -263,9 +245,7 @@ def test_b007_system_prompt_contains_identical_probe_rule():
     from tdpilot_api_runtime import SYSTEM_PROMPT_BASE
 
     # Must mention the rule clearly enough that the agent learns it.
-    assert "identical args" in SYSTEM_PROMPT_BASE, (
-        "system prompt must contain 'identical args' rule wording"
-    )
+    assert "identical args" in SYSTEM_PROMPT_BASE, "system prompt must contain 'identical args' rule wording"
     # Must list the tools we've seen this fire on.
     for tool_name in ("td_get_errors", "td_analyze_frame", "td_get_node_detail"):
         assert tool_name in SYSTEM_PROMPT_BASE, (

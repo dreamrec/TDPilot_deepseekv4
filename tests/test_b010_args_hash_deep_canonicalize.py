@@ -90,9 +90,7 @@ def test_b010_three_element_list_permutations_canonical():
     ]
     h = args_hash(base)
     for p in permutations:
-        assert args_hash(p) == h, (
-            f"all 3-elem permutations must hash same, {p!r} → {args_hash(p)!r}"
-        )
+        assert args_hash(p) == h, f"all 3-elem permutations must hash same, {p!r} → {args_hash(p)!r}"
 
 
 def test_b010_genuinely_different_lists_hash_differently():
@@ -102,9 +100,7 @@ def test_b010_genuinely_different_lists_hash_differently():
 
     a = {"modes": ["histogram", "luminance"], "path": "X"}
     b = {"modes": ["histogram", "alpha"], "path": "X"}
-    assert args_hash(a) != args_hash(b), (
-        "different list contents must NOT collide"
-    )
+    assert args_hash(a) != args_hash(b), "different list contents must NOT collide"
 
 
 def test_b010_duplicate_elements_preserved():
@@ -127,15 +123,19 @@ def test_b010_nested_dict_in_list_canonical():
     must canonicalize; the outer list ordering then canonicalizes too."""
     from tdpilot_api_cycle_detector import args_hash
 
-    a = {"calls": [
-        {"tool": "td_get_nodes", "args": {"path": "/project1"}},
-        {"tool": "td_get_errors", "args": {"path": "/project1"}},
-    ]}
+    a = {
+        "calls": [
+            {"tool": "td_get_nodes", "args": {"path": "/project1"}},
+            {"tool": "td_get_errors", "args": {"path": "/project1"}},
+        ]
+    }
     # Same batch, different sub-call order — same end effect.
-    b = {"calls": [
-        {"tool": "td_get_errors", "args": {"path": "/project1"}},
-        {"tool": "td_get_nodes", "args": {"path": "/project1"}},
-    ]}
+    b = {
+        "calls": [
+            {"tool": "td_get_errors", "args": {"path": "/project1"}},
+            {"tool": "td_get_nodes", "args": {"path": "/project1"}},
+        ]
+    }
     assert args_hash(a) == args_hash(b)
 
 

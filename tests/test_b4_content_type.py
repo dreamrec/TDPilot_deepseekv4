@@ -82,9 +82,7 @@ def test_b4_instruction_hidden_from_generic_query(monkeypatch):
     rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
     # Generic prompt — does NOT contain "noise_recipe" — must hide the entry.
     block = _run_lookup(rt, "what's a good FPS for HD output")
-    assert "noise_recipe" not in block, (
-        f"instruction-typed entry leaked into block: {block!r}"
-    )
+    assert "noise_recipe" not in block, f"instruction-typed entry leaked into block: {block!r}"
 
 
 def test_b4_instruction_admitted_when_user_names_it(monkeypatch):
@@ -107,9 +105,7 @@ def test_b4_instruction_admitted_when_user_names_it(monkeypatch):
     )
     rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
     block = _run_lookup(rt, "please run the noise_recipe steps")
-    assert "noise_recipe" in block, (
-        f"explicit-name reference should surface entry, got block: {block!r}"
-    )
+    assert "noise_recipe" in block, f"explicit-name reference should surface entry, got block: {block!r}"
 
 
 def test_b4_reference_always_visible(monkeypatch):
@@ -131,9 +127,7 @@ def test_b4_reference_always_visible(monkeypatch):
     )
     rt = AgentRuntime(dispatcher=lambda *a: {"ok": True}, tools=[])
     block = _run_lookup(rt, "how do I do something with noise")
-    assert "noiseTOP" in block, (
-        f"reference-typed entry should always pass filter, got: {block!r}"
-    )
+    assert "noiseTOP" in block, f"reference-typed entry should always pass filter, got: {block!r}"
 
 
 def test_b4_legacy_entry_defaults_to_reference(monkeypatch):
@@ -184,9 +178,7 @@ def test_b4_short_name_not_substring_matched(monkeypatch):
     # Even though "fps" is in the message, the 4-char floor blocks
     # substring-naming on the instruction entry — so the hit is filtered.
     block = _run_lookup(rt, "how do I check the fps in HD output")
-    assert "- [memory] fps" not in block, (
-        f"short-name instruction must NOT substring-match, got: {block!r}"
-    )
+    assert "- [memory] fps" not in block, f"short-name instruction must NOT substring-match, got: {block!r}"
 
 
 def test_b4_memory_save_writes_content_type(tmp_path, monkeypatch):
@@ -195,13 +187,15 @@ def test_b4_memory_save_writes_content_type(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tdpilot_api_memory, "MEMORY_DIR", tmp_path)
     monkeypatch.setattr(tdpilot_api_memory, "MEMORY_INDEX", tmp_path / "MEMORY.md")
-    result = tdpilot_api_memory.handle_memory_save({
-        "name": "test_entry",
-        "description": "test",
-        "type": "feedback",
-        "content_type": "instruction",
-        "content": "body",
-    })
+    result = tdpilot_api_memory.handle_memory_save(
+        {
+            "name": "test_entry",
+            "description": "test",
+            "type": "feedback",
+            "content_type": "instruction",
+            "content": "body",
+        }
+    )
     assert result.get("ok"), f"save failed: {result}"
     assert result.get("content_type") == "instruction"
     filepath = tmp_path / result["filename"]
@@ -215,12 +209,14 @@ def test_b4_memory_save_default_reference(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tdpilot_api_memory, "MEMORY_DIR", tmp_path)
     monkeypatch.setattr(tdpilot_api_memory, "MEMORY_INDEX", tmp_path / "MEMORY.md")
-    result = tdpilot_api_memory.handle_memory_save({
-        "name": "test_default",
-        "description": "test",
-        "type": "feedback",
-        "content": "body",
-    })
+    result = tdpilot_api_memory.handle_memory_save(
+        {
+            "name": "test_default",
+            "description": "test",
+            "type": "feedback",
+            "content": "body",
+        }
+    )
     assert result.get("content_type") == "reference"
 
 
@@ -230,15 +226,15 @@ def test_b4_recipe_save_default_instruction(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tdpilot_api_recipes, "RECIPES_DIR", tmp_path)
     monkeypatch.setattr(tdpilot_api_recipes, "RECIPES_INDEX", tmp_path / "INDEX.md")
-    result = tdpilot_api_recipes.handle_recipe_save({
-        "name": "test_recipe",
-        "description": "test",
-        "replay": [{"tool": "td_get_nodes", "args": {}}],
-    })
-    assert result.get("ok"), f"save failed: {result}"
-    assert result.get("content_type") == "instruction", (
-        f"recipes must default to instruction, got: {result}"
+    result = tdpilot_api_recipes.handle_recipe_save(
+        {
+            "name": "test_recipe",
+            "description": "test",
+            "replay": [{"tool": "td_get_nodes", "args": {}}],
+        }
     )
+    assert result.get("ok"), f"save failed: {result}"
+    assert result.get("content_type") == "instruction", f"recipes must default to instruction, got: {result}"
 
 
 def test_b4_memory_save_rejects_invalid_content_type(tmp_path, monkeypatch):
@@ -247,11 +243,15 @@ def test_b4_memory_save_rejects_invalid_content_type(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tdpilot_api_memory, "MEMORY_DIR", tmp_path)
     monkeypatch.setattr(tdpilot_api_memory, "MEMORY_INDEX", tmp_path / "MEMORY.md")
-    result = tdpilot_api_memory.handle_memory_save({
-        "name": "x", "description": "x", "type": "feedback",
-        "content_type": "guideline",  # not in VALID_CONTENT_TYPES
-        "content": "body",
-    })
+    result = tdpilot_api_memory.handle_memory_save(
+        {
+            "name": "x",
+            "description": "x",
+            "type": "feedback",
+            "content_type": "guideline",  # not in VALID_CONTENT_TYPES
+            "content": "body",
+        }
+    )
     assert "error" in result
     assert "content_type" in result["error"].lower()
 
@@ -261,13 +261,15 @@ def test_b4_knowledge_add_writes_content_type(tmp_path, monkeypatch):
     import tdpilot_api_knowledge  # noqa: PLC0415
 
     monkeypatch.setattr(tdpilot_api_knowledge, "USER_KNOWLEDGE_DIR", tmp_path)
-    result = tdpilot_api_knowledge.handle_knowledge_add({
-        "name": "test_kb",
-        "description": "test",
-        "category": "guide",
-        "content_type": "instruction",
-        "content": "body",
-    })
+    result = tdpilot_api_knowledge.handle_knowledge_add(
+        {
+            "name": "test_kb",
+            "description": "test",
+            "category": "guide",
+            "content_type": "instruction",
+            "content": "body",
+        }
+    )
     assert result.get("ok"), f"add failed: {result}"
     assert result.get("content_type") == "instruction"
     filepath = tmp_path / result["filename"]

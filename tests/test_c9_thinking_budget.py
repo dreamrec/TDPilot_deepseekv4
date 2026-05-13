@@ -47,9 +47,8 @@ def _mk_response(payload: dict):
 def _capture_request_body(captured: list[dict]):
     def _urlopen(req, *_a, **_kw):
         captured.append(json.loads(req.data.decode()))
-        return _mk_response(
-            {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
-        )
+        return _mk_response({"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"})
+
     return _urlopen
 
 
@@ -63,8 +62,7 @@ def test_c9_default_no_thinking_block():
     with patch("urllib.request.urlopen", side_effect=_capture_request_body(captured)):
         agent.run_turn()
     assert "thinking" not in captured[0], (
-        f"default agent must not send a thinking block, got body keys: "
-        f"{list(captured[0].keys())}"
+        f"default agent must not send a thinking block, got body keys: {list(captured[0].keys())}"
     )
 
 
@@ -91,9 +89,7 @@ def test_c9_positive_budget_adds_thinking_block():
 
 def test_c9_negative_budget_clamped_to_zero():
     """Negative budget clamped → no thinking block (safe default)."""
-    agent = Agent(
-        api_key="sk-fake", dispatcher=lambda *a: None, thinking_budget=-100
-    )
+    agent = Agent(api_key="sk-fake", dispatcher=lambda *a: None, thinking_budget=-100)
     assert agent.thinking_budget == 0
     agent.add_user_message("hi")
     captured: list[dict] = []
@@ -105,9 +101,7 @@ def test_c9_negative_budget_clamped_to_zero():
 def test_c9_thinking_block_byte_stable_across_turns():
     """Same thinking_budget across turns → identical serialisation
     of the thinking block (cache-prefix stability)."""
-    agent = Agent(
-        api_key="sk-fake", dispatcher=lambda *a: None, thinking_budget=12000
-    )
+    agent = Agent(api_key="sk-fake", dispatcher=lambda *a: None, thinking_budget=12000)
     captured: list[dict] = []
     agent.add_user_message("first")
     with patch("urllib.request.urlopen", side_effect=_capture_request_body(captured)):
@@ -121,9 +115,7 @@ def test_c9_thinking_block_byte_stable_across_turns():
 
 def test_c9_large_budget_accepted():
     """High budget (e.g., 32K) is accepted — clamping is only on lower bound."""
-    agent = Agent(
-        api_key="sk-fake", dispatcher=lambda *a: None, thinking_budget=32000
-    )
+    agent = Agent(api_key="sk-fake", dispatcher=lambda *a: None, thinking_budget=32000)
     assert agent.thinking_budget == 32000
     agent.add_user_message("hi")
     captured: list[dict] = []

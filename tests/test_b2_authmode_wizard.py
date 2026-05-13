@@ -109,9 +109,7 @@ def test_b2_firstrun_step_has_recommended_action(monkeypatch):
     from tdpilot_api_introspect import firstrun_status
 
     result = firstrun_status()
-    migration_step = next(
-        s for s in result["next_steps"] if s["name"] == "switch_to_token_auth"
-    )
+    migration_step = next(s for s in result["next_steps"] if s["name"] == "switch_to_token_auth")
     assert migration_step.get("recommended_action") == "switch_to_token"
 
 

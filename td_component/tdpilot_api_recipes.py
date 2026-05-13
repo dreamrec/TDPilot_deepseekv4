@@ -232,9 +232,7 @@ def handle_recipe_save(body: dict) -> dict:
     # whole point of a recipe is the replay step list. A recipe author who
     # explicitly wants generic BM25 visibility (e.g. for searchable
     # documentation) can pass content_type="reference".
-    content_type = (
-        body.get("content_type") or DEFAULT_CONTENT_TYPE
-    ).strip().lower()
+    content_type = (body.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower()
 
     if not name:
         return {"error": "Missing required field: name"}
@@ -244,10 +242,7 @@ def handle_recipe_save(body: dict) -> dict:
         return {"error": "replay must be a list of {tool, args} dicts"}
     if content_type not in VALID_CONTENT_TYPES:
         return {
-            "error": (
-                f"Invalid content_type: {content_type!r}. "
-                f"Must be one of {list(VALID_CONTENT_TYPES)}."
-            ),
+            "error": (f"Invalid content_type: {content_type!r}. Must be one of {list(VALID_CONTENT_TYPES)}."),
         }
 
     _ensure_dir()
@@ -369,9 +364,7 @@ def handle_recipe_recall(body: dict) -> dict:
                 # the new save default, so pre-existing recipes are hidden
                 # from generic queries — the same protection their step-list
                 # nature deserves.
-                "content_type": (
-                    meta.get("content_type") or DEFAULT_CONTENT_TYPE
-                ).strip().lower(),
+                "content_type": (meta.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower(),
                 "text": body_text,
             }
         )

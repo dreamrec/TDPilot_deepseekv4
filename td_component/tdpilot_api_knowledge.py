@@ -166,9 +166,7 @@ def _bundled_entries() -> list[dict]:
                     "description": meta.get("description") or "",
                     "category": meta.get("category") or "reference",
                     # v2.4 / Phase B.4 — propagate content_type with default-on-read.
-                    "content_type": (
-                        meta.get("content_type") or DEFAULT_CONTENT_TYPE
-                    ).strip().lower(),
+                    "content_type": (meta.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower(),
                     "text": body,
                 }
             )
@@ -193,9 +191,7 @@ def _user_entries() -> list[dict]:
                     "description": meta.get("description") or "",
                     "category": meta.get("category") or "reference",
                     # v2.4 / Phase B.4 — propagate content_type with default-on-read.
-                    "content_type": (
-                        meta.get("content_type") or DEFAULT_CONTENT_TYPE
-                    ).strip().lower(),
+                    "content_type": (meta.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower(),
                     "text": body,
                 }
             )
@@ -545,9 +541,7 @@ def _parse_pages_jsonl(path: Path, corpus_name: str) -> list[dict]:
                         # v2.4 / Phase B.4 — content_type. JSONL pages are
                         # descriptive corpora (operator docs, official
                         # references) — treat as "reference" by default.
-                        "content_type": (
-                            page.get("content_type") or DEFAULT_CONTENT_TYPE
-                        ),
+                        "content_type": (page.get("content_type") or DEFAULT_CONTENT_TYPE),
                         "text": text,
                         "url": page.get("url") or "",
                         "corpus": corpus_name,
@@ -869,9 +863,7 @@ def handle_knowledge_add(body: dict) -> dict:
     # knowledge is descriptive material; an author who wants generic-query
     # hiding for an instruction-shaped knowledge entry can pass
     # content_type="instruction".
-    content_type = (
-        body.get("content_type") or DEFAULT_CONTENT_TYPE
-    ).strip().lower()
+    content_type = (body.get("content_type") or DEFAULT_CONTENT_TYPE).strip().lower()
 
     if not name:
         return {"error": "Missing required field: name"}
@@ -879,10 +871,7 @@ def handle_knowledge_add(body: dict) -> dict:
         return {"error": "Missing required field: content"}
     if content_type not in VALID_CONTENT_TYPES:
         return {
-            "error": (
-                f"Invalid content_type: {content_type!r}. "
-                f"Must be one of {list(VALID_CONTENT_TYPES)}."
-            ),
+            "error": (f"Invalid content_type: {content_type!r}. Must be one of {list(VALID_CONTENT_TYPES)}."),
         }
 
     _ensure_user_dir()

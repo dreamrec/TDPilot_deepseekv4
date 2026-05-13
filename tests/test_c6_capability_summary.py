@@ -39,9 +39,7 @@ def _validate_summary_shape(payload: dict) -> None:
         ids.add(g["id"])
         # examples ≤ 50 chars so they fit as chips visually
         for ex in g["examples"]:
-            assert isinstance(ex, str) and len(ex) <= 60, (
-                f"example too long ({len(ex)} chars): {ex!r}"
-            )
+            assert isinstance(ex, str) and len(ex) <= 60, f"example too long ({len(ex)} chars): {ex!r}"
     featured = payload.get("featured_prompts")
     assert isinstance(featured, list) and 4 <= len(featured) <= 8, (
         f"featured_prompts should be 4-8 entries, got {len(featured) if isinstance(featured, list) else 0}"

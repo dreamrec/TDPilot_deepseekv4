@@ -637,8 +637,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "enum": [
                         "cookTime",
                         "cpuCookTime",
-                        "gpuCookTime",        # v2.4 / Phase A.4
-                        "cudaMemoryBytes",    # v2.4 / Phase A.4
+                        "gpuCookTime",  # v2.4 / Phase A.4
+                        "cudaMemoryBytes",  # v2.4 / Phase A.4
                     ],
                     "default": "cookTime",
                 },

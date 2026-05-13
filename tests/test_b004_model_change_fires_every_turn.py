@@ -25,8 +25,10 @@ from tdpilot_api_agent import Agent  # noqa: E402, I001
 class _CtxMgr:
     def __init__(self, value):
         self._value = value
+
     def __enter__(self):
         return self._value
+
     def __exit__(self, *exc_info):
         return False
 
@@ -78,7 +80,8 @@ def test_b004_third_turn_still_fires():
     """Three turns in a row at the same tier → three on_model_change events."""
     fires: list[tuple[str, str]] = []
     agent = Agent(
-        api_key="sk-fake", dispatcher=lambda *a: None,
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
         model_tier="flash",
         on_model_change=lambda tier, picked: fires.append((tier, picked)),
     )
@@ -96,10 +99,13 @@ def test_b004_third_turn_still_fires():
 def test_b004_callback_failure_doesnt_break_turn():
     """If on_model_change raises, the turn still completes (try/except
     around the firing must catch and continue)."""
+
     def boom(tier, picked):
         raise RuntimeError("simulated UI failure")
+
     agent = Agent(
-        api_key="sk-fake", dispatcher=lambda *a: None,
+        api_key="sk-fake",
+        dispatcher=lambda *a: None,
         on_model_change=boom,
     )
     agent.add_user_message("hi")

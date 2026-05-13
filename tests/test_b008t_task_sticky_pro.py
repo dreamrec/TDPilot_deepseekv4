@@ -56,9 +56,7 @@ def test_b008t_heuristic_pro_enters_task_sticky():
     a = _make_agent()
     assert a._task_sticky_pro is False, "pre-condition"
     a._resolve_model("Build a kaleidoscope feedback loop")
-    assert a._task_sticky_pro is True, (
-        "heuristic-induced pro routing must enter task-sticky"
-    )
+    assert a._task_sticky_pro is True, "heuristic-induced pro routing must enter task-sticky"
 
 
 def test_b008t_cycle_escalation_enters_task_sticky():
@@ -69,12 +67,8 @@ def test_b008t_cycle_escalation_enters_task_sticky():
     a = _make_agent()
     a._cycle_escalate_next_turn = True
     a._resolve_model("anything")
-    assert a._task_sticky_pro is True, (
-        "cycle-escalation must enter task-sticky, not just one-shot"
-    )
-    assert a._cycle_escalate_next_turn is False, (
-        "the one-shot flag must still be consumed"
-    )
+    assert a._task_sticky_pro is True, "cycle-escalation must enter task-sticky, not just one-shot"
+    assert a._cycle_escalate_next_turn is False, "the one-shot flag must still be consumed"
 
 
 def test_b008t_heuristic_flash_does_not_enter_sticky():
@@ -83,9 +77,7 @@ def test_b008t_heuristic_flash_does_not_enter_sticky():
     that happen to ride the agent's coattails."""
     a = _make_agent()
     a._resolve_model("what is the framerate?")
-    assert a._task_sticky_pro is False, (
-        "flash routing must NOT latch sticky"
-    )
+    assert a._task_sticky_pro is False, "flash routing must NOT latch sticky"
 
 
 # =====================================================================
@@ -103,9 +95,7 @@ def test_b008t_sticky_persists_on_short_lookup():
     assert a._task_sticky_pro is True
     # Turn 2: a short lookup mid-task. Without sticky this would flash.
     picked = a._resolve_model("what's the framerate now?")
-    assert picked == "deepseek-v4-pro", (
-        "short lookup mid-task must stay on pro via sticky"
-    )
+    assert picked == "deepseek-v4-pro", "short lookup mid-task must stay on pro via sticky"
     # Sticky still set for turn 3.
     assert a._task_sticky_pro is True
 
@@ -117,9 +107,7 @@ def test_b008t_sticky_persists_across_many_turns():
     assert a._task_sticky_pro is True
     for prompt in ["check the errors", "ok now wire it up", "screenshot it", "looks off, adjust"]:
         picked = a._resolve_model(prompt)
-        assert picked == "deepseek-v4-pro", (
-            f"sticky must keep '{prompt}' on pro"
-        )
+        assert picked == "deepseek-v4-pro", f"sticky must keep '{prompt}' on pro"
     assert a._task_sticky_pro is True, "sticky still set at end of build"
 
 
@@ -162,9 +150,7 @@ def test_b008t_various_done_signals_clear():
     ]:
         a._task_sticky_pro = True
         a._maybe_clear_task_sticky(done_signal)
-        assert a._task_sticky_pro is False, (
-            f"'{done_signal}' must clear sticky"
-        )
+        assert a._task_sticky_pro is False, f"'{done_signal}' must clear sticky"
 
 
 def test_b008t_negative_signals_keep_sticky():
@@ -184,9 +170,7 @@ def test_b008t_negative_signals_keep_sticky():
     ]:
         a._task_sticky_pro = True
         a._maybe_clear_task_sticky(keep_signal)
-        assert a._task_sticky_pro is True, (
-            f"'{keep_signal}' must NOT clear sticky"
-        )
+        assert a._task_sticky_pro is True, f"'{keep_signal}' must NOT clear sticky"
 
 
 def test_b008t_mixed_done_plus_more_work_keeps_sticky():
@@ -229,9 +213,7 @@ def test_b008t_user_flash_pin_beats_sticky():
     a = _make_agent(model_tier="flash")
     a._task_sticky_pro = True
     picked = a._resolve_model("anything")
-    assert picked == "deepseek-v4-flash", (
-        "user-pinned flash must win over task-sticky"
-    )
+    assert picked == "deepseek-v4-flash", "user-pinned flash must win over task-sticky"
 
 
 def test_b008t_explicit_per_turn_flash_override_beats_sticky():
@@ -242,9 +224,7 @@ def test_b008t_explicit_per_turn_flash_override_beats_sticky():
     a = _make_agent()
     a._task_sticky_pro = True
     picked = a._resolve_model("use flash to answer this quickly")
-    assert picked == "deepseek-v4-flash", (
-        "explicit flash override must beat sticky for this turn"
-    )
+    assert picked == "deepseek-v4-flash", "explicit flash override must beat sticky for this turn"
 
 
 def test_b008t_pinned_pro_redundant_with_sticky():
@@ -264,13 +244,13 @@ def test_b008t_pinned_pro_redundant_with_sticky():
 
 def test_b008t_full_task_lifecycle():
     """End-to-end story:
-      Turn 1: 'Build a kaleidoscope feedback loop' → pro (heuristic) + sticky
-      Turn 2: 'check the errors' → pro (sticky persists)
-      Turn 3: 'looks broken' → pro (sticky persists, negative signal)
-      Turn 4: 'perfect, that works!' → clear sticky for THIS turn; turn
-              resolution itself depends on prompt content (no pro signals
-              → flash). Subsequent turns also auto.
-      Turn 5: 'what's the framerate?' → flash (no sticky, normal heuristic)
+    Turn 1: 'Build a kaleidoscope feedback loop' → pro (heuristic) + sticky
+    Turn 2: 'check the errors' → pro (sticky persists)
+    Turn 3: 'looks broken' → pro (sticky persists, negative signal)
+    Turn 4: 'perfect, that works!' → clear sticky for THIS turn; turn
+            resolution itself depends on prompt content (no pro signals
+            → flash). Subsequent turns also auto.
+    Turn 5: 'what's the framerate?' → flash (no sticky, normal heuristic)
     """
     a = _make_agent()
 

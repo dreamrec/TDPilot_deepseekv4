@@ -339,9 +339,9 @@ _USAGE_FIELDS = (
 # When DeepSeek revises pricing, bump _PRICING_VERSION and the three
 # constants together; the wire format is forward-compatible.
 _PRICING_VERSION = "2026-05-01"
-_PRICE_INPUT_FRESH_PER_M = 0.27   # USD/M uncached input tokens
+_PRICE_INPUT_FRESH_PER_M = 0.27  # USD/M uncached input tokens
 _PRICE_INPUT_CACHED_PER_M = 0.027  # 10x discount on cache hits
-_PRICE_OUTPUT_PER_M = 1.10        # USD/M output tokens
+_PRICE_OUTPUT_PER_M = 1.10  # USD/M output tokens
 
 
 def _estimate_usd(input_tokens: int, output_tokens: int, cache_hits: int) -> float:
@@ -362,6 +362,7 @@ def _now_iso() -> str:
     """Return current UTC time as ISO-8601 string. Used for
     session-start timestamps in /stats responses."""
     import datetime as _dt
+
     return _dt.datetime.utcnow().isoformat() + "Z"
 
 
@@ -438,31 +439,31 @@ SYSTEM_PROMPT_BASE = (
     "Reserve serial tool_use for genuinely sequential operations where each "
     "call's args depend on the previous call's output (create → connect → "
     "set parameters).\n"
-    "  Schema reminder: ``tool_batch({\"calls\": [{\"tool\": \"<name>\", "
-    "\"args\": {...}}, ...]})``. Sub-calls use the field ``tool`` (NOT "
+    '  Schema reminder: ``tool_batch({"calls": [{"tool": "<name>", '
+    '"args": {...}}, ...]})``. Sub-calls use the field ``tool`` (NOT '
     "``name``). Max 8 per batch. Nested tool_batch is rejected. A failed "
     "sub-call does NOT abort the batch — the rest still run and the failure "
     "is reported in ``results[i].error``.\n"
     "  Worked examples (under cost-no-constraint posture, prefer these "
     "patterns over serial tool_use):\n"
     "    • Pre-build inspection (3 calls, one round-trip):\n"
-    "        tool_batch({\"calls\": [\n"
-    "          {\"tool\": \"td_get_nodes\",      \"args\": {\"path\": \"/project1\"}},\n"
-    "          {\"tool\": \"td_get_errors\",     \"args\": {\"path\": \"/project1\"}},\n"
-    "          {\"tool\": \"td_audit_project\",  \"args\": {}}\n"
+    '        tool_batch({"calls": [\n'
+    '          {"tool": "td_get_nodes",      "args": {"path": "/project1"}},\n'
+    '          {"tool": "td_get_errors",     "args": {"path": "/project1"}},\n'
+    '          {"tool": "td_audit_project",  "args": {}}\n'
     "        ]})\n"
     "    • Memory + knowledge recall before creating anything (3 calls, "
     "one round-trip):\n"
-    "        tool_batch({\"calls\": [\n"
-    "          {\"tool\": \"memory_recall\",    \"args\": {\"query\": \"audio reactive noise\"}},\n"
-    "          {\"tool\": \"knowledge_search\", \"args\": {\"query\": \"audio reactive noise\"}},\n"
-    "          {\"tool\": \"td_get_hints\",     \"args\": {\"context\": \"audio reactive\"}}\n"
+    '        tool_batch({"calls": [\n'
+    '          {"tool": "memory_recall",    "args": {"query": "audio reactive noise"}},\n'
+    '          {"tool": "knowledge_search", "args": {"query": "audio reactive noise"}},\n'
+    '          {"tool": "td_get_hints",     "args": {"context": "audio reactive"}}\n'
     "        ]})\n"
     "    • Post-edit verification (3 calls, one round-trip):\n"
-    "        tool_batch({\"calls\": [\n"
-    "          {\"tool\": \"td_get_errors\",    \"args\": {\"path\": \"/project1\"}},\n"
-    "          {\"tool\": \"td_screenshot\",    \"args\": {\"path\": \"/project1/render1\"}},\n"
-    "          {\"tool\": \"td_cooking_info\",  \"args\": {\"sort_by\": \"cookTime\", \"limit\": 5}}\n"
+    '        tool_batch({"calls": [\n'
+    '          {"tool": "td_get_errors",    "args": {"path": "/project1"}},\n'
+    '          {"tool": "td_screenshot",    "args": {"path": "/project1/render1"}},\n'
+    '          {"tool": "td_cooking_info",  "args": {"sort_by": "cookTime", "limit": 5}}\n'
     "        ]})\n"
     "  Anti-pattern: do NOT batch operations that depend on each other's "
     "output (e.g., td_create_node followed by td_set_params on the new "
@@ -751,7 +752,7 @@ class AgentRuntime:
         # are word-sized writes in CPython so no lock needed.
         self._session_input_tokens: int = 0
         self._session_output_tokens: int = 0
-        self._session_cache_hits: int = 0    # cache_read_input_tokens > 0
+        self._session_cache_hits: int = 0  # cache_read_input_tokens > 0
         self._session_cache_misses: int = 0  # input_tokens > 0 AND read == 0
         self._session_started_iso: str = _now_iso()
         # The Agent always sees the cook-thread-safe wrapper so it never
@@ -963,8 +964,7 @@ class AgentRuntime:
             # embedded-base64 behavior is restored by setting the env
             # var back to 0.
             enable_vision_pipeline=(
-                os.environ.get("TDPILOT_VISION_PIPELINE", "").strip()
-                in ("1", "true", "yes", "on")
+                os.environ.get("TDPILOT_VISION_PIPELINE", "").strip() in ("1", "true", "yes", "on")
             ),
             # v2.4 / Phase C.9 — extended-thinking budget. Read from
             # the Thinkingbudget COMP param (added to _API_PAGE in
@@ -1402,12 +1402,7 @@ class AgentRuntime:
             # message mentioning fps).
             return bool(name) and len(name) >= 4 and name in lowered_text
 
-        hits = [
-            h
-            for h in hits
-            if (h.get("content_type") or "reference") != "instruction"
-            or _user_named(h)
-        ]
+        hits = [h for h in hits if (h.get("content_type") or "reference") != "instruction" or _user_named(h)]
 
         if not hits:
             return ""

@@ -115,12 +115,15 @@ def test_c7_session_totals_payload_shape(monkeypatch):
     payload = rt._session_totals_payload()
 
     required_keys = {
-        "input_tokens", "output_tokens", "cache_hits", "cache_misses",
-        "approx_usd", "started_at", "model_pricing_version",
+        "input_tokens",
+        "output_tokens",
+        "cache_hits",
+        "cache_misses",
+        "approx_usd",
+        "started_at",
+        "model_pricing_version",
     }
-    assert required_keys.issubset(payload.keys()), (
-        f"missing keys: {required_keys - set(payload.keys())}"
-    )
+    assert required_keys.issubset(payload.keys()), f"missing keys: {required_keys - set(payload.keys())}"
     assert isinstance(payload["approx_usd"], float)
     assert payload["approx_usd"] > 0  # 1000 input + 500 output > 0
     assert payload["model_pricing_version"]  # non-empty
@@ -144,8 +147,7 @@ def test_c7_reset_zeros_accumulators(monkeypatch):
     assert rt._session_cache_hits == 0
     assert rt._session_cache_misses == 0
     assert rt._session_started_iso > started_before, (
-        f"started_at must refresh on reset; was {started_before}, "
-        f"now {rt._session_started_iso}"
+        f"started_at must refresh on reset; was {started_before}, now {rt._session_started_iso}"
     )
 
 

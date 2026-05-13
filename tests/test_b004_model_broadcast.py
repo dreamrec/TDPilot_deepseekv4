@@ -179,9 +179,7 @@ def test_b004_ev_tier_sync_invalid_tier_no_param_write_but_still_broadcasts():
     ext.owner.par_Modeltier.val = "auto"  # baseline
     handle(EV_TIER_SYNC, "garbage")
 
-    assert ext.owner.par.Modeltier.val == "auto", (
-        "invalid tier must not mutate Modeltier"
-    )
+    assert ext.owner.par.Modeltier.val == "auto", "invalid tier must not mutate Modeltier"
     # Broadcast is still allowed (with blank short) — the WS client
     # is robust to empty payloads and just renders a clean badge.
     model_broadcasts = [b for b in ext.broadcasts if b.get("type") == "model"]

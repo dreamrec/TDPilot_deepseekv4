@@ -82,9 +82,7 @@ def test_c8_on_breaker_trip_callback_idempotent():
     d("td_get_info", {})
     d("td_get_errors", {})
     d("td_screenshot", {})
-    assert len(fired) == 1, (
-        f"breaker should only fire callback once across multiple calls, got {len(fired)}"
-    )
+    assert len(fired) == 1, f"breaker should only fire callback once across multiple calls, got {len(fired)}"
 
 
 def test_c8_reset_breaker_rearms_dispatcher():
@@ -122,6 +120,7 @@ def test_c8_cancel_pending_drains_on_trip():
     # Manually queue a fake pending call (simulates a second worker
     # that's already added to the queue but hasn't started waiting).
     import uuid
+
     call_id = uuid.uuid4().hex
     d._pending.put((call_id, "td_screenshot", {}))
 
@@ -159,6 +158,7 @@ def test_c8_normal_path_unaffected_by_breaker_machinery():
 def test_c8_breaker_safe_when_callback_raises():
     """If the on_breaker_trip callback raises, the dispatcher must
     not propagate — it must still trip and return the error."""
+
     def bad_callback(reason):
         raise RuntimeError("simulated callback failure")
 
