@@ -12,9 +12,10 @@ submodule.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import Context
+from pydantic import Field
 
 # Intentional cycle — see registry/__init__.py.
 from td_mcp import tool_registry as _tr  # noqa: E402
@@ -25,8 +26,20 @@ from td_mcp.vision.ocr import OcrTimeout, OcrUnavailable, get_global_manager
 @mcp.tool(name="td_ocr_image")
 async def td_ocr_image(
     ctx: Context,
-    path: str,
-    lang: str = "en",
+    path: Annotated[
+        str,
+        Field(description="Filesystem path to the image (PNG/JPEG/etc.) to OCR."),
+    ],
+    lang: Annotated[
+        str,
+        Field(
+            description=(
+                "PaddleOCR language code. Default 'en'. Common: 'en', 'ch' "
+                "(Chinese simplified), 'japan', 'korean', 'german', 'french', "
+                "'spanish'."
+            )
+        ),
+    ] = "en",
 ) -> str:
     """Run OCR on an image file. Returns text + bounding boxes + confidence.
 

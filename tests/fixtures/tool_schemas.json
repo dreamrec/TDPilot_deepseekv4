@@ -1188,6 +1188,24 @@
     },
     "required": []
   },
+  "td_get_traces": {
+    "description_present": true,
+    "properties": {
+      "days_back": {
+        "any_of_types": [],
+        "default_present": true,
+        "enum": null,
+        "type": "integer"
+      },
+      "limit": {
+        "any_of_types": [],
+        "default_present": true,
+        "enum": null,
+        "type": "integer"
+      }
+    },
+    "required": []
+  },
   "td_knowledge_get": {
     "description_present": true,
     "properties": {

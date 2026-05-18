@@ -11,9 +11,10 @@ pattern.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from mcp.server.fastmcp import Context  # noqa: F401  — referenced via Annotated
+from mcp.server.fastmcp import Context
+from pydantic import Field
 
 # Intentional cycle — see registry/__init__.py.
 from td_mcp import tool_registry as _tr  # noqa: E402
@@ -24,9 +25,18 @@ from td_mcp.tool_registry import mcp  # noqa: E402
 @mcp.tool(name="td_get_activity_log")
 async def td_get_activity_log(
     ctx: Context,
-    limit: int = 50,
-    tool_filter: str | None = None,
-    since_ts: float | None = None,
+    limit: Annotated[
+        int,
+        Field(description="Most recent N records (default 50, cap 200 by ring size)."),
+    ] = 50,
+    tool_filter: Annotated[
+        str | None,
+        Field(description='Exact-match tool name (e.g., "td_get_errors") to filter on.'),
+    ] = None,
+    since_ts: Annotated[
+        float | None,
+        Field(description="Only records with ts >= since_ts (monotonic seconds)."),
+    ] = None,
 ) -> str:
     """Return recent agent tool-call activity from the MCP server's
     200-entry ring buffer.

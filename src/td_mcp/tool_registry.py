@@ -2150,6 +2150,9 @@ from td_mcp.registry.tools_system import (  # noqa: E402
     td_tdresources_inspect,
     td_threading_status,
 )
+from td_mcp.registry.tools_traces import (  # noqa: F401, E402  — registers 1 v2.5.8 tool
+    td_get_traces,
+)
 from td_mcp.registry.tools_vision import (  # noqa: E402
     td_analyze_frame,
     td_capture_frame,

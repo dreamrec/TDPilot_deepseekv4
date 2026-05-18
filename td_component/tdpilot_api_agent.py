@@ -433,6 +433,14 @@ class Agent:
         # the same ``(tool_name, args_hash)`` has fired twice this turn
         # (count=2 is the last call before cycle-detect at threshold=3).
         activity_ring_factory: Callable[[], Any] | None = None,
+        # v2.5.3 — tool-approval provider. Callable with signature
+        # ``(tool_name, tool_args) -> (decision, reason)`` where
+        # decision is one of ``approve / deny / timeout / not_required``.
+        # When ``not_required`` the dispatcher runs normally; otherwise
+        # the dispatcher is SKIPPED and a denial result is injected.
+        # ``None`` disables the gate entirely (same as Approvalmode=off).
+        # Wired by AgentRuntime via _build_approval_provider.
+        approval_provider: Callable[[str, dict], tuple[str, str]] | None = None,
         # v2.4 / Phase A.5 — retry policy for DeepSeek 429 / 5xx. ``max_retries``
         # is the number of retry attempts AFTER the first failure (so
         # ``max_retries=3`` allows up to 4 total HTTP calls). ``initial_backoff``
@@ -544,6 +552,8 @@ class Agent:
         self.cycle_ledger_factory = cycle_ledger_factory
         # v2.5.1 — activity ring factory (parallels cycle_ledger_factory).
         self.activity_ring_factory = activity_ring_factory
+        # v2.5.3 — approval provider (None disables the gate).
+        self.approval_provider = approval_provider
 
         # v2.4 / Phase A.5 — retry config + hint callback. Clamp to safe
         # values so a bad COMP-param value can't disable retries entirely
@@ -1049,21 +1059,52 @@ class Agent:
                     # imported in tdpilot_api_agent already.
                     _activity_t0 = time.monotonic()
                     _activity_err: str | None = None
-                    try:
-                        result = self.dispatcher(tool_name, tool_args)
-                        # F-12: the explicit `_tool_error` sentinel is the
-                        # only failure signal post-v2.0. Internal handlers
-                        # that emit `{"error": "..."}` get auto-stamped
-                        # with `_tool_error: True` by `recovery.attach_hint()`
-                        # inside the dispatcher pipeline.
-                        is_error = is_tool_error_result(result)
-                    except Exception as exc:  # noqa: BLE001
-                        result = {
-                            "_tool_error": True,
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
-                        is_error = True
-                        _activity_err = f"{type(exc).__name__}: {exc}"
+                    # v2.5.3 — tool approval gate. Runs BEFORE dispatch.
+                    # If approval is required and the user denies (or
+                    # times out), we synthesize a denial tool_result
+                    # and SKIP the dispatcher entirely. The denial
+                    # looks like a normal _tool_error so the existing
+                    # recovery + activity-ring + journal-hint paths
+                    # handle it without special-casing.
+                    _approval_decision: str | None = None
+                    if self.approval_provider is not None:
+                        try:
+                            from tdpilot_api_approval import (  # noqa: PLC0415
+                                DECISION_NOT_REQUIRED,
+                                build_denied_result,
+                            )
+
+                            decision, reason = self.approval_provider(tool_name, tool_args)
+                            if decision != DECISION_NOT_REQUIRED:
+                                _approval_decision = decision
+                                if decision != "approve":
+                                    result = build_denied_result(tool_name, decision, reason)
+                                    is_error = True
+                                    _activity_err = f"approval={decision}"
+                        except Exception as exc:  # noqa: BLE001
+                            # Approval mechanism must never break dispatch.
+                            print(f"[tdpilot_API/agent] approval_provider raised: {exc}")
+                            _approval_decision = None
+
+                    if _approval_decision is not None and _approval_decision != "approve":
+                        # Skipped the dispatcher; result already set above.
+                        pass
+                    else:
+                        try:
+                            result = self.dispatcher(tool_name, tool_args)
+                            # F-12: the explicit `_tool_error` sentinel is the
+                            # only failure signal post-v2.0. Internal handlers
+                            # that emit `{"error": "..."}` get auto-stamped
+                            # with `_tool_error: True` by `recovery.attach_hint()`
+                            # inside the dispatcher pipeline.
+                            is_error = is_tool_error_result(result)
+                        except Exception as exc:  # noqa: BLE001
+                            result = {
+                                "_tool_error": True,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                            is_error = True
+                            _activity_err = f"{type(exc).__name__}: {exc}"
                     # v2.5.1 — activity ring append + journal-hint inject.
                     # Defensive: every operation here is wrapped so a
                     # broken hint path can never break tool dispatch.

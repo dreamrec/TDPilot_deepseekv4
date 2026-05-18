@@ -686,6 +686,57 @@ def onHTTPRequest(webServerDAT, request, response):
             _text(response, 500, str(exc), request_origin=request_origin)
         return response
 
+    # v2.5.3 — POST /approve. Body is JSON {"id": "<uuid>", "decision":
+    # "approve" | "deny", "reason": "<optional>"}. Routes to the
+    # runtime's record_approval_response, which signals the worker
+    # thread blocked on threading.Event.wait inside the agent loop.
+    if method == "POST" and path == "/approve":
+        try:
+            body_text = _read_body(request)
+            try:
+                body_obj = json.loads(body_text) if body_text else {}
+            except json.JSONDecodeError:
+                _text(response, 400, "body must be JSON", request_origin=request_origin)
+                return response
+            if not isinstance(body_obj, dict):
+                _text(response, 400, "body must be a JSON object", request_origin=request_origin)
+                return response
+            approval_id = body_obj.get("id")
+            decision = body_obj.get("decision")
+            reason = body_obj.get("reason") or ""
+            if not isinstance(approval_id, str) or not isinstance(decision, str):
+                _text(
+                    response,
+                    400,
+                    "missing or invalid 'id' / 'decision' fields",
+                    request_origin=request_origin,
+                )
+                return response
+            if decision not in ("approve", "deny"):
+                _text(
+                    response,
+                    400,
+                    "decision must be 'approve' or 'deny'",
+                    request_origin=request_origin,
+                )
+                return response
+            runtime = getattr(ext, "runtime", None)
+            ok = False
+            if runtime is not None and hasattr(runtime, "record_approval_response"):
+                ok = runtime.record_approval_response(approval_id, decision, str(reason))
+            if ok:
+                _text(response, 200, "recorded", request_origin=request_origin)
+            else:
+                _text(
+                    response,
+                    404,
+                    "unknown or stale approval id",
+                    request_origin=request_origin,
+                )
+        except Exception as exc:
+            _text(response, 500, str(exc), request_origin=request_origin)
+        return response
+
     _text(response, 404, f"unknown route: {method} {path}", request_origin=request_origin)
     return response
 

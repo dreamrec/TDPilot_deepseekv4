@@ -82,6 +82,44 @@ The hash-scheme-parity test reproduces the exact NUL-separator concatenation use
 ### v2.5 status (updated)
 6 / 8 v2.5 phases complete. Remaining: v2.5.3 tool approval gates, v2.5.8 log receiver (stretch). See [`docs/plans/v2.5_IMPLEMENTATION_PLAN.md`](./docs/plans/v2.5_IMPLEMENTATION_PLAN.md).
 
+### Phase v2.5.3 — Tool approval gates (2026-05-19)
+
+Runtime click-through gate for destructive tools. Composes with the v2.4 user-intent gate (B-008, system-prompt level) + the Authmode auth layer. The dispatcher never even runs unless the user clicks Approve in the chat banner within the 30-second timeout — defense in depth.
+
+- **New module `td_component/tdpilot_api_approval.py`** — `is_approval_required(tool, args, mode, agent_comp_path)` decision function + `ApprovalRegistry` (threading.Event-backed pending-approvals dict) + `request_approval_or_skip(...)` orchestrator that blocks the worker thread up to `timeout_s` while the cook thread waits for a click. Pre-resolved agent COMP path (captured at runtime init) means path-aware gates work without crossing the TD cook-thread invariant.
+- **Three modes via new `Approvalmode` Menu COMP param** — `destructive_only` (default), `off`, `all`. Defaults to the conservative choice because `td_exec_python` is in the toolbelt. `TDPILOT_DISABLE_TOOL_APPROVAL` env var hard-overrides to off for CI/unattended use.
+- **Destructive tool set** (conservative): `td_exec_python`, `td_delete_node`, `td_restore_snapshot`, `snapshot_restore_scoped`, `td_disconnect` always. Path-aware: `td_rename_node`, `td_set_content` gate ONLY when target path is OUTSIDE the agent's own COMP — the agent freely manages its own machinery without prompts.
+- **Agent integration in `_loop`** — approval check runs BETWEEN cycle_ledger.record (B-010) and dispatcher (v2.4). Deny / timeout synthesises a `_tool_error=True` dict so existing recovery + activity-ring + journal-hint paths handle it without special-casing. Approval failures NEVER block dispatch — exception in provider → log + dispatch normally.
+- **WebSocket protocol** — server pushes `{"type":"approval_request","id","tool","args","timeout_ms"}`; client POSTs to new `/approve` HTTP endpoint with `{"id","decision","reason"}`. Decision routes through `runtime.record_approval_response` which signals the registry's threading.Event.
+- **Chat HTML banner** — yellow alert-dialog above the chat with tool name, formatted args, Approve/Deny buttons, and a 30-second countdown. Server's timeout fires server-side; the UI just disables buttons at zero to prevent fight-the-server races.
+- **+22 tests** in `tests/test_v25_tool_approval.py` — gate decision matrix (mode × tool × path), registry CRUD, threaded approve / deny / timeout flows via real `threading.Event`, `on_request`-exception-defaults-to-deny fail-safe, denial-result shape contract.
+
+### Phase v2.5.8 — `td_get_traces` MCP tool (2026-05-19)
+
+Trace viewer surface. Leverages the existing `tdpilot_api_tracing` infrastructure (per-turn JSONL files at `~/.tdpilot-api/traces/<YYYY-MM-DD>.jsonl`, 30-day retention) — adds a single MCP tool so external agents (Claude Code / Claude Desktop) can query chat-pipe trace history without scraping files manually.
+
+- **New module `src/td_mcp/lifecycle/traces.py`** — pure-Python `iter_jsonl_files(traces_dir, days_back)` + `read_last_n_jsonl(paths, limit)` helpers. Tail-reads files (reverse line walk) so multi-MB days don't blow up RAM when the caller wants 20 records.
+- **New MCP tool `td_get_traces(limit=20, days_back=7)`** via `src/td_mcp/registry/tools_traces.py`. Inputs clamped to safe ranges (limit 1-500, days_back 1-30 to match tracer retention). Newest-first ordering. Malformed JSON lines skipped silently. Tool count **108 → 109**.
+- **Complements `td_get_activity_log` (v2.5.1)** — that tool is a 200-entry RAM ring for the current MCP-server session. `td_get_traces` reads cross-session disk-persisted records written by the chat-pipe agent. Different scope, different audience, complementary surfaces.
+- **+10 tests** in `tests/test_v25_traces.py` — date-window filtering, newest-first ordering, limit clamp, malformed-filename + malformed-line skip, missing-dir graceful empty.
+
+### v2.5 status (updated)
+**8 / 8 v2.5 phases complete** (v2.5.1, v2.5.2, v2.5.3, v2.5.4, v2.5.5, v2.5.6, v2.5.7, v2.5.8). v2.5 is feature-complete and ready for release-engineering (version bumps, doc-count sync, tag + `gh release create`).
+
+### v2.5 tests overall (final)
++99 from v2.4 baseline (2000 → **2099 passing**, 1 skipped real-OCR):
+- v2.5.1 activity log + journal hints: +26
+- v2.5.4 env→file migration: +9
+- v2.5.6 stdio discipline contract: +12
+- v2.5.2 OCR sidecar: +10 (+1 skipped)
+- v2.5.7 check_for_updates: +15
+- v2.5.3 tool approval gates: +22
+- v2.5.8 trace viewer: +10
+- (regenerated tool-schema snapshot captures td_get_activity_log, td_ocr_image, td_check_for_updates, td_get_traces)
+
+### v2.5 tool count progression
+v2.4: 105 → v2.5.1: 106 → v2.5.2: 107 → v2.5.7: 108 → v2.5.8: **109**. v2.5.3 + v2.5.4 + v2.5.6 add no MCP tools (gates / fallbacks / contracts).
+
 ### v2.5 tests overall (updated)
 +71 from v2.4 baseline (2000 → **2071 passing**):
 - v2.5.1 activity log + journal hints: +26
