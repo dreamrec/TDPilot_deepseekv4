@@ -7,14 +7,14 @@
    ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝
 ```
 
-# TDPilot — DeepSeek v4 · v2.4.0
+# TDPilot — DeepSeek v4 · v2.5.0
 
 [![CI](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/tdpilot-dpsk4?label=npm)](https://www.npmjs.com/package/tdpilot-dpsk4)
 [![downloads](https://img.shields.io/npm/dm/tdpilot-dpsk4?label=downloads)](https://www.npmjs.com/package/tdpilot-dpsk4)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![python](https://img.shields.io/badge/python-3.10%2B-blue)](./pyproject.toml)
-[![tools](https://img.shields.io/badge/tools-94%20%28standalone%29%20%C2%B7%20105%20%28CLI%29-blueviolet)](./docs/MANUAL.md)
+[![tools](https://img.shields.io/badge/tools-94%20%28standalone%29%20%C2%B7%20109%20%28CLI%29-blueviolet)](./docs/MANUAL.md)
 [![TouchDesigner](https://img.shields.io/badge/TouchDesigner-2025.30000%2B-ff6200)](https://derivative.ca)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-v4-00a86b)](https://deepseek.com)
 
@@ -28,7 +28,7 @@ Two ways to run it. They coexist in the same TD project if you want both.
 |---|---|---|
 | **Install effort** | Drag one file in, paste a key. | Install Claude Code, install the plugin, configure MCP. |
 | **Where chat lives** | Browser tab + a panel inside TD. | Your Claude Code terminal. |
-| **Tools** | 94 curated for in-TD use | 105 (full surface) |
+| **Tools** | 94 curated for in-TD use | 109 (full surface) |
 | **Best for** | Live performance, quick patches, demos, "no setup" use | Heavy multi-file projects, long sessions, full Claude Code ecosystem |
 | **TD port** | 9987 | 9985 + 9986 |
 | **Config dir** | `~/.tdpilot-api/` | `~/.tdpilot-dpsk4/` |
@@ -36,7 +36,12 @@ Two ways to run it. They coexist in the same TD project if you want both.
 **Start here.** If you just want to chat with TouchDesigner → **standalone `.tox`** (drop-in, two minutes). If you already use Claude Code → **Claude Code CLI**. If you want MCP in some other client (Cursor, Continue, custom integrations) → the same npm package, `npx tdpilot-dpsk4`, exposes the MCP server standalone. Jump straight to [`docs/MANUAL.md`](docs/MANUAL.md) for the deep reference, or read on for the install walkthroughs.
 
 <details>
-<summary><b>Release highlights — v2.4.0 (May 13, 2026)</b> (click to expand)</summary>
+<summary><b>Release highlights — v2.5.0 (May 19, 2026)</b> (click to expand)</summary>
+
+**v2.5.0** — agent self-awareness + safety + distribution polish. Eight phases shipped: activity log + journal hints (v2.5.1), OCR sidecar (v2.5.2), tool approval gates (v2.5.3), auth env→file migration (v2.5.4), TD 2025.32820 release card (v2.5.5), stdio discipline contract (v2.5.6), `td_check_for_updates` (v2.5.7), trace viewer (v2.5.8). **Tool count 105 → 109.** 4 new MCP tools: `td_get_activity_log`, `td_ocr_image`, `td_check_for_updates`, `td_get_traces`. New `Approvalmode` Menu COMP param gates destructive tools (`td_exec_python`, `td_delete_node`, etc.) with a chat-banner click-through (30 s timeout). 2099 tests passing (+99 from v2.4 baseline).
+
+<details>
+<summary>Earlier — v2.4.0 (May 13, 2026)</summary>
 
 **v2.4.0** — multi-phase release covering Phase A (zero-risk MCP additions), Phase B (vision pipeline + auth wizard + `content_type` on memory entries), and most of Phase C (per-session cost tracking, `td_midi_devices`, circuit breaker, configurable thinking budget, featured-prompts chip row), plus a same-day live-debug stack closing **10 bugs (B-001 .. B-010)** surfaced while running the canonical failing prompt _"Build a kaleidoscope feedback loop"_ end-to-end. **Tool count 93 → 105.**
 
@@ -56,6 +61,10 @@ Headline live-debug fixes:
 - 174 chat rows, 118K in / 27K out / **59 cache hits / 0 misses / $0.062 total**
 
 See [CHANGELOG](CHANGELOG.md#240---2026-05-13) for the full v2.4.0 details, or [v2.3.0](CHANGELOG.md#230---2026-05-11) for the prior bilateral-audit release (9 bugs + scoped snapshot tools).
+
+</details>
+
+See [CHANGELOG](CHANGELOG.md#250---2026-05-19) for the full v2.5.0 details.
 
 </details>
 

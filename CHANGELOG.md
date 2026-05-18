@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased — v2.5 work-in-progress
+## 2.5.0 - 2026-05-19
+
+**Agent self-awareness + safety + distribution polish.** Eight phases shipped end-to-end: activity log + journal hints (v2.5.1), OCR sidecar (v2.5.2), tool approval gates (v2.5.3), auth env→file migration (v2.5.4), TD 2025.32820 release card (v2.5.5 — already-shipped), stdio discipline contract test (v2.5.6), `td_check_for_updates` (v2.5.7), trace viewer (v2.5.8). **Tool count 105 → 109.** Live-debug-style live-TD verification on the rebuilt `.tox`: all 6 new modules import cleanly, `is_approval_required` + `build_denied_result` return exact contract outputs against the live COMP. Full suite: 2000 → **2099 passing** (+99, +1 skipped paddleocr e2e). CI green across lint + test (3.10/3.11/3.12) + install-parse (macos/windows).
+
+Four new MCP tools — `td_get_activity_log`, `td_ocr_image` (requires `[ocr]` extras), `td_check_for_updates`, `td_get_traces` — plus a new `Approvalmode` Menu COMP param that gates destructive tools (`td_exec_python`, `td_delete_node`, `td_restore_snapshot`, `snapshot_restore_scoped`, `td_disconnect` always; `td_rename_node` / `td_set_content` when path is outside the agent's own COMP) with a chat-banner click-through (30 s timeout). `TDPILOT_DISABLE_TOOL_APPROVAL` env var hard-overrides for CI / unattended use.
+
+Per-phase detail below preserved verbatim from the development run.
+
+---
+
+### Released — v2.5.0 phase-by-phase notes (originally drafted as Unreleased)
 
 ### Phase v2.5.1 — Activity log + journal hints (2026-05-18)
 
