@@ -408,11 +408,26 @@ def onHTTPRequest(webServerDAT, request, response):
         _json(response, 200, {"ok": True}, request_origin=request_origin)
         return response
 
-    if method == "GET" and path == "/favicon.ico":
+    # v2.5-live-audit-2026-05-19: HEAD /health must mirror GET /health
+    # status (200) without body. Pre-fix HEAD /health fell through to
+    # 404 — auth whitelisted HEAD on the path but no route handler
+    # existed for the method, breaking browser cache-revalidation
+    # probes that the v2.3.0 Bug 11 HEAD-whitelist tried to enable.
+    if method == "HEAD" and path == "/health":
+        _cors(response, request_origin)
+        response["statusCode"] = 200
+        response["statusReason"] = "OK"
+        response["data"] = b""
+        response["Content-Type"] = "application/json"
+        return response
+
+    if method in ("GET", "HEAD") and path == "/favicon.ico":
         # 2026-05-11 — silence Chromium's auto-fetch with a 204 No
         # Content. We don't ship an icon (the chat panel renders
         # inside the webRenderTOP, not in a browser-tab-favicon
         # context), so the empty body keeps payload + token cost zero.
+        # v2.5-live-audit-2026-05-19: HEAD also serves 204 here
+        # (was GET-only; HEAD fell through to 404).
         _cors(response, request_origin)
         response["statusCode"] = 204
         response["statusReason"] = "No Content"
