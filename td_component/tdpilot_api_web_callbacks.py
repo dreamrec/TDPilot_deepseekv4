@@ -408,11 +408,26 @@ def onHTTPRequest(webServerDAT, request, response):
         _json(response, 200, {"ok": True}, request_origin=request_origin)
         return response
 
-    if method == "GET" and path == "/favicon.ico":
+    # v2.5-live-audit-2026-05-19: HEAD /health must mirror GET /health
+    # status (200) without body. Pre-fix HEAD /health fell through to
+    # 404 — auth whitelisted HEAD on the path but no route handler
+    # existed for the method, breaking browser cache-revalidation
+    # probes that the v2.3.0 Bug 11 HEAD-whitelist tried to enable.
+    if method == "HEAD" and path == "/health":
+        _cors(response, request_origin)
+        response["statusCode"] = 200
+        response["statusReason"] = "OK"
+        response["data"] = b""
+        response["Content-Type"] = "application/json"
+        return response
+
+    if method in ("GET", "HEAD") and path == "/favicon.ico":
         # 2026-05-11 — silence Chromium's auto-fetch with a 204 No
         # Content. We don't ship an icon (the chat panel renders
         # inside the webRenderTOP, not in a browser-tab-favicon
         # context), so the empty body keeps payload + token cost zero.
+        # v2.5-live-audit-2026-05-19: HEAD also serves 204 here
+        # (was GET-only; HEAD fell through to 404).
         _cors(response, request_origin)
         response["statusCode"] = 204
         response["statusReason"] = "No Content"
@@ -682,6 +697,57 @@ def onHTTPRequest(webServerDAT, request, response):
         try:
             ext.OnResetPulse()
             _text(response, 200, "reset", request_origin=request_origin)
+        except Exception as exc:
+            _text(response, 500, str(exc), request_origin=request_origin)
+        return response
+
+    # v2.5.3 — POST /approve. Body is JSON {"id": "<uuid>", "decision":
+    # "approve" | "deny", "reason": "<optional>"}. Routes to the
+    # runtime's record_approval_response, which signals the worker
+    # thread blocked on threading.Event.wait inside the agent loop.
+    if method == "POST" and path == "/approve":
+        try:
+            body_text = _read_body(request)
+            try:
+                body_obj = json.loads(body_text) if body_text else {}
+            except json.JSONDecodeError:
+                _text(response, 400, "body must be JSON", request_origin=request_origin)
+                return response
+            if not isinstance(body_obj, dict):
+                _text(response, 400, "body must be a JSON object", request_origin=request_origin)
+                return response
+            approval_id = body_obj.get("id")
+            decision = body_obj.get("decision")
+            reason = body_obj.get("reason") or ""
+            if not isinstance(approval_id, str) or not isinstance(decision, str):
+                _text(
+                    response,
+                    400,
+                    "missing or invalid 'id' / 'decision' fields",
+                    request_origin=request_origin,
+                )
+                return response
+            if decision not in ("approve", "deny"):
+                _text(
+                    response,
+                    400,
+                    "decision must be 'approve' or 'deny'",
+                    request_origin=request_origin,
+                )
+                return response
+            runtime = getattr(ext, "runtime", None)
+            ok = False
+            if runtime is not None and hasattr(runtime, "record_approval_response"):
+                ok = runtime.record_approval_response(approval_id, decision, str(reason))
+            if ok:
+                _text(response, 200, "recorded", request_origin=request_origin)
+            else:
+                _text(
+                    response,
+                    404,
+                    "unknown or stale approval id",
+                    request_origin=request_origin,
+                )
         except Exception as exc:
             _text(response, 500, str(exc), request_origin=request_origin)
         return response

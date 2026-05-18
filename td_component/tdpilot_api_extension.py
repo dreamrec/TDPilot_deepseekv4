@@ -1117,6 +1117,31 @@ class TDPilotAPIExt:
     def _html_append(self, role: str, message: str) -> None:
         self._broadcast({"type": "append", "role": role, "message": message})
 
+    def push_approval_request(
+        self,
+        approval_id: str,
+        tool_name: str,
+        args: dict,
+        timeout_ms: int,
+    ) -> None:
+        """v2.5.3 — emit an ``approval_request`` WS event so the chat
+        HTML banner can render an Approve/Deny prompt for the user.
+
+        Called by the runtime's approval provider from the WORKER
+        thread (because it runs inside the synchronous wait path).
+        ``_broadcast`` is thread-safe via TD's WebServer DAT — the
+        WebSocket fan-out doesn't require cook-thread invariants.
+        """
+        self._broadcast(
+            {
+                "type": "approval_request",
+                "id": approval_id,
+                "tool": tool_name,
+                "args": args,
+                "timeout_ms": timeout_ms,
+            }
+        )
+
     def _html_status(self, status: str) -> None:
         # 2026-05-11 — dedupe consecutive identical status broadcasts.
         # Pre-fix every turn-end emitted ``status:idle`` twice — once from

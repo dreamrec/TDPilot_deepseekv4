@@ -846,6 +846,12 @@ async def _forward(
     audit_details: dict[str, Any] | None = None,
 ) -> str:
     finish = _start_tool(ctx, tool_name)
+    # v2.5.1 — activity ring. Capture start time + record on both
+    # success/error paths so ``td_get_activity_log`` reflects every
+    # forwarded MCP call. Args are the ``body`` payload sent to TD.
+    _activity_start_ts = time.monotonic()
+    _activity_error_msg: str | None = None
+    _activity_result_kind = "ok"
     try:
         data = await _get_client(ctx).request(endpoint, body)
         if audit_event:
@@ -853,8 +859,23 @@ async def _forward(
         return _as_json_output(data)
     except Exception as exc:
         _record_tool_error(ctx, tool_name)
+        _activity_error_msg = f"{type(exc).__name__}: {exc}"
+        _activity_result_kind = "error"
         return format_tool_error(exc)
     finally:
+        try:
+            from td_mcp.observability import record_activity
+
+            record_activity(
+                tool_name=tool_name,
+                args=body,
+                duration_ms=int((time.monotonic() - _activity_start_ts) * 1000),
+                result_kind=_activity_result_kind,
+                error_msg=_activity_error_msg,
+            )
+        except Exception:
+            # Observability must never break tool dispatch. Swallow.
+            pass
         finish()
 
 
@@ -2042,6 +2063,9 @@ from td_mcp.registry.tools_knowledge_store import (  # noqa: E402
     td_knowledge_recall,
     td_knowledge_save,
 )
+from td_mcp.registry.tools_lifecycle import (  # noqa: F401, E402  — registers 1 v2.5.7 tool
+    td_check_for_updates,
+)
 from td_mcp.registry.tools_macros import (  # noqa: E402
     td_create_macro,
     td_get_macro_params,
@@ -2061,6 +2085,12 @@ from td_mcp.registry.tools_memory import (  # noqa: E402
 )
 from td_mcp.registry.tools_notes import (  # noqa: E402
     td_component_notes,
+)
+from td_mcp.registry.tools_observability import (  # noqa: F401, E402  — registers 1 v2.5.1 tool
+    td_get_activity_log,
+)
+from td_mcp.registry.tools_ocr import (  # noqa: F401, E402  — registers 1 v2.5.2 tool
+    td_ocr_image,
 )
 from td_mcp.registry.tools_optimizer import (  # noqa: E402
     td_describe_dynamics,
@@ -2119,6 +2149,9 @@ from td_mcp.registry.tools_system import (  # noqa: E402
     td_python_env_status,
     td_tdresources_inspect,
     td_threading_status,
+)
+from td_mcp.registry.tools_traces import (  # noqa: F401, E402  — registers 1 v2.5.8 tool
+    td_get_traces,
 )
 from td_mcp.registry.tools_vision import (  # noqa: E402
     td_analyze_frame,

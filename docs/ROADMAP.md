@@ -1,4 +1,36 @@
-# TDPilot DPSK4 — Roadmap v2.2.0 → v3.0
+# TDPilot DPSK4 — Roadmap
+
+> **Updated 2026-05-18.** v2.4.0 SHIPPED on 2026-05-13. The v2.5–v2.7 arc supersedes the original v2.2→v3.0 plan below.
+
+---
+
+## Current active roadmap: v2.5 → v2.7
+
+Detailed per-release plans live in [`plans/`](./plans/README.md). Each is cold-start executable — a fresh agent session can drop into it and execute.
+
+| Release | Theme | Plan | Status |
+|---|---|---|---|
+| v2.5 | Agent self-awareness + safety + distribution polish | [`plans/v2.5_IMPLEMENTATION_PLAN.md`](./plans/v2.5_IMPLEMENTATION_PLAN.md) | not_started |
+| v2.6 | Retrieval + knowledge (hybrid retrieval, skill packs, web ingestion) | [`plans/v2.6_IMPLEMENTATION_PLAN.md`](./plans/v2.6_IMPLEMENTATION_PLAN.md) | not_started |
+| v2.7 | Orchestration + distribution maturity (Flow FSM, self-update, MCP Config) | [`plans/v2.7_IMPLEMENTATION_PLAN.md`](./plans/v2.7_IMPLEMENTATION_PLAN.md) | not_started |
+
+**Total timeline:** ~12-13 weeks (3 months) from v2.5 start to v2.7 ship.
+
+**Authored after:** deep audit of upstream `dreamrec/TDPilot` v1.6.16 (2026-05-18, 5 days ahead of our v2.4.0). See [plans README](./plans/README.md) for the gap analysis.
+
+**User-confirmed exclusions:** voice control deferred indefinitely.
+
+---
+
+## Historical: v2.2.0 → v3.0 (pre-v2.4 plan)
+
+The plan below was authored 2026-05-11 before v2.4 shipped. v2.4 actually shipped a different scope (Phase A/B/C live-debug stack — see [CHANGELOG.md](../CHANGELOG.md) and [`plans/v2.4_IMPLEMENTATION_PLAN.md`](./plans/v2.4_IMPLEMENTATION_PLAN.md)) than was originally planned for v2.4 below (voice + mobile). The original v2.5 (Agent-IDE features) and v3.0 (architecture evolution) themes are partially absorbed into v2.5–v2.7 above; the rest are deferred to v2.8+ or v3.0+.
+
+The full original plan is preserved below as historical reference.
+
+---
+
+# TDPilot DPSK4 — Roadmap v2.2.0 → v3.0 (HISTORICAL)
 
 **Scope:** standalone API variant (`tdpilot_API.tox`) usability. Every phase below targets the in-TD chat experience first. MCP-side improvements may follow as derivatives but aren't the priority.
 
