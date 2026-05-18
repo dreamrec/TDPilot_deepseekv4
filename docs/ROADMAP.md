@@ -1,20 +1,20 @@
 # TDPilot DPSK4 — Roadmap
 
-> **Updated 2026-05-18.** v2.4.0 SHIPPED on 2026-05-13. The v2.5–v2.7 arc supersedes the original v2.2→v3.0 plan below.
+> **Updated 2026-05-19.** v2.5.0 + v2.5.1 SHIPPED on 2026-05-19 (8 phases end-to-end in a single dev day; tool count 105 → 109; tests 2000 → 2108). v2.4.0 SHIPPED on 2026-05-13. The v2.5–v2.7 arc supersedes the original v2.2→v3.0 plan below.
 
 ---
 
-## Current active roadmap: v2.5 → v2.7
+## Current active roadmap: v2.6 → v2.7
 
 Detailed per-release plans live in [`plans/`](./plans/README.md). Each is cold-start executable — a fresh agent session can drop into it and execute.
 
 | Release | Theme | Plan | Status |
 |---|---|---|---|
-| v2.5 | Agent self-awareness + safety + distribution polish | [`plans/v2.5_IMPLEMENTATION_PLAN.md`](./plans/v2.5_IMPLEMENTATION_PLAN.md) | not_started |
+| v2.5 | Agent self-awareness + safety + distribution polish | [`plans/v2.5_IMPLEMENTATION_PLAN.md`](./plans/v2.5_IMPLEMENTATION_PLAN.md) | **SHIPPED 2026-05-19** ([v2.5.0](https://github.com/dreamrec/TDPilot_deepseekv4/releases/tag/v2.5.0) + [v2.5.1](https://github.com/dreamrec/TDPilot_deepseekv4/releases/tag/v2.5.1)) |
 | v2.6 | Retrieval + knowledge (hybrid retrieval, skill packs, web ingestion) | [`plans/v2.6_IMPLEMENTATION_PLAN.md`](./plans/v2.6_IMPLEMENTATION_PLAN.md) | not_started |
 | v2.7 | Orchestration + distribution maturity (Flow FSM, self-update, MCP Config) | [`plans/v2.7_IMPLEMENTATION_PLAN.md`](./plans/v2.7_IMPLEMENTATION_PLAN.md) | not_started |
 
-**Total timeline:** ~12-13 weeks (3 months) from v2.5 start to v2.7 ship.
+**Total timeline:** ~9-10 weeks remaining (v2.6 + v2.7) with disciplined cadence.
 
 **Authored after:** deep audit of upstream `dreamrec/TDPilot` v1.6.16 (2026-05-18, 5 days ahead of our v2.4.0). See [plans README](./plans/README.md) for the gap analysis.
 

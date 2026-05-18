@@ -2,7 +2,7 @@
 
 This directory holds cold-start executable plans for each release arc. Each file is self-contained — a fresh agent session can drop into it and execute.
 
-## Active plans (v2.5 → v2.7)
+## Active plans (v2.6 → v2.7)
 
 Authored 2026-05-18 after deep audit of:
 - Local v2.4.0 ship state (105 MCP tools, 2000 tests passing, kaleidoscope task verified)
@@ -12,17 +12,46 @@ Authored 2026-05-18 after deep audit of:
 
 | Plan | Theme | Effort | Status |
 |---|---|---|---|
-| [`v2.5_IMPLEMENTATION_PLAN.md`](./v2.5_IMPLEMENTATION_PLAN.md) | Agent self-awareness + safety + distribution polish | ~3 weeks | not_started |
+| [`v2.5_IMPLEMENTATION_PLAN.md`](./v2.5_IMPLEMENTATION_PLAN.md) | Agent self-awareness + safety + distribution polish | ~3 weeks | **SHIPPED 2026-05-19 as v2.5.0 + v2.5.1** |
 | [`v2.6_IMPLEMENTATION_PLAN.md`](./v2.6_IMPLEMENTATION_PLAN.md) | Retrieval + knowledge (hybrid retrieval, skill packs, web ingestion) | ~3-4 weeks | not_started |
 | [`v2.7_IMPLEMENTATION_PLAN.md`](./v2.7_IMPLEMENTATION_PLAN.md) | Orchestration + distribution maturity (Flow FSM, self-update, MCP Config) | ~6 weeks | not_started |
 
-**Total timeline:** ~12-13 weeks (3 months) for v2.5 → v2.7 with disciplined cadence.
+**Total timeline:** ~9-10 weeks remaining for v2.6 → v2.7 with disciplined cadence.
+
+## v2.5 retrospective (2026-05-19)
+
+**All 8 phases shipped end-to-end** in a single dev day, exceeding the ~3 week estimate:
+
+| Phase | Slug | Outcome |
+|---|---|---|
+| v2.5.1 | activity-log | `td_get_activity_log` + chat-pipe ring + `_read_journal` hints in tool results |
+| v2.5.2 | ocr-sidecar | `td_ocr_image` via PaddleOCR subprocess (`[ocr]` extras) |
+| v2.5.3 | tool-approval-gates | `Approvalmode` COMP Menu param + 30s chat-banner click-through |
+| v2.5.4 | auth-env-to-file | `maybe_migrate_env_to_file` closes drag-and-go shell-env hole |
+| v2.5.5 | td-2025-32820-card | Already shipped pre-v2.5 |
+| v2.5.6 | stdio-discipline | AST-based contract test for rogue `print()` in stdio mode |
+| v2.5.7 | check-for-updates | `td_check_for_updates` (GitHub Releases API + .tox hash drift) |
+| v2.5.8 | trace-viewer | `td_get_traces` reads chat-pipe JSONL trace files |
+
+**Tool count: 105 → 109.** **Tests: 2000 → 2108 passing.**
+
+Plus: post-ship live audit found 1 real bug (HEAD route 404) + chat-pipe surface gap for `td_get_traces` — both closed in v2.5.1 (chat-pipe alias) + the included HEAD route fix.
+
+### Deferred to a future patch (logged from v2.5.0 live-chat audit)
+
+| ID | Scope | Estimated effort |
+|---|---|---|
+| v2.5.1.2 | Chat-pipe `td_get_activity_log` — needs `ActivityRing` promoted to module singleton in `tdpilot_api_activity_log.py` | ~30 min |
+| v2.5.1.3 | Chat-pipe `td_check_for_updates` — needs ~300 LOC of `src/td_mcp/lifecycle/update_check.py` ported to restricted-mode-safe TD-side code | ~2 hours |
+
+Both are smaller than a full release; fold into v2.6 release engineering or ship as v2.5.2 patch.
 
 ## Historical plans
 
 | Plan | Status |
 |---|---|
 | [`v2.4_IMPLEMENTATION_PLAN.md`](./v2.4_IMPLEMENTATION_PLAN.md) | SHIPPED 2026-05-13 as v2.4.0 (Phase A/B/C + B-001..B-010 live-debug bugs) |
+| [`v2.5_IMPLEMENTATION_PLAN.md`](./v2.5_IMPLEMENTATION_PLAN.md) | SHIPPED 2026-05-19 as v2.5.0 + v2.5.1 (see retrospective above) |
 
 ## How to use these plans
 
