@@ -19,6 +19,41 @@ Agent self-awareness foundation for the v2.5 release theme ("agent self-awarenes
 
 See [`docs/plans/v2.5_IMPLEMENTATION_PLAN.md`](./docs/plans/v2.5_IMPLEMENTATION_PLAN.md) §2 for the full phase design.
 
+### Phase v2.5.4 — Auth fallback: env→file migration (2026-05-18)
+
+Closes the last drag-and-go cold-start hole. Pre-fix: user exports `TD_MCP_SHARED_SECRET` in their shell, restarts TD, gets 401 because the shell env didn't survive the relaunch. Post-fix: first server start with env-supplied secret persists it to `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env`; subsequent launches read from the file regardless of shell state.
+
+- **New `maybe_migrate_env_to_file(path)` in `auth_bootstrap.py`** — idempotent (same secret already in file = no-op), preserves non-secret lines, overwrites different values, writes via atomic temp file with `0o600` perms on POSIX, never leaks secret material to stdout.
+- **Composed into `bootstrap_auth`** after `load_env_file` and before `maybe_generate_secret` — so a shell-set secret persists before autogen could otherwise overwrite it.
+- **+9 tests** in `tests/test_v25_auth_fallback.py` covering all branches (no-env, new file, idempotent same value, overwrite different, preserve other lines, POSIX perms, integration via `bootstrap_auth`, no-stdout-leak).
+
+Most of the file-fallback infrastructure was already present from the original v1.4.5 fix (`load_env_file` + `maybe_generate_secret` + canonical `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` path) — v2.5.4 adds only the env→file direction.
+
+### Phase v2.5.5 — TD 2025.32820 release card (already shipped)
+
+The TD 2025.32820 release card was already present at `src/td_mcp/knowledge/cards/release/2025.32820.json` (118 lines, 17 new ops + 21 changed ops + migration warnings + SDK versions). Indexed and exercised by `tests/test_skill_content.py` and `tests/_mock_dispatcher.py`. No new code required for this phase.
+
+### Phase v2.5.6 — Stdio discipline contract test (2026-05-18)
+
+Stdout is the MCP transport channel under stdio mode — any rogue `print()` corrupts JSON-RPC framing and breaks Claude Desktop / Claude Code. Upstream `dreamrec/TDPilot` v1.6.12 fixed a regression of this kind. v2.5.6 pins the contract via `tests/test_v25_stdio_discipline.py` so regressions get caught in CI rather than at the user's TD startup.
+
+- **+12 tests** total:
+  - 10 parameterized import tests covering hot-path modules (`td_mcp`, `td_mcp.audit`, `td_mcp.auth_bootstrap`, `td_mcp.capabilities`, `td_mcp.errors`, `td_mcp.observability`, `td_mcp.observability.activity_log`, `td_mcp.release_gates`, `td_mcp.services`, `td_mcp.telemetry`) — each MUST import with zero bytes on stdout
+  - 1 hot-path test: `record_activity` (called on every `_forward` tool dispatch) must not print to stdout
+  - 1 AST-based static scan of hot-path source files for `print(...)` calls that lack `file=sys.stderr` — robust against multi-line print formatting (the first heuristic flagged opening lines of multi-line stderr-targeted prints; AST walks the actual Call nodes)
+
+Audit findings: no rogue stdout-prints in hot-path modules; CLI subcommands in `td_mcp.server` (doctor, mcp-config, autopin) intentionally print to stdout because they're invoked via `tdpilot <subcommand>` outside stdio mode — the AST test excludes those by scope.
+
+### v2.5 tests overall
++59 from baseline (2000 → **2047 passing**):
+- v2.5.1 activity log + journal hints: +26
+- v2.5.4 env→file migration: +9
+- v2.5.6 stdio discipline contract: +12
+- (regenerated tool-schema snapshot included `td_get_activity_log`)
+
+### v2.5 status
+4 / 8 v2.5 phases complete (or already-done). Remaining: v2.5.2 OCR, v2.5.3 tool approval, v2.5.7 check_for_updates, v2.5.8 log receiver (stretch). See [`docs/plans/v2.5_IMPLEMENTATION_PLAN.md`](./docs/plans/v2.5_IMPLEMENTATION_PLAN.md).
+
 ---
 
 ## 2.4.0 - 2026-05-13

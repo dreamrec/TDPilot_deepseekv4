@@ -160,15 +160,101 @@ def maybe_generate_secret(path: Path) -> str | None:
     return secret
 
 
+def maybe_migrate_env_to_file(path: Path) -> bool:
+    """v2.5.4 — one-shot migration of a shell-supplied ``TD_MCP_SHARED_SECRET``
+    into the persistent env file.
+
+    Scenario the migration solves: user exports ``TD_MCP_SHARED_SECRET=foo``
+    in their shell, restarts TD, and is hit with a 401 because the shell
+    env didn't survive the relaunch. Without migration we silently rely on
+    every relaunch re-exporting the env. With migration we copy the
+    secret into the file the FIRST time we see it set, so subsequent
+    launches read it from the file regardless of shell state.
+
+    Returns True iff a write happened. No-op if:
+      * secret is not present in env (nothing to migrate);
+      * file already contains the SAME secret (idempotent re-run);
+      * file write fails (logged to stderr, returns False).
+    """
+    secret = (os.environ.get("TD_MCP_SHARED_SECRET") or "").strip()
+    if not secret:
+        return False
+    # If the file already has the same secret, skip — keeps the operation
+    # idempotent across cold restarts where bootstrap_auth runs twice.
+    if path.exists():
+        try:
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if line.startswith("TD_MCP_SHARED_SECRET="):
+                    existing = _strip_quotes(line.split("=", 1)[1].strip())
+                    if existing == secret:
+                        return False
+                    break  # different value present — overwrite below
+        except OSError:
+            pass
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+
+    # Preserve non-secret lines (same pattern as maybe_generate_secret).
+    existing_lines: list[str] = []
+    if path.exists():
+        try:
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if line.startswith("TD_MCP_SHARED_SECRET="):
+                    continue
+                existing_lines.append(raw)
+        except OSError:
+            pass
+
+    payload_lines = existing_lines + [f"TD_MCP_SHARED_SECRET={secret}"]
+    try:
+        tmp.write_text("\n".join(payload_lines) + "\n", encoding="utf-8")
+        if os.name == "posix":
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
+        tmp.replace(path)
+    except OSError as exc:
+        print(
+            f"[tdpilot] env→file migration write failed for {path}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+
+    # Sanctioned log line — stderr only, never stdout (stdio MCP).
+    # Secret itself is NOT included.
+    print(
+        f"[tdpilot] Migrated TD_MCP_SHARED_SECRET from env to {path} (survives next TD restart)",
+        file=sys.stderr,
+    )
+    return True
+
+
 def bootstrap_auth(path: Path | None = None) -> None:
     """Called at server startup before ``verify_auth_config()``.
 
-    Sequences: load-from-file → maybe-generate → (done). Silent on stdout.
+    Sequences: load-from-file → maybe-migrate-env-to-file → maybe-generate
+    → (done). Silent on stdout.
+
+    Order matters:
+      1. load_env_file populates env from the persistent file. If the file
+         had a secret, ``TD_MCP_SHARED_SECRET`` is now in env.
+      2. maybe_migrate_env_to_file (v2.5.4) handles the case where the
+         user supplied the secret via shell env BEFORE bootstrap ran. If
+         env has a value the file lacks, we persist env→file so the next
+         TD launch sees it without the shell export.
+      3. maybe_generate_secret only acts if NEITHER step 1 NOR step 2
+         produced a secret AND autogen is opted in.
+
     Callers that want verbose behaviour can read the env file themselves
     after the call or inspect ``os.environ['TD_MCP_SHARED_SECRET']``.
     """
     env_file = path or default_env_file()
     load_env_file(env_file)
+    maybe_migrate_env_to_file(env_file)
     generated = maybe_generate_secret(env_file)
     if generated is not None:
         # Sanctioned log line — stderr only, never stdout (stdio MCP).
@@ -183,5 +269,6 @@ __all__ = [
     "default_env_file",
     "load_env_file",
     "maybe_generate_secret",
+    "maybe_migrate_env_to_file",
     "bootstrap_auth",
 ]
