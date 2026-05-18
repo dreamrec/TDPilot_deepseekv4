@@ -7,7 +7,7 @@ This directory holds cold-start executable plans for each release arc. Each file
 Authored 2026-05-18 after deep audit of:
 - Local v2.4.0 ship state (105 MCP tools, 2000 tests passing, kaleidoscope task verified)
 - Upstream `dreamrec/TDPilot` v1.6.16 (2026-05-18) — activity log, `td_self_update`, `_read_journal` hints
-- dotsimulate LOPs 0.3.0 (2026-05-08) — agent runtime 2.0, skills, flow FSM, hybrid retrieval, OCR
+- An adjacent TD LLM-agent project's 0.3.0 release (2026-05-08) — agent runtime 2.0, skills, flow FSM, hybrid retrieval, OCR
 
 **User-confirmed scope exclusions:** voice control deferred indefinitely.
 

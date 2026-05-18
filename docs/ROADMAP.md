@@ -16,7 +16,7 @@ Detailed per-release plans live in [`plans/`](./plans/README.md). Each is cold-s
 
 **Total timeline:** ~9-10 weeks remaining (v2.6 + v2.7) with disciplined cadence.
 
-**Authored after:** deep audit of upstream `dreamrec/TDPilot` v1.6.16 (2026-05-18, 5 days ahead of our v2.4.0) + dotsimulate LOPs 0.3.0 (2026-05-08, 108 operators with agent runtime 2.0). See [plans README](./plans/README.md) for the gap analysis.
+**Authored after:** deep audit of upstream `dreamrec/TDPilot` v1.6.16 (2026-05-18, 5 days ahead of our v2.4.0) + an adjacent TD LLM-agent project's 0.3.0 release (2026-05-08, 108 operators with agent runtime 2.0). See [plans README](./plans/README.md) for the gap analysis.
 
 **User-confirmed exclusions:** voice control deferred indefinitely.
 
