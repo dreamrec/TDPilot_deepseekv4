@@ -118,7 +118,7 @@ Both run on the same DeepSeek backend and share the TD-side handler layer. The c
 | **Where you type** | Browser tab or in-TD panel | Your terminal |
 | **Setup time** | ~2 min (drag + paste key) | ~10 min (Claude Code + plugin + bridge .tox) |
 | **Dependencies** | TouchDesigner + a browser | TouchDesigner + Node.js + uv + Claude Code |
-| **Tool surface** | 94 tools | 103 tools |
+| **Tool surface** | 95 tools | 103 tools |
 | **Multi-file projects** | TD-only | Anything Claude Code touches (TD + Python + Markdown + …) |
 | **Session length** | Lighter — one focused conversation per turn | Heavier — long sessions across many files |
 | **Collaboration** | Multi-tab — open the chat URL on a phone or second monitor | Terminal stays with one user |
@@ -159,7 +159,7 @@ Both run on the same DeepSeek backend and share the TD-side handler layer. The c
 | **Continuous vision monitoring** (`td_monitor_visual`, `td_capture_and_analyze`) | — | ✅ | CLI only — for unattended autonomous agents |
 | **Visual optimization** (`td_optimize_visual`) | — | ✅ | CLI only — multi-pass batch workflow |
 | **Slash commands** (`/td-check`, `/td-snapshot`) | — | ✅ | Claude Code plugin |
-| **Tool count** | 94 | 103 | — |
+| **Tool count** | 95 | 103 | — |
 | **Where chat lives** | Browser tab + in-TD panel | Your terminal | — |
 | **Setup time** | ~2 min | ~10 min | — |
 | **Dependencies** | TouchDesigner + browser | TD + Node.js + uv + Claude Code | — |
@@ -407,7 +407,7 @@ Also returned under `caps["first_run"]` in `td_get_capabilities`.
 
 ## Tools
 
-94 tools across 17 categories. Full schemas in `td_component/tdpilot_api_schema_defs.py`.
+95 tools across 17 categories. Full schemas in `td_component/tdpilot_api_schema_defs.py`.
 
 | Category | Count | Examples |
 |---|---|---|

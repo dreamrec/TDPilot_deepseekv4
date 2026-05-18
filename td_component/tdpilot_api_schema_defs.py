@@ -1949,6 +1949,30 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "td_get_traces",
+        "description": (
+            "Alias for td_get_recent_traces (v2.5.1.1 alignment fix). "
+            "The MCP-server v2.5.8 release shipped this tool name; the "
+            "chat-pipe agent's surface accepts BOTH names so docs and "
+            "agents that learned either form keep working. Returns "
+            "newest-first per-turn observability traces from "
+            "~/.tdpilot-dpsk4/api/traces/."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max records to return, newest first. Default 10, max 200.",
+                    "default": 10,
+                    "minimum": 1,
+                    "maximum": 200,
+                }
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "td_get_capabilities",
         "description": (
             "Report which features are wired in this build of the "
