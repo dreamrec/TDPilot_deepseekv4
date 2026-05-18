@@ -1,6 +1,6 @@
 {
-  "tox_source_hash": "a382dd420d93d67380680ed9b1a7ec536c964fadb8eb79a5f33f4841c83b3637",
-  "built_at": "2026-05-13T01:49:04.783342+00:00",
+  "tox_source_hash": "e1abf83b2ca7af7cce5f236524a9589e994c18be0c15c233778b1c4e4c4a97b0",
+  "built_at": "2026-05-18T22:52:51.349683+00:00",
   "source_files": [
     "td_component/tdpilot_api_agent.py",
     "td_component/tdpilot_api_dispatcher.py",
@@ -27,6 +27,8 @@
     "td_component/tdpilot_api_recovery.py",
     "td_component/tdpilot_api_rollback.py",
     "td_component/tdpilot_api_cycle_detector.py",
+    "td_component/tdpilot_api_activity_log.py",
+    "td_component/tdpilot_api_approval.py",
     "td_component/tdpilot_api_tracing.py",
     "td_component/tdpilot_api_compaction.py",
     "td_component/tdpilot_api_chat.html",

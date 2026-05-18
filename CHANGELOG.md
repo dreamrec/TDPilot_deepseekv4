@@ -1,5 +1,146 @@
 # Changelog
 
+## 2.5.0 - 2026-05-19
+
+**Agent self-awareness + safety + distribution polish.** Eight phases shipped end-to-end: activity log + journal hints (v2.5.1), OCR sidecar (v2.5.2), tool approval gates (v2.5.3), auth env→file migration (v2.5.4), TD 2025.32820 release card (v2.5.5 — already-shipped), stdio discipline contract test (v2.5.6), `td_check_for_updates` (v2.5.7), trace viewer (v2.5.8). **Tool count 105 → 109.** Live-debug-style live-TD verification on the rebuilt `.tox`: all 6 new modules import cleanly, `is_approval_required` + `build_denied_result` return exact contract outputs against the live COMP. Full suite: 2000 → **2099 passing** (+99, +1 skipped paddleocr e2e). CI green across lint + test (3.10/3.11/3.12) + install-parse (macos/windows).
+
+Four new MCP tools — `td_get_activity_log`, `td_ocr_image` (requires `[ocr]` extras), `td_check_for_updates`, `td_get_traces` — plus a new `Approvalmode` Menu COMP param that gates destructive tools (`td_exec_python`, `td_delete_node`, `td_restore_snapshot`, `snapshot_restore_scoped`, `td_disconnect` always; `td_rename_node` / `td_set_content` when path is outside the agent's own COMP) with a chat-banner click-through (30 s timeout). `TDPILOT_DISABLE_TOOL_APPROVAL` env var hard-overrides for CI / unattended use.
+
+Per-phase detail below preserved verbatim from the development run.
+
+---
+
+### Released — v2.5.0 phase-by-phase notes (originally drafted as Unreleased)
+
+### Phase v2.5.1 — Activity log + journal hints (2026-05-18)
+
+Agent self-awareness foundation for the v2.5 release theme ("agent self-awareness + safety + distribution polish"). Closes the upstream `dreamrec/TDPilot` v1.6.16 gap (`td_get_activity_log`) and adds a runtime-level companion to the v2.4 B-007 cycle-detect protocol.
+
+- **New MCP tool `td_get_activity_log`** — exposes a 200-entry ring buffer of every tool dispatch this server session. Supports filtering by tool name and `since_ts`. Mirrors upstream's surface so agents migrating between forks see the same observability tool. Tool count **105 → 106**.
+- **Chat-pipe activity ring** — `td_component/tdpilot_api_activity_log.py`. Per-turn instance; reuses the B-010 deep-canonical `args_hash` from `tdpilot_api_cycle_detector` so the two systems stay in lockstep.
+- **`_read_journal` hints in tool results** — when the chat-pipe agent calls the same tool with byte-identical args twice this turn, the next `tool_result` carries a `_read_journal` block with `call_count`, `calls_until_cycle_detect`, and a strategy-switch nudge. Fires at count=2 — one call short of cycle-detect ending the turn (threshold=3). Loop-prone probes (per B-007: `td_get_errors`, `td_analyze_frame`, `td_get_node_detail`, `td_cooking_info`, `td_get_connections`) get a stronger protocol-point-6 reinforcement message.
+- **SYSTEM_PROMPT_BASE protocol point 6 expanded** to acknowledge the runtime `_read_journal` field so the LLM links the static prompt guidance to the runtime signal.
+- **Env var `TDPILOT_DISABLE_ACTIVITY_LOG`** — escape hatch (parity with `TDPILOT_DISABLE_CYCLE_DETECTION`).
+- Cross-implementation parity tests pin MCP-side (`src/td_mcp/observability/`) and chat-pipe-side (`td_component/tdpilot_api_activity_log.py`) `args_hash` + hint shape — drift fails CI immediately.
+
+**Tests:** +26 (13 ring + 13 hint, including a B-010 list-order-invariance regression). Full suite: 2000 → **2026 passing**.
+
+**`.tox` rebuild required:** **API `.tox` only**. `_API_TOX_SOURCE_FILES` changed. MCP `.tox` unaffected.
+
+See [`docs/plans/v2.5_IMPLEMENTATION_PLAN.md`](./docs/plans/v2.5_IMPLEMENTATION_PLAN.md) §2 for the full phase design.
+
+### Phase v2.5.4 — Auth fallback: env→file migration (2026-05-18)
+
+Closes the last drag-and-go cold-start hole. Pre-fix: user exports `TD_MCP_SHARED_SECRET` in their shell, restarts TD, gets 401 because the shell env didn't survive the relaunch. Post-fix: first server start with env-supplied secret persists it to `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env`; subsequent launches read from the file regardless of shell state.
+
+- **New `maybe_migrate_env_to_file(path)` in `auth_bootstrap.py`** — idempotent (same secret already in file = no-op), preserves non-secret lines, overwrites different values, writes via atomic temp file with `0o600` perms on POSIX, never leaks secret material to stdout.
+- **Composed into `bootstrap_auth`** after `load_env_file` and before `maybe_generate_secret` — so a shell-set secret persists before autogen could otherwise overwrite it.
+- **+9 tests** in `tests/test_v25_auth_fallback.py` covering all branches (no-env, new file, idempotent same value, overwrite different, preserve other lines, POSIX perms, integration via `bootstrap_auth`, no-stdout-leak).
+
+Most of the file-fallback infrastructure was already present from the original v1.4.5 fix (`load_env_file` + `maybe_generate_secret` + canonical `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` path) — v2.5.4 adds only the env→file direction.
+
+### Phase v2.5.5 — TD 2025.32820 release card (already shipped)
+
+The TD 2025.32820 release card was already present at `src/td_mcp/knowledge/cards/release/2025.32820.json` (118 lines, 17 new ops + 21 changed ops + migration warnings + SDK versions). Indexed and exercised by `tests/test_skill_content.py` and `tests/_mock_dispatcher.py`. No new code required for this phase.
+
+### Phase v2.5.6 — Stdio discipline contract test (2026-05-18)
+
+Stdout is the MCP transport channel under stdio mode — any rogue `print()` corrupts JSON-RPC framing and breaks Claude Desktop / Claude Code. Upstream `dreamrec/TDPilot` v1.6.12 fixed a regression of this kind. v2.5.6 pins the contract via `tests/test_v25_stdio_discipline.py` so regressions get caught in CI rather than at the user's TD startup.
+
+- **+12 tests** total:
+  - 10 parameterized import tests covering hot-path modules (`td_mcp`, `td_mcp.audit`, `td_mcp.auth_bootstrap`, `td_mcp.capabilities`, `td_mcp.errors`, `td_mcp.observability`, `td_mcp.observability.activity_log`, `td_mcp.release_gates`, `td_mcp.services`, `td_mcp.telemetry`) — each MUST import with zero bytes on stdout
+  - 1 hot-path test: `record_activity` (called on every `_forward` tool dispatch) must not print to stdout
+  - 1 AST-based static scan of hot-path source files for `print(...)` calls that lack `file=sys.stderr` — robust against multi-line print formatting (the first heuristic flagged opening lines of multi-line stderr-targeted prints; AST walks the actual Call nodes)
+
+Audit findings: no rogue stdout-prints in hot-path modules; CLI subcommands in `td_mcp.server` (doctor, mcp-config, autopin) intentionally print to stdout because they're invoked via `tdpilot <subcommand>` outside stdio mode — the AST test excludes those by scope.
+
+### v2.5 tests overall
++59 from baseline (2000 → **2047 passing**):
+- v2.5.1 activity log + journal hints: +26
+- v2.5.4 env→file migration: +9
+- v2.5.6 stdio discipline contract: +12
+- (regenerated tool-schema snapshot included `td_get_activity_log`)
+
+### v2.5 status
+4 / 8 v2.5 phases complete (or already-done). Remaining: v2.5.2 OCR, v2.5.3 tool approval, v2.5.7 check_for_updates, v2.5.8 log receiver (stretch). See [`docs/plans/v2.5_IMPLEMENTATION_PLAN.md`](./docs/plans/v2.5_IMPLEMENTATION_PLAN.md).
+
+### Phase v2.5.2 — OCR sidecar (MCP-server side) (2026-05-19)
+
+Subprocess-based OCR via PaddleOCR. The ~400 MB OCR model never bloats the MCP server's RAM footprint because the worker lives in a separate process and is only spawned on first request. v2.5.2 lands MCP-server-side OCR with the new `td_ocr_image` tool; chat-pipe-side integration (decoding the Phase B screenshot b64 and feeding it to the worker) is deferred to a v2.5.2.1 follow-up after chat-pipe-Python-vs-MCP-Python subprocess details settle.
+
+- **New module `src/td_mcp/vision/ocr.py`** — `OcrManager` owns the worker lifecycle: lazy spawn on first request, ~5 s warm-up, idle-kill after 5 min, restart-on-crash up to 3× with exponential backoff, per-request 30 s timeout. Tuning via `TDPILOT_OCR_REQUEST_TIMEOUT` / `TDPILOT_OCR_IDLE_KILL` / `TDPILOT_OCR_MAX_RESTARTS` env vars.
+- **New worker `src/td_mcp/vision/ocr_worker.py`** — standalone Python script that reads JSON lines on stdin, runs PaddleOCR, writes JSON lines on stdout. PaddleOCR import is lazy (first request only); subsequent calls reuse the in-memory model. Per-language cache so multilingual sessions don't reload the model on each `lang=` switch.
+- **New MCP tool `td_ocr_image(path, lang='en')`** — returns text + per-string bounding boxes + per-string confidence + elapsed_ms. Graceful failure: `OcrUnavailable` (extras missing) → user-facing advisory with install command; `OcrTimeout` → advisory with env-var tuning suggestion; `FileNotFoundError` → simple path check. Tool count **106 → 107**.
+- **New optional dep group `[project.optional-dependencies] ocr`** — `paddleocr>=2.7` + `paddlepaddle>=2.6`. Install via `pip install -e .[ocr]`. Base install size unchanged.
+- **Pre-flight check** — before spawning the worker the manager runs `python -c 'import paddleocr'` in a subprocess so missing extras surface as a clean `OcrUnavailable` advisory, not a vague "worker died".
+- **+10 tests** in `tests/test_v25_ocr.py` covering pre-flight failure, manager happy path (spawn, reuse, result shape), error paths (missing image, worker error response, worker import-error response), singleton lifecycle, and a `@pytest.mark.skipif(not paddleocr_installed)` end-to-end test against a synthesized PIL PNG.
+
+Chat-pipe integration deferred: the chat-pipe agent runs inside TD's Python which doesn't share a venv with the MCP server. Subprocess spawning from TD's Python has PATH + native-lib complications. v2.5.2.1 will resolve via either (a) HTTP-call to the MCP server's OCR tool, or (b) bundled-venv detection.
+
+### Phase v2.5.7 — `td_check_for_updates` (2026-05-19)
+
+Read-only update awareness. Compares the running MCP server version against the latest GitHub Release on `dreamrec/TDPilot_deepseekv4` AND checks whether both `.tox` source hashes match the current source tree. The agent gets actionable advice for both server-update (npm/pip) and `.tox`-rebuild (TouchDesigner Textport) paths. Full apply-flow lives in v2.7's `td_self_update`.
+
+- **New module `src/td_mcp/lifecycle/update_check.py`** — GitHub Releases API client (urllib, no new deps; 5 s HTTP timeout) with 1-hour in-memory cache. Parses semver-ish tags including pre-release suffixes (`v2.5.0-alpha.1` → `(2, 5, 0, 0, 1)`).
+- **`.tox` source-hash drift detection** — recomputes the SHA256 over `_TOX_SOURCE_FILES` for both `.tox` files using the SAME byte-stream-with-NUL-separator scheme as `build_export_mcp_tox._compute_tox_source_hash` and `build_tdpilot_api_tox._compute_api_tox_source_hash`. Compares against the stored `tox_source_hash` field in each `.tox-*-source-hash.json` sidecar.
+- **Graceful failure** — network errors don't raise. Server check returns `{check_failed: True, reason: "..."}` while `.tox` freshness is still computed locally. The agent gets partial info instead of nothing.
+- **New MCP tool `td_check_for_updates()`** — registered via `src/td_mcp/registry/tools_lifecycle.py`. Cached for 1h. Tool count **107 → 108**.
+- **+15 tests** in `tests/test_v25_check_updates.py` covering version parsing (5), hash-scheme parity with build scripts (1; this is the load-bearing test), tox freshness (3), server-version-from-mocked-GitHub (3), cache TTL (2), and result shape (1). Network failure is exercised by patching `urllib.request.urlopen` to raise.
+
+The hash-scheme-parity test reproduces the exact NUL-separator concatenation used by both build scripts and asserts byte-identical output — guards against future drift if anyone changes the build-script hash function without updating the read path.
+
+### v2.5 status (updated)
+6 / 8 v2.5 phases complete. Remaining: v2.5.3 tool approval gates, v2.5.8 log receiver (stretch). See [`docs/plans/v2.5_IMPLEMENTATION_PLAN.md`](./docs/plans/v2.5_IMPLEMENTATION_PLAN.md).
+
+### Phase v2.5.3 — Tool approval gates (2026-05-19)
+
+Runtime click-through gate for destructive tools. Composes with the v2.4 user-intent gate (B-008, system-prompt level) + the Authmode auth layer. The dispatcher never even runs unless the user clicks Approve in the chat banner within the 30-second timeout — defense in depth.
+
+- **New module `td_component/tdpilot_api_approval.py`** — `is_approval_required(tool, args, mode, agent_comp_path)` decision function + `ApprovalRegistry` (threading.Event-backed pending-approvals dict) + `request_approval_or_skip(...)` orchestrator that blocks the worker thread up to `timeout_s` while the cook thread waits for a click. Pre-resolved agent COMP path (captured at runtime init) means path-aware gates work without crossing the TD cook-thread invariant.
+- **Three modes via new `Approvalmode` Menu COMP param** — `destructive_only` (default), `off`, `all`. Defaults to the conservative choice because `td_exec_python` is in the toolbelt. `TDPILOT_DISABLE_TOOL_APPROVAL` env var hard-overrides to off for CI/unattended use.
+- **Destructive tool set** (conservative): `td_exec_python`, `td_delete_node`, `td_restore_snapshot`, `snapshot_restore_scoped`, `td_disconnect` always. Path-aware: `td_rename_node`, `td_set_content` gate ONLY when target path is OUTSIDE the agent's own COMP — the agent freely manages its own machinery without prompts.
+- **Agent integration in `_loop`** — approval check runs BETWEEN cycle_ledger.record (B-010) and dispatcher (v2.4). Deny / timeout synthesises a `_tool_error=True` dict so existing recovery + activity-ring + journal-hint paths handle it without special-casing. Approval failures NEVER block dispatch — exception in provider → log + dispatch normally.
+- **WebSocket protocol** — server pushes `{"type":"approval_request","id","tool","args","timeout_ms"}`; client POSTs to new `/approve` HTTP endpoint with `{"id","decision","reason"}`. Decision routes through `runtime.record_approval_response` which signals the registry's threading.Event.
+- **Chat HTML banner** — yellow alert-dialog above the chat with tool name, formatted args, Approve/Deny buttons, and a 30-second countdown. Server's timeout fires server-side; the UI just disables buttons at zero to prevent fight-the-server races.
+- **+22 tests** in `tests/test_v25_tool_approval.py` — gate decision matrix (mode × tool × path), registry CRUD, threaded approve / deny / timeout flows via real `threading.Event`, `on_request`-exception-defaults-to-deny fail-safe, denial-result shape contract.
+
+### Phase v2.5.8 — `td_get_traces` MCP tool (2026-05-19)
+
+Trace viewer surface. Leverages the existing `tdpilot_api_tracing` infrastructure (per-turn JSONL files at `~/.tdpilot-api/traces/<YYYY-MM-DD>.jsonl`, 30-day retention) — adds a single MCP tool so external agents (Claude Code / Claude Desktop) can query chat-pipe trace history without scraping files manually.
+
+- **New module `src/td_mcp/lifecycle/traces.py`** — pure-Python `iter_jsonl_files(traces_dir, days_back)` + `read_last_n_jsonl(paths, limit)` helpers. Tail-reads files (reverse line walk) so multi-MB days don't blow up RAM when the caller wants 20 records.
+- **New MCP tool `td_get_traces(limit=20, days_back=7)`** via `src/td_mcp/registry/tools_traces.py`. Inputs clamped to safe ranges (limit 1-500, days_back 1-30 to match tracer retention). Newest-first ordering. Malformed JSON lines skipped silently. Tool count **108 → 109**.
+- **Complements `td_get_activity_log` (v2.5.1)** — that tool is a 200-entry RAM ring for the current MCP-server session. `td_get_traces` reads cross-session disk-persisted records written by the chat-pipe agent. Different scope, different audience, complementary surfaces.
+- **+10 tests** in `tests/test_v25_traces.py` — date-window filtering, newest-first ordering, limit clamp, malformed-filename + malformed-line skip, missing-dir graceful empty.
+
+### v2.5 status (updated)
+**8 / 8 v2.5 phases complete** (v2.5.1, v2.5.2, v2.5.3, v2.5.4, v2.5.5, v2.5.6, v2.5.7, v2.5.8). v2.5 is feature-complete and ready for release-engineering (version bumps, doc-count sync, tag + `gh release create`).
+
+### v2.5 tests overall (final)
++99 from v2.4 baseline (2000 → **2099 passing**, 1 skipped real-OCR):
+- v2.5.1 activity log + journal hints: +26
+- v2.5.4 env→file migration: +9
+- v2.5.6 stdio discipline contract: +12
+- v2.5.2 OCR sidecar: +10 (+1 skipped)
+- v2.5.7 check_for_updates: +15
+- v2.5.3 tool approval gates: +22
+- v2.5.8 trace viewer: +10
+- (regenerated tool-schema snapshot captures td_get_activity_log, td_ocr_image, td_check_for_updates, td_get_traces)
+
+### v2.5 tool count progression
+v2.4: 105 → v2.5.1: 106 → v2.5.2: 107 → v2.5.7: 108 → v2.5.8: **109**. v2.5.3 + v2.5.4 + v2.5.6 add no MCP tools (gates / fallbacks / contracts).
+
+### v2.5 tests overall (updated)
++71 from v2.4 baseline (2000 → **2071 passing**):
+- v2.5.1 activity log + journal hints: +26
+- v2.5.4 env→file migration: +9
+- v2.5.6 stdio discipline contract: +12
+- v2.5.2 OCR sidecar: +10 (+1 skipped real-OCR integration test)
+- v2.5.7 check_for_updates: +15
+- (regenerated tool-schema snapshot included td_get_activity_log, td_ocr_image, td_check_for_updates)
+
+---
+
 ## 2.4.0 - 2026-05-13
 
 **Multi-phase v2.4 release** — Phase A (zero-risk MCP additions) + Phase B (vision pipeline + auth wizard + content_type) + most of Phase C (cost tracking, capability summary, MIDI, circuit breaker, thinking budget), plus a same-day live-debug stack closing **10 bugs (B-001..B-010)** surfaced while running the canonical failing prompt "Build a kaleidoscope feedback loop" end-to-end. The kaleidoscope task that failed every attempt before this release now succeeds with smooth-trail feedback. Tool count 93 → 105.

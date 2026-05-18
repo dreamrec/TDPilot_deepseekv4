@@ -175,6 +175,24 @@ _API_PAGE = [
     # default-secure is the right tradeoff for an agent with td_exec_python
     # in its toolbelt.
     ("Authmode", "Menu", "Auth Mode", ("token", "open")),
+    # v2.5.3 — tool approval gates. Runtime layer that blocks
+    # destructive tool dispatches until the user clicks Approve in
+    # the chat panel (30s timeout default; timeout = deny).
+    #   off              — no checks; full agent autonomy.
+    #   destructive_only — gate td_exec_python, td_delete_node,
+    #                      td_restore_snapshot, snapshot_restore_scoped,
+    #                      td_disconnect, plus td_rename_node /
+    #                      td_set_content when target is outside the
+    #                      agent's own COMP. DEFAULT.
+    #   all              — gate every tool. Paranoid.
+    # ``TDPILOT_DISABLE_TOOL_APPROVAL`` env var hard-overrides to off
+    # for CI / unattended runs.
+    (
+        "Approvalmode",
+        "Menu",
+        "Tool Approval",
+        ("destructive_only", "off", "all"),
+    ),
 ]
 
 _CHAT_PAGE = [
@@ -250,6 +268,12 @@ _SOURCE_FILES = (
     # CycleDetected from this module on the first turn (avoiding the
     # circular import — cycle_detector imports AgentError from agent).
     ("tdpilot_api_cycle_detector", "textDAT", "td_component/tdpilot_api_cycle_detector.py"),
+    # v2.5.1 — activity ring + journal hints. Companion to cycle_detector;
+    # gives the agent runtime visibility into its own tool-call history.
+    ("tdpilot_api_activity_log", "textDAT", "td_component/tdpilot_api_activity_log.py"),
+    # v2.5.3 — tool approval gates. Runtime click-through for destructive
+    # tools. Composes with the user-intent gate (B-008) and Authmode.
+    ("tdpilot_api_approval", "textDAT", "td_component/tdpilot_api_approval.py"),
     ("tdpilot_api_tracing", "textDAT", "td_component/tdpilot_api_tracing.py"),
     ("tdpilot_api_compaction", "textDAT", "td_component/tdpilot_api_compaction.py"),
     ("tdpilot_api_chat_html", "textDAT", "td_component/tdpilot_api_chat.html"),

@@ -128,6 +128,11 @@
       "path"
     ]
   },
+  "td_check_for_updates": {
+    "description_present": true,
+    "properties": {},
+    "required": []
+  },
   "td_chop_data": {
     "description_present": true,
     "properties": {
@@ -696,6 +701,36 @@
       "path"
     ]
   },
+  "td_get_activity_log": {
+    "description_present": true,
+    "properties": {
+      "limit": {
+        "any_of_types": [],
+        "default_present": true,
+        "enum": null,
+        "type": "integer"
+      },
+      "since_ts": {
+        "any_of_types": [
+          "null",
+          "number"
+        ],
+        "default_present": true,
+        "enum": null,
+        "type": null
+      },
+      "tool_filter": {
+        "any_of_types": [
+          "null",
+          "string"
+        ],
+        "default_present": true,
+        "enum": null,
+        "type": null
+      }
+    },
+    "required": []
+  },
   "td_get_build_compatibility": {
     "description_present": true,
     "properties": {
@@ -1149,6 +1184,24 @@
         "default_present": true,
         "enum": null,
         "type": null
+      }
+    },
+    "required": []
+  },
+  "td_get_traces": {
+    "description_present": true,
+    "properties": {
+      "days_back": {
+        "any_of_types": [],
+        "default_present": true,
+        "enum": null,
+        "type": "integer"
+      },
+      "limit": {
+        "any_of_types": [],
+        "default_present": true,
+        "enum": null,
+        "type": "integer"
       }
     },
     "required": []
@@ -1789,6 +1842,26 @@
         "default_present": true,
         "enum": null,
         "type": "number"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "td_ocr_image": {
+    "description_present": true,
+    "properties": {
+      "lang": {
+        "any_of_types": [],
+        "default_present": true,
+        "enum": null,
+        "type": "string"
+      },
+      "path": {
+        "any_of_types": [],
+        "default_present": false,
+        "enum": null,
+        "type": "string"
       }
     },
     "required": [

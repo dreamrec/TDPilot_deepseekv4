@@ -428,7 +428,15 @@ SYSTEM_PROMPT_BASE = (
     "inspect upstream connections via td_get_connections, force a recook "
     "via td_exec_python and then probe a DIFFERENT downstream node, or "
     "report the stuckness to the user. Repeating a probe expecting "
-    "different output is an infinite-loop pattern, not progress.\n\n"
+    "different output is an infinite-loop pattern, not progress.\n"
+    "  **Runtime journal hints (v2.5.1):** when you call the same tool "
+    "with the same args twice this turn, the tool_result you receive "
+    "will carry a ``_read_journal`` field with ``call_count`` and "
+    "``calls_until_cycle_detect``. Treat that field as a hard signal — "
+    "the runtime is telling you you're one call away from a forced "
+    "turn-end. Switch strategy on the spot; do not issue the third "
+    "identical call. You can also call ``td_get_activity_log`` at any "
+    "time to inspect your own tool-call history this session.\n\n"
     "**Parallel inspection via tool_batch.** When you need 2+ independent "
     "READ-ONLY lookups in the same turn (info + errors + audit, or "
     "memory_recall + knowledge_search + td_get_hints), issue them as a "
@@ -955,6 +963,15 @@ class AgentRuntime:
             # the factory; ``None`` means cycle detection is off
             # for the lifetime of this Agent instance.
             cycle_ledger_factory=self._build_cycle_ledger_factory(),
+            # v2.5.1 — activity-ring factory. Parallels cycle_ledger:
+            # per-turn instance, emits _read_journal hints in tool
+            # results at count=2 (last call before cycle-detect kills
+            # the turn). Honours TDPILOT_DISABLE_ACTIVITY_LOG env var.
+            activity_ring_factory=self._build_activity_ring_factory(),
+            # v2.5.3 — tool approval provider. Reads Approvalmode COMP
+            # param at request time; blocks the worker until the user
+            # clicks Approve/Deny in the chat banner (or 30s timeout).
+            approval_provider=self._build_approval_provider(),
             # v2.4 / Phase B.1 — screenshot vision pipeline. Off by
             # default; flip to ON by setting env var
             # TDPILOT_VISION_PIPELINE=1 (or COMP param if we add one
@@ -1043,6 +1060,135 @@ class AgentRuntime:
         # the COMP-param wiring lands, read ``self._config["cycle_threshold"]``
         # here and pass through.
         return cd.build_cycle_ledger_factory()
+
+    def _build_activity_ring_factory(self) -> Callable[[], Any] | None:
+        """Return a zero-arg factory ``() -> ActivityRing`` or ``None``
+        if observability is disabled (env var
+        ``TDPILOT_DISABLE_ACTIVITY_LOG`` or module unavailable).
+
+        v2.5.1. Parallels ``_build_cycle_ledger_factory`` — the activity
+        ring is built once per turn alongside the cycle ledger and used
+        to emit ``_read_journal`` hints on tool results when the same
+        ``(tool_name, args_hash)`` has fired twice this turn.
+        """
+        if os.environ.get("TDPILOT_DISABLE_ACTIVITY_LOG"):
+            print("[tdpilot_API/runtime] activity log disabled via TDPILOT_DISABLE_ACTIVITY_LOG")
+            return None
+        try:
+            import tdpilot_api_activity_log as al  # type: ignore[import-not-found]
+        except ImportError:
+            return None
+        maxlen_cfg = self._config.get("activity_ring_maxlen")
+        try:
+            maxlen = int(maxlen_cfg) if maxlen_cfg else None
+        except (TypeError, ValueError):
+            maxlen = None
+        return al.build_activity_ring_factory(maxlen=maxlen)
+
+    # ------------------------------------------------------------------
+    # v2.5.3 — tool approval gate
+    # ------------------------------------------------------------------
+
+    def _build_approval_provider(self):
+        """Return a callable ``(tool_name, args) -> (decision, reason)``
+        or ``None`` if approval is disabled.
+
+        The callable is invoked from the worker thread (inside the
+        agent's dispatch loop). It reads the ``Approvalmode`` COMP
+        param at REQUEST time (not at runtime init), so the user can
+        flip the mode mid-session and the change takes effect on the
+        next tool dispatch.
+
+        Honours ``TDPILOT_DISABLE_TOOL_APPROVAL`` env var as a hard
+        off-switch — env var wins over the COMP param. The env var is
+        intended for unattended / CI execution; users flip the COMP
+        param normally.
+        """
+        if os.environ.get("TDPILOT_DISABLE_TOOL_APPROVAL"):
+            print("[tdpilot_API/runtime] tool approval disabled via TDPILOT_DISABLE_TOOL_APPROVAL")
+            return None
+        try:
+            import tdpilot_api_approval as ap  # type: ignore[import-not-found]
+        except ImportError:
+            return None
+
+        # Lazy-init the registry as an attribute on self so it survives
+        # across turns (and the HTTP handler can poke at the SAME
+        # instance).
+        if not hasattr(self, "_approval_registry") or self._approval_registry is None:
+            self._approval_registry = ap.ApprovalRegistry()
+
+        # Pre-compute the agent COMP path on the cook thread (this
+        # method runs at AgentRuntime init time, which is cook thread).
+        # parent() can't be called from the worker thread, so the
+        # provider closure captures the resolved string.
+        agent_comp_path = ""
+        try:
+            comp = self._comp
+            if comp is not None:
+                agent_comp_path = comp.path  # cook-thread-only attr access
+        except Exception:
+            agent_comp_path = ""
+
+        registry = self._approval_registry
+        timeout_s = float(self._config.get("approval_timeout_s", ap.DEFAULT_TIMEOUT_S))
+
+        def _read_mode_at_request_time() -> str:
+            try:
+                par = self._comp.par.Approvalmode
+                # ``.val`` reads the current parameter value without
+                # the ``.eval()`` method name (security-hook collision).
+                val = par.val
+                if val in ap.VALID_MODES:
+                    return val
+            except Exception:
+                pass
+            return ap.DEFAULT_MODE
+
+        def _on_request(approval_id, tool_name, args, timeout_ms):
+            # Push WS event so the chat HTML banner appears. The
+            # extension's broadcaster handles serialisation; we just
+            # call its method (cook-thread-safe per
+            # tdpilot_api_chat_pipe architecture).
+            try:
+                ext = self._ext
+                if ext is not None and hasattr(ext, "push_approval_request"):
+                    ext.push_approval_request(approval_id, tool_name, args, timeout_ms)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[tdpilot_API/runtime] push_approval_request failed: {exc}")
+
+        def _provider(tool_name, tool_args):
+            mode = _read_mode_at_request_time()
+            return ap.request_approval_or_skip(
+                tool_name=tool_name,
+                args=tool_args,
+                mode=mode,
+                agent_comp_path=agent_comp_path,
+                registry=registry,
+                on_request=_on_request,
+                timeout_s=timeout_s,
+            )
+
+        return _provider
+
+    def record_approval_response(self, approval_id: str, decision: str, reason: str = "") -> bool:
+        """Called by the HTTP /approve handler when the user clicks
+        Approve/Deny in the chat banner. Returns True if the id was
+        live (200 OK), False if stale or unknown (404).
+
+        Thread-safety: ApprovalRegistry uses an internal lock, and the
+        event signalling is atomic. Safe to call from any thread.
+        """
+        registry = getattr(self, "_approval_registry", None)
+        if registry is None:
+            return False
+        try:
+            import tdpilot_api_approval as ap  # type: ignore[import-not-found]
+        except ImportError:
+            return False
+        if decision not in (ap.DECISION_APPROVE, ap.DECISION_DENY):
+            return False
+        return registry.record_response(approval_id, decision, reason)
 
     # ------------------------------------------------------------------
     # Phase 4.1 — observability tracer

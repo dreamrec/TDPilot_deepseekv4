@@ -819,6 +819,55 @@
     border-color: var(--rule);
     cursor: not-allowed;
   }
+
+  /* v2.5.3 — tool approval banner */
+  #approval-banner {
+    display: none;
+    margin: 8px 12px;
+    padding: 10px 12px;
+    border: 1px solid #d4a800;
+    background: rgba(212, 168, 0, 0.08);
+    color: var(--text);
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  #approval-banner.visible { display: block; }
+  #approval-banner .ab-tool {
+    color: var(--accent, #d4a800);
+    font-weight: 600;
+  }
+  #approval-banner .ab-args {
+    margin-top: 4px;
+    font-family: var(--mono, "SF Mono", Menlo, monospace);
+    font-size: 11px;
+    color: var(--muted);
+    word-break: break-all;
+    max-height: 80px;
+    overflow-y: auto;
+  }
+  #approval-banner .ab-buttons {
+    margin-top: 8px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  #approval-banner button {
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--text);
+    padding: 4px 12px;
+    cursor: pointer;
+    font: inherit;
+  }
+  #approval-banner button.approve { border-color: #6dd479; color: #6dd479; }
+  #approval-banner button.deny    { border-color: #d46d6d; color: #d46d6d; }
+  #approval-banner button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #approval-banner .ab-countdown {
+    margin-left: auto;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
 </style>
 </head>
 <body>
@@ -833,6 +882,21 @@
             aria-pressed="false">
       <span class="qm-glyph">●</span>
     </button>
+  </div>
+  <!-- v2.5.3 — tool approval banner. Hidden by default. The
+       showApprovalBanner JS handler reveals it on approval_request
+       WS events. Position above the chat history so it doesn't get
+       hidden under scrolling content. -->
+  <div id="approval-banner" role="alertdialog" aria-live="assertive">
+    <div>
+      Tool approval requested: <span class="ab-tool" id="approval-banner-tool">—</span>
+    </div>
+    <div class="ab-args" id="approval-banner-args"></div>
+    <div class="ab-buttons">
+      <button type="button" class="approve" id="approval-banner-approve">approve</button>
+      <button type="button" class="deny" id="approval-banner-deny">deny</button>
+      <span class="ab-countdown" id="approval-banner-countdown">30s</span>
+    </div>
   </div>
   <!--
     History is intentionally empty on initial DOM. The IIFE injects the
@@ -2428,12 +2492,99 @@
       case 'usage_session': updateSessionMeter(msg.session || {}); break;
       case 'fullSync':     fullSync(msg.rows || []); break;
       case 'clear':        fullSync([]); break;
+      // v2.5.3 — tool approval banner. Server pushes
+      // approval_request when the agent is about to run a
+      // destructive tool; the banner blocks the chat input until the
+      // user clicks Approve / Deny or the 30 s timeout fires.
+      case 'approval_request': showApprovalBanner(msg); break;
     }
     // Activity watchdog: any event from the runtime proves it's alive.
     // The 'status' case may have already cleared awaitingTurnEnd via
     // setAgentStatus → clearAwaitingTurnEnd (when status was idle/done/
     // error); in that case the guard skips the re-arm and lets idle stick.
     if (awaitingTurnEnd) armTurnEndWatchdog();
+  }
+
+  // v2.5.3 — tool approval banner. Shown when the server pushes an
+  // approval_request WS event; the user clicks Approve / Deny (or
+  // the 30 s countdown elapses, in which case the SERVER decides
+  // timeout — we don't auto-POST, we just disable the buttons so a
+  // late click doesn't fight the server). POST /approve carries
+  // {id, decision} back to the runtime, which signals the worker
+  // thread blocked on threading.Event.wait inside the agent loop.
+  let _approvalCountdownTimer = null;
+  function showApprovalBanner(msg) {
+    const banner = document.getElementById('approval-banner');
+    const toolEl = document.getElementById('approval-banner-tool');
+    const argsEl = document.getElementById('approval-banner-args');
+    const approveBtn = document.getElementById('approval-banner-approve');
+    const denyBtn = document.getElementById('approval-banner-deny');
+    const countdownEl = document.getElementById('approval-banner-countdown');
+    if (!banner || !toolEl || !approveBtn || !denyBtn) return;
+
+    const approvalId = msg.id || '';
+    const toolName = msg.tool || '(unknown)';
+    const args = msg.args || {};
+    const timeoutMs = Number(msg.timeout_ms) || 30000;
+
+    toolEl.textContent = toolName;
+    try {
+      argsEl.textContent = JSON.stringify(args, null, 2);
+    } catch (_) {
+      argsEl.textContent = String(args);
+    }
+
+    let remainingMs = timeoutMs;
+    const tick = () => {
+      remainingMs -= 250;
+      const s = Math.max(0, Math.ceil(remainingMs / 1000));
+      countdownEl.textContent = s + 's';
+      if (remainingMs <= 0) {
+        clearInterval(_approvalCountdownTimer);
+        _approvalCountdownTimer = null;
+        // Buttons disabled at zero — the server's timeout fires server-side.
+        approveBtn.disabled = true;
+        denyBtn.disabled = true;
+        countdownEl.textContent = 'timeout';
+      }
+    };
+    countdownEl.textContent = Math.ceil(timeoutMs / 1000) + 's';
+    if (_approvalCountdownTimer) clearInterval(_approvalCountdownTimer);
+    _approvalCountdownTimer = setInterval(tick, 250);
+
+    approveBtn.disabled = false;
+    denyBtn.disabled = false;
+    banner.classList.add('visible');
+
+    const finish = () => {
+      banner.classList.remove('visible');
+      approveBtn.disabled = true;
+      denyBtn.disabled = true;
+      if (_approvalCountdownTimer) {
+        clearInterval(_approvalCountdownTimer);
+        _approvalCountdownTimer = null;
+      }
+    };
+
+    const post = async (decision) => {
+      approveBtn.disabled = true;
+      denyBtn.disabled = true;
+      try {
+        const body = JSON.stringify({ id: approvalId, decision });
+        const url = `http://${TD_HOST}:${TD_PORT}/approve`;
+        const headers = HAS_VALID_TOKEN
+          ? { 'Content-Type': 'application/json', 'X-TDPilot-Token': TOKEN }
+          : { 'Content-Type': 'application/json' };
+        await fetch(url, { method: 'POST', headers, body });
+      } catch (err) {
+        console.error('[tdpilot] /approve POST failed', err);
+      } finally {
+        finish();
+      }
+    };
+
+    approveBtn.onclick = () => post('approve');
+    denyBtn.onclick = () => post('deny');
   }
 
   function connectWS() {
