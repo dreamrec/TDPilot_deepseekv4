@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.5.1 - 2026-05-19
+
+**Chat-pipe alias for `td_get_traces` (live-audit follow-up).** Closes the live-chat-audit gap from the v2.5.0 ship: the chat-pipe agent's 94-tool standalone surface did not expose `td_get_traces` because its dispatcher already registered the matching handler under the long name `handle_get_recent_traces`. Adding `td_get_traces` as a `TOOL_TO_HANDLER` + `TOOL_SCHEMAS` alias resolves the gap without duplicating the handler — net code delta is 4 lines plus a .tox rebuild.
+
+Chat-pipe standalone surface: **94 → 95 tools** (the MCP CLI surface stays at 109; both .tox files were rebuilt with `API_VERSION = "2.5.1"` to keep the lockstep invariant from v1.6.5).
+
+T6 live-verification against the rebuilt API `.tox`:
+```
+user:        Call td_get_traces with limit=5 and tell me how many records...
+tool_call:   td_get_traces({'limit': 5})
+tool_result: td_get_traces → ok
+assistant:   5 trace records came back.
+```
+
+PR #47 squash-merged as `60f76268`. CI green across all 6 checks (lint + 3 python versions + 2 install-parse). No deferred items from the v2.5.0 live-audit remain open at the chat-pipe surface; v2.5.1.2 + v2.5.1.3 (chat-pipe activity-log + check-for-updates) remain logged for a future patch.
+
 ## 2.5.0 - 2026-05-19
 
 **Agent self-awareness + safety + distribution polish.** Eight phases shipped end-to-end: activity log + journal hints (v2.5.1), OCR sidecar (v2.5.2), tool approval gates (v2.5.3), auth env→file migration (v2.5.4), TD 2025.32820 release card (v2.5.5 — already-shipped), stdio discipline contract test (v2.5.6), `td_check_for_updates` (v2.5.7), trace viewer (v2.5.8). **Tool count 105 → 109.** Live-debug-style live-TD verification on the rebuilt `.tox`: all 6 new modules import cleanly, `is_approval_required` + `build_denied_result` return exact contract outputs against the live COMP. Full suite: 2000 → **2099 passing** (+99, +1 skipped paddleocr e2e). CI green across lint + test (3.10/3.11/3.12) + install-parse (macos/windows).
