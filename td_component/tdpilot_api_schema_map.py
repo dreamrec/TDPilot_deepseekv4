@@ -213,6 +213,11 @@ TOOL_TO_HANDLER: dict[str, tuple[str, Callable[[dict], dict]]] = {
     "tool_batch": ("handle_tool_batch", _id),
     # ---- Observability traces (Phase 4.1 — handler in tdpilot_api_tracing.py) ----
     "td_get_recent_traces": ("handle_get_recent_traces", _id),
+    # v2.5.1.1 alias — the MCP-server v2.5.8 release shipped this tool
+    # name (``td_get_traces``); the chat-pipe agent's surface gains
+    # the alias so docs/agents that use either name keep working.
+    # Discovered via the 10-test live-driven chat audit on 2026-05-19.
+    "td_get_traces": ("handle_get_recent_traces", _id),
     # ---- Auto-rollback internal handlers (v2.2.0 — handlers in
     # tdpilot_api_rollback.py). Registered here so the dispatcher can
     # resolve them, but NOT added to TOOL_SCHEMAS in tdpilot_api_schema_defs

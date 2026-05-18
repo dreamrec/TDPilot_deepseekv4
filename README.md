@@ -14,7 +14,7 @@
 [![downloads](https://img.shields.io/npm/dm/tdpilot-dpsk4?label=downloads)](https://www.npmjs.com/package/tdpilot-dpsk4)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![python](https://img.shields.io/badge/python-3.10%2B-blue)](./pyproject.toml)
-[![tools](https://img.shields.io/badge/tools-94%20%28standalone%29%20%C2%B7%20109%20%28CLI%29-blueviolet)](./docs/MANUAL.md)
+[![tools](https://img.shields.io/badge/tools-95%20%28standalone%29%20%C2%B7%20109%20%28CLI%29-blueviolet)](./docs/MANUAL.md)
 [![TouchDesigner](https://img.shields.io/badge/TouchDesigner-2025.30000%2B-ff6200)](https://derivative.ca)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-v4-00a86b)](https://deepseek.com)
 
@@ -28,7 +28,7 @@ Two ways to run it. They coexist in the same TD project if you want both.
 |---|---|---|
 | **Install effort** | Drag one file in, paste a key. | Install Claude Code, install the plugin, configure MCP. |
 | **Where chat lives** | Browser tab + a panel inside TD. | Your Claude Code terminal. |
-| **Tools** | 94 curated for in-TD use | 109 (full surface) |
+| **Tools** | 95 curated for in-TD use | 109 (full surface) |
 | **Best for** | Live performance, quick patches, demos, "no setup" use | Heavy multi-file projects, long sessions, full Claude Code ecosystem |
 | **TD port** | 9987 | 9985 + 9986 |
 | **Config dir** | `~/.tdpilot-api/` | `~/.tdpilot-dpsk4/` |
@@ -235,7 +235,7 @@ Both variants run on the same DeepSeek backend and share the same TD-side handle
 | **First-run wizard** | The chat panel polls `/firstrun` and renders a 3-step quickstart checklist (paste key → install brain → save first memory) until completion |
 | **Doctor `--live`** | `python3 scripts/doctor_live.py [--deep]` probes webserver health, key validity, brain inventory, memory + user-tool dirs |
 
-The standalone has 94 tools that cover the everyday inspect → build → wire → verify loop, plus persistent memory, knowledge corpus, recipes, snapshots, subagents (parallel fan-out), multi-model routing (auto/flash/pro), macros, user-pluggable tools (drop a `.py` in `~/.tdpilot-api/tools/`), official-docs lookup against the derivative corpus, TD 2025 runtime introspection (Python env, threading, color pipeline), and project-audit + recipe-validation utilities.
+The standalone has 95 tools that cover the everyday inspect → build → wire → verify loop, plus persistent memory, knowledge corpus, recipes, snapshots, subagents (parallel fan-out), multi-model routing (auto/flash/pro), macros, user-pluggable tools (drop a `.py` in `~/.tdpilot-api/tools/`), official-docs lookup against the derivative corpus, TD 2025 runtime introspection (Python env, threading, color pipeline), and project-audit + recipe-validation utilities.
 
 **Run both at the same time.** The two .tox files coexist in the same TD project — different ports, different config dirs, different COMP names. Standalone in the browser for quick chat, CLI in the terminal for heavy work.
 
