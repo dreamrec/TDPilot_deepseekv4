@@ -17,4 +17,5 @@ from __future__ import annotations
 # 2026-05-12: bumped 103 → 104 with td_midi_devices (v2.4 / Phase C.2).
 # 2026-05-12: bumped 104 → 105 with td_get_capabilities_summary (v2.4 / Phase C.6).
 # 2026-05-18: bumped 105 → 106 with td_get_activity_log (v2.5.1).
-EXPECTED_MIN_TOOL_COUNT: int = 106
+# 2026-05-19: bumped 106 → 108 with td_ocr_image (v2.5.2) + td_check_for_updates (v2.5.7).
+EXPECTED_MIN_TOOL_COUNT: int = 108

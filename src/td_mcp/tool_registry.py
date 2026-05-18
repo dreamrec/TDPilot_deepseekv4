@@ -2063,6 +2063,9 @@ from td_mcp.registry.tools_knowledge_store import (  # noqa: E402
     td_knowledge_recall,
     td_knowledge_save,
 )
+from td_mcp.registry.tools_lifecycle import (  # noqa: F401, E402  — registers 1 v2.5.7 tool
+    td_check_for_updates,
+)
 from td_mcp.registry.tools_macros import (  # noqa: E402
     td_create_macro,
     td_get_macro_params,
@@ -2085,6 +2088,9 @@ from td_mcp.registry.tools_notes import (  # noqa: E402
 )
 from td_mcp.registry.tools_observability import (  # noqa: F401, E402  — registers 1 v2.5.1 tool
     td_get_activity_log,
+)
+from td_mcp.registry.tools_ocr import (  # noqa: F401, E402  — registers 1 v2.5.2 tool
+    td_ocr_image,
 )
 from td_mcp.registry.tools_optimizer import (  # noqa: E402
     td_describe_dynamics,

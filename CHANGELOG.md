@@ -54,6 +54,43 @@ Audit findings: no rogue stdout-prints in hot-path modules; CLI subcommands in `
 ### v2.5 status
 4 / 8 v2.5 phases complete (or already-done). Remaining: v2.5.2 OCR, v2.5.3 tool approval, v2.5.7 check_for_updates, v2.5.8 log receiver (stretch). See [`docs/plans/v2.5_IMPLEMENTATION_PLAN.md`](./docs/plans/v2.5_IMPLEMENTATION_PLAN.md).
 
+### Phase v2.5.2 — OCR sidecar (MCP-server side) (2026-05-19)
+
+Subprocess-based OCR via PaddleOCR. The ~400 MB OCR model never bloats the MCP server's RAM footprint because the worker lives in a separate process and is only spawned on first request. v2.5.2 lands MCP-server-side OCR with the new `td_ocr_image` tool; chat-pipe-side integration (decoding the Phase B screenshot b64 and feeding it to the worker) is deferred to a v2.5.2.1 follow-up after chat-pipe-Python-vs-MCP-Python subprocess details settle.
+
+- **New module `src/td_mcp/vision/ocr.py`** — `OcrManager` owns the worker lifecycle: lazy spawn on first request, ~5 s warm-up, idle-kill after 5 min, restart-on-crash up to 3× with exponential backoff, per-request 30 s timeout. Tuning via `TDPILOT_OCR_REQUEST_TIMEOUT` / `TDPILOT_OCR_IDLE_KILL` / `TDPILOT_OCR_MAX_RESTARTS` env vars.
+- **New worker `src/td_mcp/vision/ocr_worker.py`** — standalone Python script that reads JSON lines on stdin, runs PaddleOCR, writes JSON lines on stdout. PaddleOCR import is lazy (first request only); subsequent calls reuse the in-memory model. Per-language cache so multilingual sessions don't reload the model on each `lang=` switch.
+- **New MCP tool `td_ocr_image(path, lang='en')`** — returns text + per-string bounding boxes + per-string confidence + elapsed_ms. Graceful failure: `OcrUnavailable` (extras missing) → user-facing advisory with install command; `OcrTimeout` → advisory with env-var tuning suggestion; `FileNotFoundError` → simple path check. Tool count **106 → 107**.
+- **New optional dep group `[project.optional-dependencies] ocr`** — `paddleocr>=2.7` + `paddlepaddle>=2.6`. Install via `pip install -e .[ocr]`. Base install size unchanged.
+- **Pre-flight check** — before spawning the worker the manager runs `python -c 'import paddleocr'` in a subprocess so missing extras surface as a clean `OcrUnavailable` advisory, not a vague "worker died".
+- **+10 tests** in `tests/test_v25_ocr.py` covering pre-flight failure, manager happy path (spawn, reuse, result shape), error paths (missing image, worker error response, worker import-error response), singleton lifecycle, and a `@pytest.mark.skipif(not paddleocr_installed)` end-to-end test against a synthesized PIL PNG.
+
+Chat-pipe integration deferred: the chat-pipe agent runs inside TD's Python which doesn't share a venv with the MCP server. Subprocess spawning from TD's Python has PATH + native-lib complications. v2.5.2.1 will resolve via either (a) HTTP-call to the MCP server's OCR tool, or (b) bundled-venv detection.
+
+### Phase v2.5.7 — `td_check_for_updates` (2026-05-19)
+
+Read-only update awareness. Compares the running MCP server version against the latest GitHub Release on `dreamrec/TDPilot_deepseekv4` AND checks whether both `.tox` source hashes match the current source tree. The agent gets actionable advice for both server-update (npm/pip) and `.tox`-rebuild (TouchDesigner Textport) paths. Full apply-flow lives in v2.7's `td_self_update`.
+
+- **New module `src/td_mcp/lifecycle/update_check.py`** — GitHub Releases API client (urllib, no new deps; 5 s HTTP timeout) with 1-hour in-memory cache. Parses semver-ish tags including pre-release suffixes (`v2.5.0-alpha.1` → `(2, 5, 0, 0, 1)`).
+- **`.tox` source-hash drift detection** — recomputes the SHA256 over `_TOX_SOURCE_FILES` for both `.tox` files using the SAME byte-stream-with-NUL-separator scheme as `build_export_mcp_tox._compute_tox_source_hash` and `build_tdpilot_api_tox._compute_api_tox_source_hash`. Compares against the stored `tox_source_hash` field in each `.tox-*-source-hash.json` sidecar.
+- **Graceful failure** — network errors don't raise. Server check returns `{check_failed: True, reason: "..."}` while `.tox` freshness is still computed locally. The agent gets partial info instead of nothing.
+- **New MCP tool `td_check_for_updates()`** — registered via `src/td_mcp/registry/tools_lifecycle.py`. Cached for 1h. Tool count **107 → 108**.
+- **+15 tests** in `tests/test_v25_check_updates.py` covering version parsing (5), hash-scheme parity with build scripts (1; this is the load-bearing test), tox freshness (3), server-version-from-mocked-GitHub (3), cache TTL (2), and result shape (1). Network failure is exercised by patching `urllib.request.urlopen` to raise.
+
+The hash-scheme-parity test reproduces the exact NUL-separator concatenation used by both build scripts and asserts byte-identical output — guards against future drift if anyone changes the build-script hash function without updating the read path.
+
+### v2.5 status (updated)
+6 / 8 v2.5 phases complete. Remaining: v2.5.3 tool approval gates, v2.5.8 log receiver (stretch). See [`docs/plans/v2.5_IMPLEMENTATION_PLAN.md`](./docs/plans/v2.5_IMPLEMENTATION_PLAN.md).
+
+### v2.5 tests overall (updated)
++71 from v2.4 baseline (2000 → **2071 passing**):
+- v2.5.1 activity log + journal hints: +26
+- v2.5.4 env→file migration: +9
+- v2.5.6 stdio discipline contract: +12
+- v2.5.2 OCR sidecar: +10 (+1 skipped real-OCR integration test)
+- v2.5.7 check_for_updates: +15
+- (regenerated tool-schema snapshot included td_get_activity_log, td_ocr_image, td_check_for_updates)
+
 ---
 
 ## 2.4.0 - 2026-05-13

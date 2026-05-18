@@ -38,6 +38,15 @@ dev = [
     "ruff>=0.6",
     "numpy>=1.24",
 ]
+# v2.5.2 — OCR sidecar dependencies. Optional because PaddleOCR brings
+# ~400 MB of model + paddlepaddle deps. Users who want OCR text from
+# screenshots run `pip install -e .[ocr]` (or `pip install
+# tdpilot-dpsk4[ocr]`); without it, td_ocr_image returns a clear
+# advisory and other tools work normally.
+ocr = [
+    "paddleocr>=2.7",
+    "paddlepaddle>=2.6",
+]
 
 [project.scripts]
 tdpilot-dpsk4 = "td_mcp.server:main"

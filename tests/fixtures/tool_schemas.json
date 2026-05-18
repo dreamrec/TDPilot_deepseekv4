@@ -128,6 +128,11 @@
       "path"
     ]
   },
+  "td_check_for_updates": {
+    "description_present": true,
+    "properties": {},
+    "required": []
+  },
   "td_chop_data": {
     "description_present": true,
     "properties": {
@@ -1819,6 +1824,26 @@
         "default_present": true,
         "enum": null,
         "type": "number"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  },
+  "td_ocr_image": {
+    "description_present": true,
+    "properties": {
+      "lang": {
+        "any_of_types": [],
+        "default_present": true,
+        "enum": null,
+        "type": "string"
+      },
+      "path": {
+        "any_of_types": [],
+        "default_present": false,
+        "enum": null,
+        "type": "string"
       }
     },
     "required": [
