@@ -25,6 +25,7 @@ import os
 import random
 import ssl
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -425,6 +426,13 @@ class Agent:
         # BaseException catch and out via ``on_error`` → ``EV_ERROR``.
         # Wired by AgentRuntime to honour ``TDPILOT_DISABLE_CYCLE_DETECTION``.
         cycle_ledger_factory: Callable[[], Any] | None = None,
+        # v2.5.1 — activity-ring factory. Zero-arg callable returning a
+        # fresh ``ActivityRing`` (per-turn) or None to disable. When
+        # present, ``_loop`` appends an ActivityRecord per tool dispatch
+        # and may inject a ``_read_journal`` hint into tool_results when
+        # the same ``(tool_name, args_hash)`` has fired twice this turn
+        # (count=2 is the last call before cycle-detect at threshold=3).
+        activity_ring_factory: Callable[[], Any] | None = None,
         # v2.4 / Phase A.5 — retry policy for DeepSeek 429 / 5xx. ``max_retries``
         # is the number of retry attempts AFTER the first failure (so
         # ``max_retries=3`` allows up to 4 total HTTP calls). ``initial_backoff``
@@ -534,6 +542,8 @@ class Agent:
         self.on_usage = on_usage
         self.rollback_guard_factory = rollback_guard_factory
         self.cycle_ledger_factory = cycle_ledger_factory
+        # v2.5.1 — activity ring factory (parallels cycle_ledger_factory).
+        self.activity_ring_factory = activity_ring_factory
 
         # v2.4 / Phase A.5 — retry config + hint callback. Clamp to safe
         # values so a bad COMP-param value can't disable retries entirely
@@ -926,6 +936,28 @@ class Agent:
                 cycle_ledger = None
                 CycleDetected = None  # noqa: N806
 
+        # v2.5.1 — activity ring (parallel to cycle_ledger). Per-turn
+        # instance; tracks every tool dispatch this turn. Used to emit
+        # ``_read_journal`` hints in tool_results at count=2 (one call
+        # before cycle-detect at threshold=3 ends the turn).
+        activity_ring = None
+        _journal_threshold = cycle_ledger.threshold if cycle_ledger is not None else 3
+        _build_journal_hint = None  # late-imported below
+        if self.activity_ring_factory is not None:
+            try:
+                from tdpilot_api_activity_log import (  # noqa: PLC0415
+                    build_journal_hint as _bjh,
+                )
+
+                activity_ring = self.activity_ring_factory()
+                _build_journal_hint = _bjh
+                if activity_ring is not None and hasattr(activity_ring, "start_turn"):
+                    activity_ring.start_turn()
+            except Exception as exc:  # noqa: BLE001 — factory must never break a turn
+                print(f"[tdpilot_API/agent] activity_ring setup failed: {exc}")
+                activity_ring = None
+                _build_journal_hint = None
+
         for _turn in range(self.turn_budget):
             if self._stop_flag.is_set():
                 return None
@@ -1012,6 +1044,11 @@ class Agent:
                                 args_summary=_format_cycle_args(tool_args),
                             )
                     self.on_tool_call(tool_name, tool_args)
+                    # v2.5.1 — wall-clock the dispatch so the activity
+                    # record carries duration. ``time`` is module-level
+                    # imported in tdpilot_api_agent already.
+                    _activity_t0 = time.monotonic()
+                    _activity_err: str | None = None
                     try:
                         result = self.dispatcher(tool_name, tool_args)
                         # F-12: the explicit `_tool_error` sentinel is the
@@ -1026,6 +1063,36 @@ class Agent:
                             "error": f"{type(exc).__name__}: {exc}",
                         }
                         is_error = True
+                        _activity_err = f"{type(exc).__name__}: {exc}"
+                    # v2.5.1 — activity ring append + journal-hint inject.
+                    # Defensive: every operation here is wrapped so a
+                    # broken hint path can never break tool dispatch.
+                    if activity_ring is not None:
+                        try:
+                            _activity_record = activity_ring.record(
+                                tool_name,
+                                tool_args,
+                                int((time.monotonic() - _activity_t0) * 1000),
+                                "error" if is_error else "ok",
+                                error_msg=_activity_err,
+                            )
+                            if _build_journal_hint is not None and isinstance(result, dict):
+                                hint = _build_journal_hint(
+                                    tool_name,
+                                    _activity_record.args_hash,
+                                    activity_ring,
+                                    cycle_threshold=_journal_threshold,
+                                )
+                                if hint is not None:
+                                    # Inject a _read_journal block on the
+                                    # tool_result the LLM will see. Don't
+                                    # mutate the dispatcher's result in
+                                    # place if it's shared — but in
+                                    # practice the dispatcher returns
+                                    # fresh dicts per call.
+                                    result["_read_journal"] = hint
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"[tdpilot_API/agent] activity_ring/journal hint failed: {exc}")
                     # v2.4 / Phase B.1 — split screenshot payload so the
                     # tool_result that lands in self.messages doesn't carry
                     # base64 (which DeepSeek's compat layer can't decode

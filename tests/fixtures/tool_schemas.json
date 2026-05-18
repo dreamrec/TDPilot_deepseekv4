@@ -696,6 +696,36 @@
       "path"
     ]
   },
+  "td_get_activity_log": {
+    "description_present": true,
+    "properties": {
+      "limit": {
+        "any_of_types": [],
+        "default_present": true,
+        "enum": null,
+        "type": "integer"
+      },
+      "since_ts": {
+        "any_of_types": [
+          "null",
+          "number"
+        ],
+        "default_present": true,
+        "enum": null,
+        "type": null
+      },
+      "tool_filter": {
+        "any_of_types": [
+          "null",
+          "string"
+        ],
+        "default_present": true,
+        "enum": null,
+        "type": null
+      }
+    },
+    "required": []
+  },
   "td_get_build_compatibility": {
     "description_present": true,
     "properties": {

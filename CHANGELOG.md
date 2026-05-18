@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — v2.5 work-in-progress
+
+### Phase v2.5.1 — Activity log + journal hints (2026-05-18)
+
+Agent self-awareness foundation for the v2.5 release theme ("agent self-awareness + safety + distribution polish"). Closes the upstream `dreamrec/TDPilot` v1.6.16 gap (`td_get_activity_log`) and adds a runtime-level companion to the v2.4 B-007 cycle-detect protocol.
+
+- **New MCP tool `td_get_activity_log`** — exposes a 200-entry ring buffer of every tool dispatch this server session. Supports filtering by tool name and `since_ts`. Mirrors upstream's surface so agents migrating between forks see the same observability tool. Tool count **105 → 106**.
+- **Chat-pipe activity ring** — `td_component/tdpilot_api_activity_log.py`. Per-turn instance; reuses the B-010 deep-canonical `args_hash` from `tdpilot_api_cycle_detector` so the two systems stay in lockstep.
+- **`_read_journal` hints in tool results** — when the chat-pipe agent calls the same tool with byte-identical args twice this turn, the next `tool_result` carries a `_read_journal` block with `call_count`, `calls_until_cycle_detect`, and a strategy-switch nudge. Fires at count=2 — one call short of cycle-detect ending the turn (threshold=3). Loop-prone probes (per B-007: `td_get_errors`, `td_analyze_frame`, `td_get_node_detail`, `td_cooking_info`, `td_get_connections`) get a stronger protocol-point-6 reinforcement message.
+- **SYSTEM_PROMPT_BASE protocol point 6 expanded** to acknowledge the runtime `_read_journal` field so the LLM links the static prompt guidance to the runtime signal.
+- **Env var `TDPILOT_DISABLE_ACTIVITY_LOG`** — escape hatch (parity with `TDPILOT_DISABLE_CYCLE_DETECTION`).
+- Cross-implementation parity tests pin MCP-side (`src/td_mcp/observability/`) and chat-pipe-side (`td_component/tdpilot_api_activity_log.py`) `args_hash` + hint shape — drift fails CI immediately.
+
+**Tests:** +26 (13 ring + 13 hint, including a B-010 list-order-invariance regression). Full suite: 2000 → **2026 passing**.
+
+**`.tox` rebuild required:** **API `.tox` only**. `_API_TOX_SOURCE_FILES` changed. MCP `.tox` unaffected.
+
+See [`docs/plans/v2.5_IMPLEMENTATION_PLAN.md`](./docs/plans/v2.5_IMPLEMENTATION_PLAN.md) §2 for the full phase design.
+
+---
+
 ## 2.4.0 - 2026-05-13
 
 **Multi-phase v2.4 release** — Phase A (zero-risk MCP additions) + Phase B (vision pipeline + auth wizard + content_type) + most of Phase C (cost tracking, capability summary, MIDI, circuit breaker, thinking budget), plus a same-day live-debug stack closing **10 bugs (B-001..B-010)** surfaced while running the canonical failing prompt "Build a kaleidoscope feedback loop" end-to-end. The kaleidoscope task that failed every attempt before this release now succeeds with smooth-trail feedback. Tool count 93 → 105.

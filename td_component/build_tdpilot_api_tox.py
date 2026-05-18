@@ -250,6 +250,9 @@ _SOURCE_FILES = (
     # CycleDetected from this module on the first turn (avoiding the
     # circular import — cycle_detector imports AgentError from agent).
     ("tdpilot_api_cycle_detector", "textDAT", "td_component/tdpilot_api_cycle_detector.py"),
+    # v2.5.1 — activity ring + journal hints. Companion to cycle_detector;
+    # gives the agent runtime visibility into its own tool-call history.
+    ("tdpilot_api_activity_log", "textDAT", "td_component/tdpilot_api_activity_log.py"),
     ("tdpilot_api_tracing", "textDAT", "td_component/tdpilot_api_tracing.py"),
     ("tdpilot_api_compaction", "textDAT", "td_component/tdpilot_api_compaction.py"),
     ("tdpilot_api_chat_html", "textDAT", "td_component/tdpilot_api_chat.html"),

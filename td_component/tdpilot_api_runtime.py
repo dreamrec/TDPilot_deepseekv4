@@ -428,7 +428,15 @@ SYSTEM_PROMPT_BASE = (
     "inspect upstream connections via td_get_connections, force a recook "
     "via td_exec_python and then probe a DIFFERENT downstream node, or "
     "report the stuckness to the user. Repeating a probe expecting "
-    "different output is an infinite-loop pattern, not progress.\n\n"
+    "different output is an infinite-loop pattern, not progress.\n"
+    "  **Runtime journal hints (v2.5.1):** when you call the same tool "
+    "with the same args twice this turn, the tool_result you receive "
+    "will carry a ``_read_journal`` field with ``call_count`` and "
+    "``calls_until_cycle_detect``. Treat that field as a hard signal — "
+    "the runtime is telling you you're one call away from a forced "
+    "turn-end. Switch strategy on the spot; do not issue the third "
+    "identical call. You can also call ``td_get_activity_log`` at any "
+    "time to inspect your own tool-call history this session.\n\n"
     "**Parallel inspection via tool_batch.** When you need 2+ independent "
     "READ-ONLY lookups in the same turn (info + errors + audit, or "
     "memory_recall + knowledge_search + td_get_hints), issue them as a "
@@ -955,6 +963,11 @@ class AgentRuntime:
             # the factory; ``None`` means cycle detection is off
             # for the lifetime of this Agent instance.
             cycle_ledger_factory=self._build_cycle_ledger_factory(),
+            # v2.5.1 — activity-ring factory. Parallels cycle_ledger:
+            # per-turn instance, emits _read_journal hints in tool
+            # results at count=2 (last call before cycle-detect kills
+            # the turn). Honours TDPILOT_DISABLE_ACTIVITY_LOG env var.
+            activity_ring_factory=self._build_activity_ring_factory(),
             # v2.4 / Phase B.1 — screenshot vision pipeline. Off by
             # default; flip to ON by setting env var
             # TDPILOT_VISION_PIPELINE=1 (or COMP param if we add one
@@ -1043,6 +1056,30 @@ class AgentRuntime:
         # the COMP-param wiring lands, read ``self._config["cycle_threshold"]``
         # here and pass through.
         return cd.build_cycle_ledger_factory()
+
+    def _build_activity_ring_factory(self) -> Callable[[], Any] | None:
+        """Return a zero-arg factory ``() -> ActivityRing`` or ``None``
+        if observability is disabled (env var
+        ``TDPILOT_DISABLE_ACTIVITY_LOG`` or module unavailable).
+
+        v2.5.1. Parallels ``_build_cycle_ledger_factory`` — the activity
+        ring is built once per turn alongside the cycle ledger and used
+        to emit ``_read_journal`` hints on tool results when the same
+        ``(tool_name, args_hash)`` has fired twice this turn.
+        """
+        if os.environ.get("TDPILOT_DISABLE_ACTIVITY_LOG"):
+            print("[tdpilot_API/runtime] activity log disabled via TDPILOT_DISABLE_ACTIVITY_LOG")
+            return None
+        try:
+            import tdpilot_api_activity_log as al  # type: ignore[import-not-found]
+        except ImportError:
+            return None
+        maxlen_cfg = self._config.get("activity_ring_maxlen")
+        try:
+            maxlen = int(maxlen_cfg) if maxlen_cfg else None
+        except (TypeError, ValueError):
+            maxlen = None
+        return al.build_activity_ring_factory(maxlen=maxlen)
 
     # ------------------------------------------------------------------
     # Phase 4.1 — observability tracer
