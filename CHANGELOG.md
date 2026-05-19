@@ -1,8 +1,136 @@
 # Changelog
 
-## Unreleased — post-2.5.3 audit fixes (2026-05-19)
+## 2.5.4 - 2026-05-19
 
-> Pending a `v2.5.4` tag. Bundled as PR [#53](https://github.com/dreamrec/TDPilot_deepseekv4/pull/53), squash-merged as `6a9aabe`. All 7 CI gates green (lint + 3 Python versions + 2 install-parses + both `.tox` freshness checks). The seven version manifests still read `2.5.3`; bumping them to `2.5.4` is a separate ritual that requires another `.tox` rebuild.
+**v2.5.4 hardening release.** Closes the last open items from the
+2026-05-19 fresh-eyes audit + adds a CI gate that prevents the
+exact failure mode this release exists to fix (main carrying code
+changes past the latest tag with no version bump → two functionally
+different artifacts called "v2.5.3"). Tag-and-release follow-up to
+PR #53 (audit fixes, squash `6a9aabe`) + PR #54 (docs, squash
+`8068ae6`); all 13 version manifests now read `2.5.4` and both
+`.tox` files rebuilt against the v2.5.4 sources.
+
+### 🟠 High → CLOSED — C-1 part B: MCP-side Origin allowlist
+
+`td_component/callbacks/router.py` previously trusted `Sec-Fetch-Site`
+alone for browser-tab CSRF protection. PR-#53 fixed C-1 part A (auth
+default-secure in `autostart.py`); this release adds the matching
+Origin-header check to the MCP router. Foreign-origin browser tabs
+(e.g. ``https://attacker.example.com``) are now rejected with `403`
+before any handler runs. Empty / missing Origin is still accepted so
+non-browser MCP clients (curl, `npx tdpilot-dpsk4`, custom MCP
+integrations) keep working.
+
+`_is_origin_allowed` helper lives in `callbacks/_header.py`; mirrors
+the chat-pipe-side `tdpilot_api_web_callbacks._allowed_origin`
+contract. 6 unit tests in `tests/test_v254_callbacks_origin_redact.py`.
+
+### 🟡 Medium → CLOSED — M-1: Traceback redaction in 500 responses
+
+`router.py`'s 500-error path returned `traceback.format_exc()` verbatim,
+leaking `$HOME` paths and TDPilot config-dir locations to anyone hitting
+an error route. Post-fix the traceback runs through `_redact_paths`
+before serialization — `/Users/<user>/…` becomes `~/…`,
+`~/.tdpilot-dpsk4/…` becomes `<TDPILOT_DPSK4_HOME>/…`. Mirrors the
+chat-pipe-side `tdpilot_api_config.redact_paths`. 7 unit tests pinning
+each redaction rule + edge cases (non-string input, empty string,
+config-dirs-win-over-bare-home ordering).
+
+### 🟡 Medium → CLOSED — N-1: First-run UX hint for default-secure MCP
+
+`autostart._disable_auth` now prints a clear Textport diagnostic on
+COMP load when the user lands in default-secure mode AND no
+`TD_MCP_SHARED_SECRET` is installed. Pre-fix, fresh installs without
+the env file got silent `401`s on every MCP request with no obvious
+remediation. New diagnostic spells out the two paths:
+
+  (a) run the chat-pipe Authmode wizard to install a secret, OR
+  (b) set `TDPILOT_ENABLE_AUTH_BYPASS=1` for legacy zero-config dev.
+
+4 new tests in `tests/test_v212_autostart_opt_in_auth.py` pin
+hint-fires + hint-doesn't-fire conditions (27 tests total there).
+
+### 🧪 Testing — H-1 regression coverage closed (security agent N-2 finding)
+
+PR-#53's H-1 fix in `td_component/tdpilot_api_patches.py:_find_scoped_manifest`
+shipped correct but with **zero regression tests**. v2.5.4 adds
+`tests/test_h1_snapshot_path_sandbox.py` — 8 tests covering the
+absolute-path-outside-SNAPSHOTS_DIR refusal, `/etc/passwd`-style attack,
+symlink-bypass attempt (resolve-before-check), and the slug-fallback
+preservation. A future refactor of `_find_scoped_manifest` can no
+longer silently re-introduce the path traversal.
+
+### 🧪 Testing — Cross-runtime schema parity (architecture agent's NEW finding)
+
+`tests/test_chat_pipe_surface_parity.py` (added in PR-#53) pins
+schema↔handler parity *within* `td_component/`. v2.5.4 adds
+`tests/test_cross_runtime_schema_parity.py` (4 tests) which extends
+the contract to *between* `td_component/tdpilot_api_schema_defs.py`
+(chat-pipe) and `src/td_mcp/`'s `@mcp.tool` registry (MCP server).
+
+The architecture diverges intentionally (chat-pipe is a curated 95-tool
+subset of MCP's 109+) but the test snapshots the legitimate asymmetry
+as two frozen sets (`CHAT_PIPE_ONLY_BASELINE`, `MCP_ONLY_BASELINE`).
+Any drift from the snapshot fails CI and forces a code-review decision
+— catching the v2.5.1-class regression at the cross-runtime layer the
+within-`td_component/` parity test can't see.
+
+### 🧪 Testing — Mock-eval scenarios scaffolded for cycle-detect / rollback / alias
+
+`tests/agent_evals_mock/test_cycle_detect_mock.py` adds 3
+scenarios — `cycle_detect_three_strikes`, `cycle_detect_rollback_hint`,
+`alias_dispatch_td_get_traces` — as the recommended end-to-end
+behavioral pin for the v2.5.1/2/3 patch cascade (per
+`docs/plans/AUDIT_2026_05_19_FOLLOWUPS.md` § C). Marked
+`@pytest.mark.skip` pending fixture capture against the live DeepSeek
+API; module docstring documents the 3-step capture ritual. Unit-level
+coverage of the same bugs is already comprehensive
+(`test_v252_cycle_detect_orphan_tool_use.py` + the cycle-detector +
+rollback unit suites).
+
+### 🛡 CI — Tag-freshness gate (closes the v2.5.3 → v2.5.4 failure mode itself)
+
+New `.github/workflows/ci.yml` step "Tag-freshness gate (main only)"
+fails any `main` push where executable code (non-doc / non-test /
+non-skills) has changed since the latest semver tag AND the version
+files still read that same tag. PR-#53 + PR-#54 demonstrated this gap
+exists; the new gate prevents recurrence. Escape hatch:
+`[skip-version-check]` in the commit message (intended for genuine
+"Unreleased" land-on-main flows).
+
+### 📦 Versioning — All 13 manifests now read 2.5.4
+
+The audit found `scripts/check_versions.py` enforces drift across
+**13 files**, not the 7 documented in CLAUDE.md memory:
+`pyproject.toml`, `src/td_mcp/__init__.py`, `.claude-plugin/plugin.json`,
+`.claude-plugin/marketplace.json`, `npm/package.json`, `mcp/manifest.json`,
+`td_component/callbacks/_header.py::API_VERSION`, `README.md`,
+`plugin_README.md`, `npm/README.md`, `docs/MANUAL.md`,
+`skills/tdpilot-dpsk4-core/SKILL.md`,
+`skills/tdpilot-dpsk4-production/SKILL.md`. All 13 now at v2.5.4.
+
+### 🛠 `.tox` rebuild
+
+Both `.tox` files rebuilt inside TouchDesigner 2025.32820 against the
+v2.5.4 sources (API_VERSION bump + callbacks/ edits + autostart.py
+N-1 hint). The v1.8.2 byte-equivalence baseline at
+`tests/fixtures/mcp_webserver_callbacks_v1.8.2_baseline.py` was
+regenerated to absorb the router.py + _header.py changes.
+
+### Test totals
+
+Full suite: 2141 → **2188 passing** (+47, +0 regressions; 4 skipped:
+1 paddleocr-needed E2E + 3 mock-eval scenarios pending fixture capture).
+
+### Carried forward from PR #53 (the originally-"Unreleased" audit findings now under v2.5.4)
+
+The following items merged to `main` via PR #53 (squash `6a9aabe`) as
+the "Unreleased" state; this v2.5.4 entry formally records them under
+a version tag so npm + GH-release + marketplace all advertise the
+correct hardened build. See PR #53 description + the original
+unreleased CHANGELOG draft for the full per-finding narrative;
+recap below.
 
 ### 🔴 Breaking — C-1: MCP webserverDAT auth is now SECURE BY DEFAULT
 

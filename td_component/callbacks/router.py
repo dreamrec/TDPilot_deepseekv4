@@ -45,6 +45,18 @@ def onHTTPRequest(webServerDAT, request, response):
         _send_json(response, {'error': f'cross-site fetch blocked (Sec-Fetch-Site={fetch_site})'})
         return response
 
+    # C-1 part B (v2.5.4 audit follow-up). Defense-in-depth on top of
+    # Sec-Fetch-Site: explicitly reject Origin headers that aren't
+    # loopback. Empty / missing Origin is still accepted so non-browser
+    # MCP clients (curl, npx tdpilot-dpsk4, custom integrations) keep
+    # working. See _is_origin_allowed in _header.py for the contract.
+    origin = headers.get('origin', '')
+    if origin and not _is_origin_allowed(origin):
+        response['statusCode'] = 403
+        response['statusReason'] = 'Forbidden'
+        _send_json(response, {'error': f'cross-origin request blocked (Origin={origin})'})
+        return response
+
     auth_error = _check_auth_error(request)
     if auth_error:
         response['statusCode'] = 401
@@ -106,10 +118,16 @@ def onHTTPRequest(webServerDAT, request, response):
         _send_json(response, result)
 
     except Exception as e:
+        # M-1 (v2.5.4 audit follow-up). Apply _redact_paths to the
+        # traceback before serialising — strips $HOME / config-dir
+        # absolute paths so a 500 response can't leak the user's
+        # username / install location to a same-machine attacker who
+        # hit an error path. The original chat-pipe-side equivalent
+        # lives in tdpilot_api_config.redact_paths.
         error_result = {
-            'error': str(e),
+            'error': _redact_paths(str(e)),
             'type': type(e).__name__,
-            'traceback': traceback.format_exc()
+            'traceback': _redact_paths(traceback.format_exc()),
         }
         response['statusCode'] = 500
         response['statusReason'] = 'Internal Server Error'

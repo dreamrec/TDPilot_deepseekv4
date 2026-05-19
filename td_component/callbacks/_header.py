@@ -26,7 +26,7 @@ import traceback
 # Configuration
 # ─────────────────────────────────────────────────────────────
 
-API_VERSION = "2.5.3"
+API_VERSION = "2.5.4"
 SCREENSHOT_TEMP_PATH = os.path.join(os.environ.get('TEMP', os.environ.get('TMP', '/tmp')), 'td_mcp_screenshot.jpg')
 
 # Auth + policy env is read at CALL TIME, not import time — otherwise TD's
@@ -132,6 +132,81 @@ STANDARD_BLOCKED_TOKENS = (
     _LOCALS_PAREN,
 )
 MONITOR_SUBSCRIPTIONS = {}
+
+# ─────────────────────────────────────────────────────────────
+# Audit-fix helpers (v2.5.4 hardening release)
+# ─────────────────────────────────────────────────────────────
+
+# C-1 part B (audit follow-up). Mirror the chat-pipe side's
+# tdpilot_api_web_callbacks._allowed_origin contract: accept the empty
+# / 'null' origin (file:// + same-origin tools) plus localhost ports
+# only. Cross-origin browser tabs are rejected before any handler runs,
+# giving defense-in-depth on top of the existing Sec-Fetch-Site check
+# (which curl + non-browser tools defeat by not sending the header).
+_SAFE_ORIGIN_HOSTS = ('127.0.0.1', 'localhost', '[::1]', '::1')
+
+
+def _is_origin_allowed(origin):
+    """Return True if the request's Origin header value is acceptable.
+
+    Empty / missing / 'null' origins are accepted (non-browser tools,
+    file:// pages, same-origin POSTs). Any explicit origin must match
+    one of the loopback hosts. Foreign origins are rejected.
+    """
+    if not origin or origin in ('null',):
+        return True
+    val = origin.strip().lower()
+    if not val:
+        return True
+    # Strip scheme.
+    if '://' in val:
+        try:
+            _, val = val.split('://', 1)
+        except ValueError:
+            return False
+    host_port = val.rstrip('/')
+    # Tolerate trailing path.
+    if '/' in host_port:
+        host_port = host_port.split('/', 1)[0]
+    # IPv6 literal: [::1]:port → host '[::1]'.
+    if host_port.startswith('['):
+        bracket_end = host_port.find(']')
+        if bracket_end == -1:
+            return False
+        host = host_port[: bracket_end + 1]
+    else:
+        host = host_port.split(':', 1)[0]
+    return host in _SAFE_ORIGIN_HOSTS
+
+
+# M-1 (audit follow-up). Mirror the chat-pipe side's
+# tdpilot_api_config.redact_paths contract. Strips $HOME paths from
+# strings before they're sent in HTTP responses — applied to
+# tracebacks in particular so a 500 response can't leak
+# /Users/<username>/... to a same-machine attacker who hit an error
+# path. The chat-pipe's redact_paths lives in tdpilot_api_config.py;
+# duplicated here because callbacks/* must be self-contained per the
+# composed-textDAT contract (no cross-module imports).
+def _redact_paths(s):
+    """Replace $HOME, the TDPilot config dirs, and absolute user paths
+    in ``s`` with stable placeholders. Returns ``s`` unchanged when it
+    isn't a non-empty string.
+    """
+    if not isinstance(s, str) or not s:
+        return s
+    out = s
+    home = os.path.expanduser('~')
+    # The two TDPilot config dir locations (current + legacy).
+    for src, token in (
+        (os.path.join(home, '.tdpilot-dpsk4'), '<TDPILOT_DPSK4_HOME>'),
+        (os.path.join(home, '.tdpilot-api'), '<TDPILOT_API_HOME>'),
+    ):
+        if src and src in out:
+            out = out.replace(src, token)
+    if home and home in out:
+        out = out.replace(home, '~')
+    return out
+
 
 # ─────────────────────────────────────────────────────────────
 # Main HTTP Router

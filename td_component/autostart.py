@@ -88,6 +88,30 @@ def _disable_auth():
     # configured. If the user never installed a secret, the webserverDAT
     # will return 401 on every request — that's the secure default. The
     # firstrun wizard guides users to install one.
+    #
+    # N-1 audit follow-up (v2.5.4 hardening). If the user is in the
+    # default-secure mode AND has no secret installed, print a clear
+    # Textport line so they know why MCP requests are 401-ing and how
+    # to opt back into the legacy zero-config flow. Silent on the
+    # firstrun-wizard's happy path (where the env file is populated).
+    secret = os.environ.get("TD_MCP_SHARED_SECRET", "").strip()
+    require_auth = os.environ.get("TD_MCP_REQUIRE_AUTH", "1").strip()
+    if not secret and require_auth not in ("0", "false", "no", ""):
+        print(
+            "[TDPilot autostart] MCP webserverDAT is in default-secure "
+            "mode but no TD_MCP_SHARED_SECRET is set — every MCP "
+            "request will return 401. To proceed:"
+        )
+        print(
+            "  (a) run the chat-pipe Authmode wizard (load "
+            "tdpilot_API.tox, open the panel) — it writes a secret to "
+            "~/.tdpilot-dpsk4/.tdpilot-dpsk4.env on first run, OR"
+        )
+        print(
+            "  (b) set TDPILOT_ENABLE_AUTH_BYPASS=1 in your env file or "
+            "process env to opt back into the pre-v2.6 zero-config "
+            "zero-auth dev flow (single-user local boxes only)."
+        )
 
 
 def _tick():
