@@ -51,6 +51,56 @@ jobs:
       - name: Personal path leak check
         run: bash scripts/check_no_personal_paths.sh
 
+      # Tag-freshness gate (post-v2.5.4 audit). scripts/check_versions.py
+      # enforces *intra-tree* parity but has no concept of *temporal*
+      # drift — PR-#53 + PR-#54 demonstrated this by letting main carry
+      # code past v2.5.3 with version files still at v2.5.3, yielding
+      # two functionally different "v2.5.3" artifacts (npm/release vs
+      # git HEAD). This step closes that loop on main pushes.
+      #
+      # Untrusted commit-message input is captured via the env: block
+      # before reference in run: — per
+      # https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+      - name: Tag-freshness gate (main only)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          if printf '%s' "$COMMIT_MSG" | grep -q '\[skip-version-check\]'; then
+            echo "Skipped via [skip-version-check] commit footer."
+            exit 0
+          fi
+          git fetch --tags --depth=1 origin 2>/dev/null || true
+          LATEST_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No stable semver tag found — bootstrap mode, skipping freshness gate."
+            exit 0
+          fi
+          PKG_VER=$(uv run python -c "import re,pathlib; m=re.search(r'__version__\s*=\s*\"([^\"]+)\"', pathlib.Path('src/td_mcp/__init__.py').read_text()); print(m.group(1) if m else 'parse-failed')")
+          TAG_VER=${LATEST_TAG#v}
+          echo "latest tag: $LATEST_TAG  ·  src/td_mcp/__init__.py: $PKG_VER"
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "Version bumped past latest tag ($TAG_VER → $PKG_VER). Gate satisfied."
+            exit 0
+          fi
+          CODE_DIFF=$(git diff --name-only "$LATEST_TAG..HEAD" -- \
+            ':!*.md' \
+            ':!docs/' \
+            ':!.github/' \
+            ':!CHANGELOG.md' \
+            ':!skills/' \
+            ':!tests/' \
+            | head -5)
+          if [ -n "$CODE_DIFF" ]; then
+            echo "::error::Code changed since $LATEST_TAG but version still $PKG_VER."
+            echo "::error::Bump __version__ + the 6 sibling manifests + API_VERSION,"
+            echo "::error::OR add [skip-version-check] to the commit message."
+            echo "First offending file(s):"
+            echo "$CODE_DIFF"
+            exit 1
+          fi
+          echo "Version $PKG_VER matches latest tag $LATEST_TAG; only safe-path changes — gate passed."
+
   test:
     runs-on: ubuntu-latest
     strategy:

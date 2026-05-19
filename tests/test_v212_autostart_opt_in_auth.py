@@ -188,3 +188,52 @@ def test_disable_auth_constants_are_documented(autostart):
     doc = autostart._disable_auth.__doc__ or ""
     assert "TDPILOT_DISABLE_AUTH_BYPASS" in doc
     assert "TDPILOT_ENABLE_AUTH_BYPASS" in doc
+
+
+# --------------------------------------------------------------------------
+# v2.5.4 N-1 first-run UX hint: when default-secure mode is active AND
+# no secret is installed, print a Textport line telling the user how to
+# either install a secret or opt into the legacy zero-config flow.
+# --------------------------------------------------------------------------
+
+
+def test_n1_first_run_hint_printed_when_no_secret(autostart, monkeypatch, capsys):
+    """No env vars set + no secret installed → user gets the
+    diagnostic line (otherwise their MCP server returns 401 with no
+    obvious cause)."""
+    # All three env vars deliberately unset by the fixture.
+    autostart._disable_auth()
+    captured = capsys.readouterr().out
+    assert "default-secure mode" in captured
+    assert "TDPILOT_ENABLE_AUTH_BYPASS" in captured
+    assert "tdpilot_API.tox" in captured or "Authmode wizard" in captured
+
+
+def test_n1_no_hint_when_secret_installed(autostart, monkeypatch, capsys):
+    """If the env file populated TD_MCP_SHARED_SECRET, MCP requests
+    will authenticate successfully — no hint needed."""
+    monkeypatch.setenv("TD_MCP_SHARED_SECRET", "installed-by-env-file")
+    autostart._disable_auth()
+    captured = capsys.readouterr().out
+    assert "default-secure mode" not in captured
+
+
+def test_n1_no_hint_when_user_opted_into_bypass(autostart, monkeypatch, capsys):
+    """If the user explicitly set TDPILOT_ENABLE_AUTH_BYPASS=1, the
+    bypass branch runs FIRST and the N-1 hint never fires."""
+    monkeypatch.setenv("TDPILOT_ENABLE_AUTH_BYPASS", "1")
+    autostart._disable_auth()
+    captured = capsys.readouterr().out
+    # The bypass branch prints its own message; N-1 must not fire.
+    assert "default-secure mode" not in captured
+    assert "auth bypass enabled" in captured
+
+
+def test_n1_no_hint_when_require_auth_already_zero(autostart, monkeypatch, capsys):
+    """If the env file set TD_MCP_REQUIRE_AUTH=0 directly (legacy
+    workflow), the webserverDAT is already non-secure — N-1 doesn't
+    fire because MCP requests will pass anyway."""
+    monkeypatch.setenv("TD_MCP_REQUIRE_AUTH", "0")
+    autostart._disable_auth()
+    captured = capsys.readouterr().out
+    assert "default-secure mode" not in captured
