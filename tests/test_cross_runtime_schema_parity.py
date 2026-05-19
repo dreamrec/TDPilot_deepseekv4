@@ -193,6 +193,11 @@ MCP_ONLY_BASELINE: frozenset[str] = frozenset(
         "td_stop_monitor_visual",
         "td_stop_stream_top",
         "td_stream_top",
+        # v2.5.5 — Web ingestion (first slice of v2.6.3). MCP-only for now
+        # because markitdown is heavy in the restricted Python that the
+        # chat-pipe lives in; full chat-pipe port is a v2.6.3 follow-up
+        # (subprocess sidecar pattern like the OCR helper).
+        "td_ingest_url",
     }
 )
 
@@ -305,3 +310,119 @@ class TestCrossRuntimeSchemaParity:
         # accidentally HALVES, not if it grows by one or two.
         assert 85 <= len(chat) <= 120, f"chat-pipe TOOL_SCHEMAS count {len(chat)} outside [85, 120]"
         assert 100 <= len(mcp) <= 140, f"MCP @mcp.tool count {len(mcp)} outside [100, 140]"
+
+
+# ---------------------------------------------------------------------------
+# Argument-shape parity — v2.5.5 addition closing the code-quality agent's
+# "lower-frequency gap" flagged in the post-PR-#53 audit. The existing
+# name-parity tests catch handler/schema *name* drift; this catches the
+# subtler case where the names match but the chat-pipe schema declares
+# different ``required`` arguments than the MCP-side @mcp.tool signature
+# expects. A v2.5.1-class regression that wouldn't trip name parity.
+# ---------------------------------------------------------------------------
+
+
+# Argument-name translations that are INTENTIONAL — the chat-pipe
+# surfaces an LLM-friendly name, and the body-adapter in
+# `td_component/tdpilot_api_schema_map.py` translates it to the MCP-side
+# name at dispatch time. Maps (tool_name, chat_pipe_required_arg) →
+# expected MCP-side property name(s). The parity test treats listed pairs
+# as resolved, not as drift. Adding entries here = approving the
+# translation in code review.
+INTENTIONAL_ARG_TRANSLATIONS: dict[tuple[str, str], frozenset[str]] = {
+    # _adapt_create_node accepts op_type | node_type | type | operator_type
+    # and forwards as node_type. The chat-pipe surfaces op_type because
+    # LLMs reach for that name; the MCP side uses node_type because that
+    # matches the underlying TD API.
+    ("td_create_node", "op_type"): frozenset({"node_type"}),
+}
+
+
+class TestArgumentShapeParity:
+    """For each tool present on BOTH surfaces, sanity-check that the
+    chat-pipe schema's required args have a corresponding MCP-side
+    parameter. Not a full schema-vs-signature equivalence (that's a much
+    bigger project) — just the most-actionable drift: the chat-pipe
+    declaring an arg the MCP server doesn't know about, or vice versa.
+    """
+
+    def _chat_pipe_schema_for(self, name: str) -> dict | None:
+        for s in TOOL_SCHEMAS:
+            if s.get("name") == name:
+                return s
+        return None
+
+    def _mcp_tool_for(self, name: str) -> object | None:
+        import asyncio
+
+        tools = asyncio.run(_td_mcp_server.mcp.list_tools())
+        for t in tools:
+            if t.name == name:
+                return t
+        return None
+
+    def test_chat_pipe_required_args_exist_on_mcp_side(self) -> None:
+        """Pick a couple of well-known shared tools and verify the
+        chat-pipe ``input_schema.required`` keys also appear in the MCP
+        tool's input schema. Not exhaustive — exhaustive checks against
+        every shared tool would couple too tightly to FastMCP internals.
+        This is the "is the shape sane?" smoke check.
+
+        Naming-convention note: chat-pipe uses ``input_schema`` (snake_case,
+        Anthropic-format convention) while FastMCP exposes ``inputSchema``
+        (camelCase, JSON Schema convention). Test reads the right key on
+        each side.
+        """
+        chat = _chat_pipe_tool_names()
+        mcp_visible = _mcp_tool_names()
+        shared = sorted(chat & mcp_visible)
+        sample = [
+            n
+            for n in ("td_get_node_detail", "td_create_node", "td_set_params", "td_get_content")
+            if n in shared
+        ]
+        assert sample, f"No sampled shared tools found — surface drift? shared={shared[:5]}..."
+        violations = []
+        for name in sample:
+            schema = self._chat_pipe_schema_for(name)
+            if schema is None:
+                continue
+            chat_required = set(schema.get("input_schema", {}).get("required") or [])
+            mcp_tool = self._mcp_tool_for(name)
+            if mcp_tool is None:
+                continue
+            mcp_schema = getattr(mcp_tool, "inputSchema", {}) or {}
+            mcp_props = set((mcp_schema.get("properties") or {}).keys())
+            missing = chat_required - mcp_props
+            # Apply intentional-translation allowlist before failing.
+            for arg in list(missing):
+                translated = INTENTIONAL_ARG_TRANSLATIONS.get((name, arg))
+                if translated and (translated & mcp_props):
+                    missing.discard(arg)
+            if missing:
+                violations.append((name, sorted(missing), sorted(mcp_props)))
+        assert not violations, (
+            "Argument-shape drift: chat-pipe declares required args that "
+            "the MCP tool's input schema does NOT expose:\n"
+            + "\n".join(f"  {n}: missing {miss} (MCP exposes {props})" for n, miss, props in violations)
+        )
+
+    def test_chat_pipe_schemas_have_consistent_structure(self) -> None:
+        """Every chat-pipe schema entry must declare an ``input_schema``
+        of object type. Catches the bare ``{"name": "x"}`` regression
+        class — a chat-pipe schema entry that's syntactically valid but
+        carries no input contract, which breaks the LLM's expectation."""
+        violations = []
+        for s in TOOL_SCHEMAS:
+            name = s.get("name") or "<unnamed>"
+            input_schema = s.get("input_schema")
+            if input_schema is None:
+                violations.append((name, "missing input_schema"))
+                continue
+            if input_schema.get("type") != "object":
+                violations.append((name, f"input_schema.type={input_schema.get('type')!r}, want 'object'"))
+        assert not violations, (
+            "Malformed chat-pipe TOOL_SCHEMAS entries (use ``input_schema`` "
+            "snake_case per Anthropic format, NOT ``inputSchema``):\n"
+            + "\n".join(f"  {n}: {msg}" for n, msg in violations)
+        )

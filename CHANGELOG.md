@@ -1,5 +1,102 @@
 # Changelog
 
+## Unreleased — v2.5.5 maintenance + early v2.6.3 slice (2026-05-19)
+
+> Lands on `main` with `[skip-version-check]` because the v2.5.4 release
+> ritual completed earlier today and the next official version bump should
+> roll a few sessions' worth of work together. Once a v2.5.5 (or v2.6.0)
+> tag is cut, this header gets renamed and `mcp/manifest.json`'s
+> `tool_count` (already at 110 here) becomes the new floor.
+
+### 🆕 `td_ingest_url` — v2.6.3 first slice
+
+New MCP tool added at `src/td_mcp/registry/tools_ingest.py` backed by
+`src/td_mcp/web/ingest.py`. Lets the agent fetch a public HTTPS page and
+pipe it through `markitdown` (optional `[web]` extras) so the resulting
+Markdown can be cited as context inline. The full v2.6.3 plan in
+`docs/plans/v2.6_IMPLEMENTATION_PLAN.md` was 3 days of work; this is the
+core fetch + sandbox slice (~½ day) — enough to be usable, with a follow-up
+required to expose the same tool through the chat-pipe surface.
+
+Security model (minimal viable SSRF defense — not DNS-rebinding
+resistant; that's deferred to a v2.6.3 hardening follow-up):
+
+- **HTTPS only.** `file://`, `http://`, `javascript:`, `data:`, `ftp://`,
+  `gopher://` rejected before any network call.
+- **Loopback / RFC1918 / link-local literals rejected.** Covers the cloud
+  metadata service literal `169.254.169.254`, IPv6 ULA `fc00::/7`, IPv6
+  link-local `fe80::/10`, the 172.16-31.x RFC1918 range with tight
+  bounds-check.
+- **No redirects.** A custom `_NoRedirectHandler` aborts redirects so an
+  attacker can't bait `https://attacker.example.com/redirect?to=http://localhost`
+  past the host allowlist.
+- **Per-request timeout** via `TDPILOT_INGEST_TIMEOUT` env (default 30 s).
+- **Max response size cap** via `TDPILOT_INGEST_MAX_BYTES` (default 5 MB).
+- **Identifying User-Agent** so server logs can correlate.
+
+33 unit tests in `tests/test_v255_td_ingest_url.py` cover the URL sandbox,
+the no-redirect contract, the size + timeout caps, the markitdown-missing
+advisory path, the `IngestResult` dataclass shape, and a registration
+smoke check that asserts `td_ingest_url` actually appears in the live
+`mcp.list_tools()` surface.
+
+Optional dep: `pip install -e .[web]` installs `markitdown>=0.0.1`. Without
+it, `td_ingest_url` returns a structured `{"error": "web_extras_not_installed",
+"advice": ...}` response — same pattern as `td_ocr_image`.
+
+### 🧪 Argument-shape cross-runtime parity test
+
+Closes the code-quality agent's "lower-frequency gap" finding from the
+2026-05-19 fresh audit. The existing schema↔handler name-parity tests
+(`tests/test_chat_pipe_surface_parity.py`,
+`tests/test_cross_runtime_schema_parity.py` from v2.5.4) catch drift in
+the tool NAMES; this adds two new tests that catch drift in the tool
+ARGUMENTS:
+
+- `test_chat_pipe_required_args_exist_on_mcp_side` — for each well-known
+  shared tool (`td_get_node_detail`, `td_create_node`, `td_set_params`,
+  `td_get_content`), the chat-pipe's `input_schema.required` keys must
+  also appear in the MCP-side `inputSchema.properties`. Intentional
+  translations (e.g. chat-pipe `op_type` → MCP `node_type` via the
+  body-adapter in `tdpilot_api_schema_map.py:_adapt_create_node`) are
+  whitelisted via `INTENTIONAL_ARG_TRANSLATIONS`.
+- `test_chat_pipe_schemas_have_consistent_structure` — every chat-pipe
+  schema entry must declare `input_schema` of type `"object"`. Catches
+  the bare `{"name": "x"}` regression class — a schema entry that's
+  syntactically valid but carries no input contract.
+
+The first test caught a REAL intentional translation on first run
+(`td_create_node`: `op_type` → `node_type`), which the
+`INTENTIONAL_ARG_TRANSLATIONS` allowlist now documents in code.
+
+### 📝 Project CLAUDE.md — 7-file checklist → real 13-file checklist
+
+The 2026-05-19 audit found that the project `CLAUDE.md`'s "all 7 must
+match" version-bump checklist was stale — `scripts/check_versions.py`
+actually enforces **13 files** (docs and skills carry user-visible version
+strings too). Updated the CLAUDE.md block with the real list + a note
+about the v1.8.3 / PR-#16 `mcp_webserver_callbacks.py` → `callbacks/_header.py`
+migration so future readers don't grep for a path that no longer exists.
+
+### 📊 Tool count: 109 → 110
+
+`EXPECTED_MIN_TOOL_COUNT` in `src/td_mcp/release_gates.py` bumped to 110.
+`mcp/manifest.json:surface.tool_count` matches. `tests/fixtures/tool_schemas.json`
+snapshot regenerated to include `td_ingest_url`.
+
+### Test totals
+
+Source-only sweep: 2170 → **2205 passing** (+35, +0 regressions; 4
+skipped: 1 paddleocr E2E + 3 mock-eval scenarios pending fixture capture).
+
+### `.tox` rebuild — NOT REQUIRED for this commit
+
+All changes are `src/td_mcp/` (MCP-server-side Python) + tests + docs.
+Zero `td_component/` changes. Both `.tox` source-hash gates stay green
+without a rebuild.
+
+---
+
 ## 2.5.4 - 2026-05-19
 
 **v2.5.4 hardening release.** Closes the last open items from the

@@ -622,7 +622,7 @@ For CLI typed patch sessions (`td_plan_patch` → `td_preflight_patch` → `td_p
 
 ### MCP webserverDAT authentication — default-secure since the 2026-05-19 audit fixes (C-1)
 
-The MCP webserverDAT (ports `9981` / `9985`) defaults to **token-required auth**. The chat-pipe surface (port `9987`) has been default-token since v2.3.0 via the COMP's `Authmode` param; the MCP surface inherited the legacy default-bypass posture until the C-1 fix (post-v2.5.3, on `main`).
+The MCP webserverDAT (ports `9981` / `9985`) defaults to **token-required auth**. The chat-pipe surface (port `9987`) has been default-token since v2.3.0 via the COMP's `Authmode` param; the MCP surface inherited the legacy default-bypass posture until the C-1 fix shipped as v2.5.4 (part A in PR #53 `6a9aabe`, part B Origin-allowlist in v2.5.4 `ea1e8df`).
 
 | Env var | Effect | When to use |
 |---|---|---|

@@ -36,23 +36,32 @@ Two ways to run it. They coexist in the same TD project if you want both.
 **Start here.** If you just want to chat with TouchDesigner → **standalone `.tox`** (drop-in, two minutes). If you already use Claude Code → **Claude Code CLI**. If you want MCP in some other client (Cursor, Continue, custom integrations) → the same npm package, `npx tdpilot-dpsk4`, exposes the MCP server standalone. Jump straight to [`docs/MANUAL.md`](docs/MANUAL.md) for the deep reference, or read on for the install walkthroughs.
 
 <details open>
-<summary><b>🔐 Post-2.5.3 audit fixes (May 19, 2026, on `main`, pending `v2.5.4` tag)</b></summary>
+<summary><b>🔐 v2.5.4 hardening release (May 19, 2026)</b></summary>
 
-A fresh-eyes audit of the v2.5.3 ship state ([PR #53](https://github.com/dreamrec/TDPilot_deepseekv4/pull/53), merged as `6a9aabe`) closed **1 Critical, 4 High, 1 Medium** security findings plus doc drift and a bidirectional parity test that catches the regression class behind the v2.5.1 chat-pipe gap.
+A two-stage response to the 2026-05-19 fresh-eyes audit of v2.5.3. **PR [#53](https://github.com/dreamrec/TDPilot_deepseekv4/pull/53)** (squash `6a9aabe`) closed **1 Critical, 4 High, 1 Medium** security findings + bidirectional schema↔handler parity test. **PR [#55](https://github.com/dreamrec/TDPilot_deepseekv4/pull/55)** (squash `ea1e8df`, the **`v2.5.4`** tag) closed the deferred items and added a CI gate that prevents the failure mode that created the v2.5.4 work in the first place (PR #53 source changes landed on `main` with all 13 version manifests still reading `2.5.3` — two functionally different artifacts called "v2.5.3").
 
-**🔴 BREAKING — the MCP webserverDAT now defaults to SECURE auth.** The pre-fix `td_component/autostart.py:_disable_auth` unconditionally wiped `TD_MCP_SHARED_SECRET` + forced `TD_MCP_REQUIRE_AUTH=0` on every COMP load → any local process could POST `/api/exec` to `td_exec_python` without authenticating. New default: leave the env file's secret alone. If you relied on the legacy zero-config zero-auth flow, set `TDPILOT_ENABLE_AUTH_BYPASS=1` in `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` to opt back in. The legacy `TDPILOT_DISABLE_AUTH_BYPASS=1` opt-out is honored as a no-op for env-file backwards compat. See [CHANGELOG](CHANGELOG.md) for the full migration matrix.
+**🔴 BREAKING — the MCP webserverDAT now defaults to SECURE auth.** The pre-fix `td_component/autostart.py:_disable_auth` unconditionally wiped `TD_MCP_SHARED_SECRET` + forced `TD_MCP_REQUIRE_AUTH=0` on every COMP load → any local process could POST `/api/exec` to `td_exec_python` without authenticating. New default: leave the env file's secret alone. If you relied on the legacy zero-config zero-auth flow, set `TDPILOT_ENABLE_AUTH_BYPASS=1` in `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` to opt back in. The legacy `TDPILOT_DISABLE_AUTH_BYPASS=1` opt-out is honored as a no-op for env-file backwards compat. See the [v2.5.4 CHANGELOG entry](CHANGELOG.md#254---2026-05-19) for the full migration matrix.
 
-**Other fixes:**
+**PR #53 fixes (`6a9aabe`):**
 
+- **C-1 part A** `autostart._disable_auth` defaults to SECURE — env file's secret is preserved instead of wiped.
 - **H-1** `snapshot_restore_scoped` path-traversal sandbox (`SNAPSHOTS_DIR` `is_relative_to` gate; symlinks resolved BEFORE the check).
 - **H-2** `TDPILOT_DISABLE_TOOL_APPROVAL` truthiness normalized to `{1, true, yes, on}` — `=0` no longer paradoxically enables the bypass.
 - **H-3** `td_ocr_image` two-layer sandbox: extension allowlist (`png/jpg/jpeg/bmp/webp/tif/tiff/gif`) + root allowlist (system tempdir, `~/Downloads`, `~/Desktop`, `~/Pictures`, `~/.tdpilot-dpsk4`). Extend via `TDPILOT_OCR_ALLOWED_ROOTS=<colon-separated paths>`.
 - **H-4** Explicit `Authmode=token` now wins over a stale `TDPILOT_API_INSECURE=1` env-var. Unrecognised `Authmode` values fall to SECURE instead of the env-var fallback.
 - **M-2** `POST /set-authmode` requires `confirm: true` in the body for the open→token lockout-direction flip — closes a same-origin CSRF that could lock the legitimate user out + steal the new session token.
+- **Schema↔handler parity** — bidirectional test (`tests/test_chat_pipe_surface_parity.py`, 7 tests) catches the v2.5.1-class regression where a handler exists but is invisible to the LLM.
 
-**Plus:** bidirectional schema↔handler parity test (`tests/test_chat_pipe_surface_parity.py`, 7 tests) that catches the v2.5.1-class regression where a handler exists but is invisible to the LLM. AGENTS.md / `docs/plans/v2.5_IMPLEMENTATION_PLAN.md` doc drift cleared. Test totals **2113 → 2141** passing.
+**PR #55 / v2.5.4 hardening (`ea1e8df`):**
 
-Both `.tox` files rebuilt in TouchDesigner 2025.32820 against the audit-fix edits and committed. Deferred items (C-1 part B MCP-side origin allowlist, M-1 traceback redaction, plus the larger architectural refactors A-1/A-2/A-3 and recommended mock-eval scenario coverage) tracked in [`docs/plans/AUDIT_2026_05_19_FOLLOWUPS.md`](docs/plans/AUDIT_2026_05_19_FOLLOWUPS.md).
+- **C-1 part B** MCP-side Origin allowlist — `_is_origin_allowed` in `callbacks/_header.py` mirrors chat-pipe `_allowed_origin`. Foreign-origin browser tabs now rejected with 403 before any handler runs; empty / missing `Origin` still accepted so curl + non-browser MCP clients keep working. 6 unit tests.
+- **M-1** Traceback redaction in 500 responses — `_redact_paths` rewrites `/Users/<user>/…` → `~/…`, `~/.tdpilot-dpsk4/…` → `<TDPILOT_DPSK4_HOME>/…`. Mirrors chat-pipe-side `redact_paths`. 7 unit tests.
+- **N-1** First-run UX hint — `autostart._disable_auth` now prints a Textport diagnostic when default-secure mode is active AND no secret installed. Fresh installs no longer get silent 401s.
+- **H-1 regression coverage** — `tests/test_h1_snapshot_path_sandbox.py` (8 tests) locks PR #53's H-1 fix against future refactor.
+- **Cross-runtime schema parity** — `tests/test_cross_runtime_schema_parity.py` (4 tests) extends the within-`td_component/` parity test to span between chat-pipe + MCP-server tool surfaces; snapshots the legitimate asymmetry as frozen baselines.
+- **Mock-eval scenarios** — `tests/agent_evals_mock/test_cycle_detect_mock.py` adds 3 scenarios (`cycle_detect_three_strikes`, `cycle_detect_rollback_hint`, `alias_dispatch_td_get_traces`) marked `@pytest.mark.skip` pending live-API fixture capture.
+
+Test totals **2113 → 2141+** passing. Both `.tox` files rebuilt in TouchDesigner 2025.32820 against the v2.5.4 sources. All 13 version manifests read `2.5.4`. Larger architectural refactors (A-1 `td_shared/` package, A-2 `tool_registry.py` split, A-3 `_loop` decomposition) remain planned for future releases — tracked in [`docs/plans/AUDIT_2026_05_19_FOLLOWUPS.md`](docs/plans/AUDIT_2026_05_19_FOLLOWUPS.md).
 
 </details>
 

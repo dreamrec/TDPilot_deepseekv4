@@ -10,11 +10,11 @@ Two variants ship in the same repo:
 
 For the standalone .tox path, see the [main README](https://github.com/dreamrec/TDPilot_deepseekv4#readme) and the [MANUAL](https://github.com/dreamrec/TDPilot_deepseekv4/blob/main/docs/MANUAL.md). Both variants coexist in the same TD project (different ports + COMP names + config dirs).
 
-> **🔐 Post-2.5.3 audit fixes (May 19, 2026, on `main`)** — the MCP webserverDAT now defaults to **secure auth** (was: unconditionally insecure). If you relied on the pre-v2.6 zero-config zero-auth flow, set `TDPILOT_ENABLE_AUTH_BYPASS=1` in `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` to opt back in. See the [CHANGELOG](https://github.com/dreamrec/TDPilot_deepseekv4/blob/main/CHANGELOG.md) "Unreleased" entry for the full migration matrix and the other H-1/H-2/H-3/H-4/M-2 fixes.
+> **🔐 v2.5.4 hardening release (May 19, 2026)** — the MCP webserverDAT now defaults to **secure auth** (was: unconditionally insecure). If you relied on the pre-v2.5.4 zero-config zero-auth flow, set `TDPILOT_ENABLE_AUTH_BYPASS=1` in `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` to opt back in. v2.5.4 also adds a same-origin allowlist on the MCP router, redacts `$HOME` paths from 500-error tracebacks, and ships H-1 snapshot-path-sandbox regression tests. See the [CHANGELOG](https://github.com/dreamrec/TDPilot_deepseekv4/blob/main/CHANGELOG.md#254---2026-05-19) for the full migration matrix.
 
 ---
 
-TDPilot v2.5.0 provides 109 MCP tools for live control of TouchDesigner projects from Claude Code, optimized for DeepSeek v4. The bundled `.tox` includes a one-button installer (drag-drop into TD, click "Bootstrap All", done) — no manual setup script.
+TDPilot v2.5.4 provides 109 MCP tools for live control of TouchDesigner projects from Claude Code, optimized for DeepSeek v4. The bundled `.tox` includes a one-button installer (drag-drop into TD, click "Bootstrap All", done) — no manual setup script.
 
 ## Components
 

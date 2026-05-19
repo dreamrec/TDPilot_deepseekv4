@@ -19,25 +19,40 @@ debt items.
 | M-2 /set-authmode lockout | Medium | ✅ on main + .tox rebuilt | `727282b` + `b004baf` |
 
 The two CI freshness gates (`check_tox_freshness.py` /
-`check_tox_api_freshness.py`) are green on `main`. The seven version
-manifests still read `2.5.3`; bumping them to `2.5.4` is a separate
-ritual (touches files baked into both `.tox` source-hash sets, so
-would require another rebuild before tag + release).
+`check_tox_api_freshness.py`) are green on `main`.
+
+**Update 2026-05-19 (same day):** the 13 version manifests + both
+`.tox` files were bumped + rebuilt as part of **v2.5.4** (PR
+[#55](https://github.com/dreamrec/TDPilot_deepseekv4/pull/55),
+squash-commit [`ea1e8df`](https://github.com/dreamrec/TDPilot_deepseekv4/commit/ea1e8df0b27141af8feefd5519662de84c48c1f1)),
+which paid the byte-equivalence baseline-regen cost and closed both
+deferred Section A items (A.1 + A.2) in the same release. See the
+[v2.5.4 hardening retrospective](./README.md#v254-hardening-retrospective-2026-05-19)
+for the full closed-vs-still-planned matrix.
 
 ---
 
-## Section A — Deferred audit items (callbacks/ byte-frozen)
+## Section A — Audit items (callbacks/ byte-frozen) — ✅ ALL SHIPPED IN v2.5.4
 
 Both items live inside the PR-16 split-package `td_component/callbacks/` whose
 composed output is byte-pinned to a baseline fixture at
 `tests/fixtures/mcp_webserver_callbacks_v1.8.2_baseline.py`. Editing any file
 in that package fails `tests/test_composer_byte_equivalence.py` until the
-baseline is refreshed.
+baseline is refreshed. v2.5.4 refreshed the baseline + rebuilt the MCP `.tox`
+once for both fixes together (single byte-equivalence + `.tox`-rebuild cost
+amortized across A.1 + A.2 as the recommendation below predicted).
 
-### A.1 — C-1 part B: MCP-side origin allowlist
+### A.1 — C-1 part B: MCP-side origin allowlist  ✅ SHIPPED in v2.5.4 (PR #55, `ea1e8df`)
 **Severity:** Critical (defense-in-depth)
 **File:** `td_component/callbacks/router.py:60-90` (where Sec-Fetch-Site
 already lives)
+**As shipped:** `_is_origin_allowed` helper lives in `callbacks/_header.py`
+(mirrors chat-pipe-side `tdpilot_api_web_callbacks._allowed_origin`).
+Enforced as the first check in `onHTTPRequest`, before auth — same ordering
+as the chat-pipe side. Empty / missing `Origin` still accepted so non-browser
+MCP clients (curl, `npx tdpilot-dpsk4`, custom MCP integrations) keep
+working. 6 unit tests in `tests/test_v254_callbacks_origin_redact.py`.
+The plan-as-written below preserved as historical record.
 **Why:** Part A (commit `727282b`, autostart.py) inverts the MCP auth default
 to secure. Part B adds a same-origin allowlist mirroring
 `td_component/tdpilot_api_web_callbacks.py:_allowed_origin` so a malicious
@@ -55,13 +70,19 @@ even if the user has explicitly opted into `TDPILOT_ENABLE_AUTH_BYPASS=1`.
 4. Run `pytest tests/test_composer_byte_equivalence.py` — green.
 5. TD-side rebuild of MCP `.tox`.
 
-### A.2 — M-1: traceback redaction
+### A.2 — M-1: traceback redaction  ✅ SHIPPED in v2.5.4 (PR #55, `ea1e8df`)
 **Severity:** Medium
 **File:** `td_component/callbacks/router.py:108-116`
 **Why:** The 500 path returns `traceback.format_exc()` verbatim, leaking
 `$HOME` paths and internal module names to any caller that can reach an
 error response. The chat-pipe-side already has
 `td_component/tdpilot_api_config.py:redact_paths` (lines 178-208).
+**As shipped:** `_redact_paths` helper added to `callbacks/_header.py` —
+`/Users/<user>/…` → `~/…`, `~/.tdpilot-dpsk4/…` → `<TDPILOT_DPSK4_HOME>/…`.
+Same baseline-refresh + `.tox`-rebuild flow ran in the same v2.5.4 release.
+7 unit tests pinning each redaction rule + edge cases (non-string input,
+empty string, config-dirs-win-over-bare-home ordering). The plan-as-written
+below preserved as historical record.
 **Approach:**
 1. Either port `redact_paths` into `callbacks/_header.py` (composed into the
    same flat namespace as router.py), OR gate the traceback on

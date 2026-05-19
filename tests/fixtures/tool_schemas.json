@@ -1206,6 +1206,20 @@
     },
     "required": []
   },
+  "td_ingest_url": {
+    "description_present": true,
+    "properties": {
+      "url": {
+        "any_of_types": [],
+        "default_present": false,
+        "enum": null,
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ]
+  },
   "td_knowledge_get": {
     "description_present": true,
     "properties": {
