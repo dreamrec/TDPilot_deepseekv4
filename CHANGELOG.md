@@ -1,12 +1,17 @@
 # Changelog
 
-## Unreleased — v2.5.5 maintenance + early v2.6.3 slice (2026-05-19)
+## 2.5.5 - 2026-05-19
 
-> Lands on `main` with `[skip-version-check]` because the v2.5.4 release
-> ritual completed earlier today and the next official version bump should
-> roll a few sessions' worth of work together. Once a v2.5.5 (or v2.6.0)
-> tag is cut, this header gets renamed and `mcp/manifest.json`'s
-> `tool_count` (already at 110 here) becomes the new floor.
+**v2.5.5 maintenance + early v2.6.3 slice.** Ships the `td_ingest_url`
+MCP tool (first slice of the v2.6.3 web-ingestion plan) + closes the
+v2.5.4 audit's "lower-frequency argument-shape parity gap" finding via
+two new cross-runtime tests. PR-#56 landed the source changes on `main`
+with `[skip-version-check]` (the documented escape hatch from the v2.5.4
+tag-freshness CI gate); this release follows up by bumping all 13
+version manifests, regenerating the MCP `.tox` against the v2.5.5
+`API_VERSION`, and tagging + publishing through the standard ritual.
+
+Tool count **109 → 110**. Tests **2170 → 2205 passing**.
 
 ### 🆕 `td_ingest_url` — v2.6.3 first slice
 
@@ -89,11 +94,18 @@ snapshot regenerated to include `td_ingest_url`.
 Source-only sweep: 2170 → **2205 passing** (+35, +0 regressions; 4
 skipped: 1 paddleocr E2E + 3 mock-eval scenarios pending fixture capture).
 
-### `.tox` rebuild — NOT REQUIRED for this commit
+### Both `.tox` files rebuilt against v2.5.5 `API_VERSION`
 
-All changes are `src/td_mcp/` (MCP-server-side Python) + tests + docs.
-Zero `td_component/` changes. Both `.tox` source-hash gates stay green
-without a rebuild.
+The source-only sweep (PR-#56) shipped to `main` with zero
+`td_component/` changes and both `.tox` gates green. The v2.5.5 tag
+ritual bumps `td_component/callbacks/_header.py::API_VERSION` from
+`"2.5.4"` to `"2.5.5"` — one byte change in a single file. That file
+is in the source list for **both** the MCP `.tox`
+(`td_component/.tox-source-hash.json`) and the API `.tox`
+(`td_component/.tox-api-source-hash.json`, where the `callbacks/`
+package is included for the chat-pipe's bundled MCP-server fallback),
+so the version bump trips both freshness gates. Both files rebuilt in
+TouchDesigner 2025.32820 against the v2.5.5 sources.
 
 ---
 

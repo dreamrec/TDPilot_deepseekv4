@@ -1,11 +1,11 @@
-# TDPilot v2.5.4 — TouchDesigner AI Assistant Plugin
+# TDPilot v2.5.5 — TouchDesigner AI Assistant Plugin
 
 This plugin installs the **DPSK4 (Claude Code CLI) variant** of TDPilot.
 Two variants ship in the same repo:
 
 | Variant | This plugin? | Install | Best for |
 |---|---|---|---|
-| **TDPilot DPSK4** (Claude Code MCP) | ✅ yes | `/plugin install tdpilot-dpsk4@…` | 109 tools, full Claude Code plugin ecosystem |
+| **TDPilot DPSK4** (Claude Code MCP) | ✅ yes | `/plugin install tdpilot-dpsk4@…` | 110 tools, full Claude Code plugin ecosystem |
 | **TDPilot API** (standalone .tox) | ❌ separate path | drag `td_component/tdpilot_API.tox` into TD | self-contained, no CLI, in-TD chat |
 
 For the standalone .tox path, see the [main README](https://github.com/dreamrec/TDPilot_deepseekv4#readme) and the [MANUAL](https://github.com/dreamrec/TDPilot_deepseekv4/blob/main/docs/MANUAL.md). Both variants coexist in the same TD project (different ports + COMP names + config dirs).
@@ -14,7 +14,7 @@ For the standalone .tox path, see the [main README](https://github.com/dreamrec/
 
 ---
 
-TDPilot v2.5.4 provides 109 MCP tools for live control of TouchDesigner projects from Claude Code, optimized for DeepSeek v4. The bundled `.tox` includes a one-button installer (drag-drop into TD, click "Bootstrap All", done) — no manual setup script.
+TDPilot v2.5.5 provides 110 MCP tools for live control of TouchDesigner projects from Claude Code, optimized for DeepSeek v4 (v2.5.5 adds `td_ingest_url` for fetching HTTPS pages into Markdown context). The bundled `.tox` includes a one-button installer (drag-drop into TD, click "Bootstrap All", done) — no manual setup script.
 
 ## Components
 

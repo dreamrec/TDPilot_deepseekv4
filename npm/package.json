@@ -1,7 +1,7 @@
 {
   "name": "tdpilot-dpsk4",
-  "version": "2.5.4",
-  "description": "AI copilot for TouchDesigner with live MCP control (DeepSeek v4 optimized) \u2014 109 tools (incl. v2.5: td_get_activity_log, td_ocr_image, td_check_for_updates, td_get_traces, tool approval gates), focus + locations, hint injection, component notes, POPx inspection, knowledge corpus, project lifecycle control, technique memory, typed patch sessions.",
+  "version": "2.5.5",
+  "description": "AI copilot for TouchDesigner with live MCP control (DeepSeek v4 optimized) \u2014 110 tools (incl. v2.5: td_get_activity_log, td_ocr_image, td_check_for_updates, td_get_traces, tool approval gates; v2.5.5: td_ingest_url web ingestion), focus + locations, hint injection, component notes, POPx inspection, knowledge corpus, project lifecycle control, technique memory, typed patch sessions.",
   "keywords": [
     "touchdesigner",
     "mcp",

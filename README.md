@@ -7,14 +7,14 @@
    ╚═╝   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝    ╚═╝
 ```
 
-# TDPilot — DeepSeek v4 · v2.5.4
+# TDPilot — DeepSeek v4 · v2.5.5
 
 [![CI](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dreamrec/TDPilot_deepseekv4/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/tdpilot-dpsk4?label=npm)](https://www.npmjs.com/package/tdpilot-dpsk4)
 [![downloads](https://img.shields.io/npm/dm/tdpilot-dpsk4?label=downloads)](https://www.npmjs.com/package/tdpilot-dpsk4)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![python](https://img.shields.io/badge/python-3.10%2B-blue)](./pyproject.toml)
-[![tools](https://img.shields.io/badge/tools-95%20%28standalone%29%20%C2%B7%20109%20%28CLI%29-blueviolet)](./docs/MANUAL.md)
+[![tools](https://img.shields.io/badge/tools-95%20%28standalone%29%20%C2%B7%20110%20%28CLI%29-blueviolet)](./docs/MANUAL.md)
 [![TouchDesigner](https://img.shields.io/badge/TouchDesigner-2025.30000%2B-ff6200)](https://derivative.ca)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-v4-00a86b)](https://deepseek.com)
 
@@ -28,7 +28,7 @@ Two ways to run it. They coexist in the same TD project if you want both.
 |---|---|---|
 | **Install effort** | Drag one file in, paste a key. | Install Claude Code, install the plugin, configure MCP. |
 | **Where chat lives** | Browser tab + a panel inside TD. | Your Claude Code terminal. |
-| **Tools** | 95 curated for in-TD use | 109 (full surface) |
+| **Tools** | 95 curated for in-TD use | 110 (full surface) |
 | **Best for** | Live performance, quick patches, demos, "no setup" use | Heavy multi-file projects, long sessions, full Claude Code ecosystem |
 | **TD port** | 9987 | 9985 + 9986 |
 | **Config dir** | `~/.tdpilot-api/` | `~/.tdpilot-dpsk4/` |
