@@ -815,7 +815,7 @@ def _populate_comp(comp, repo_root, info_text):
     # Without this, the entire chat pipe is dead: ``DrainEvents`` never
     # runs, the agent's worker thread blocks on the cook-thread tool
     # dispatcher, and LLM responses never reach the browser. We
-    # discovered this the hard way — see the community research note
+    # discovered this the hard way — see the Derivative forum thread
     # ("Execute DAT not always run", forum.derivative.ca/t/.../10750)
     # which calls out exactly this symptom and prescribes force-cook
     # as the canonical fix.
