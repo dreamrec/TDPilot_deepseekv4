@@ -20,7 +20,12 @@ from pydantic import Field
 # Intentional cycle — see registry/__init__.py.
 from td_mcp import tool_registry as _tr  # noqa: E402
 from td_mcp.tool_registry import mcp  # noqa: E402
-from td_mcp.vision.ocr import OcrTimeout, OcrUnavailable, get_global_manager
+from td_mcp.vision.ocr import (
+    OcrTimeout,
+    OcrUnavailable,
+    PathNotAllowed,
+    get_global_manager,
+)
 
 
 @mcp.tool(name="td_ocr_image")
@@ -90,6 +95,23 @@ async def td_ocr_image(
     except FileNotFoundError as exc:
         _tr._record_tool_error(ctx, "td_ocr_image")
         return _tr._as_json_output({"error": "file_not_found", "path": str(exc), "advice": "Check the path."})
+    except PathNotAllowed as exc:
+        # H-3 sandbox refusal (audit 2026-05-19): path is outside the
+        # OCR sandbox (extension or root allowlist).
+        _tr._record_tool_error(ctx, "td_ocr_image")
+        return _tr._as_json_output(
+            {
+                "error": "ocr_path_not_allowed",
+                "details": str(exc),
+                "advice": (
+                    "td_ocr_image only reads images under the OCR sandbox "
+                    "(system tmp + ~/Downloads + ~/Desktop + ~/Pictures + "
+                    "~/.tdpilot-dpsk4 by default). To extend the sandbox, "
+                    "set TDPILOT_OCR_ALLOWED_ROOTS to a colon-separated "
+                    "list of directories in the MCP server's environment."
+                ),
+            }
+        )
     except OcrTimeout as exc:
         _tr._record_tool_error(ctx, "td_ocr_image")
         return _tr._as_json_output(

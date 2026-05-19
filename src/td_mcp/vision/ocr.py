@@ -41,6 +41,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -55,6 +56,16 @@ MAX_RESTARTS = int(os.environ.get("TDPILOT_OCR_MAX_RESTARTS", "3"))
 # Backoff between restart attempts, in seconds.
 _RESTART_BACKOFF = (1.0, 2.0, 4.0)
 
+# Path sandbox (H-3 fix, audit 2026-05-19). td_ocr_image accepts a path
+# straight from the agent; without an allowlist, a prompt-injected
+# agent could OCR ~/.ssh/known_hosts or screenshot caches containing
+# credentials. The defense is two layers:
+#   1. Extension allowlist — must look like an image file.
+#   2. Root allowlist     — must live under a known screenshot-like
+#      directory. Override via TDPILOT_OCR_ALLOWED_ROOTS (os.pathsep
+#      separated paths) for one-off cases.
+_ALLOWED_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff", ".gif"})
+
 
 class OcrUnavailable(RuntimeError):
     """Raised when the [ocr] extras aren't installed (paddleocr is missing).
@@ -65,6 +76,82 @@ class OcrUnavailable(RuntimeError):
 
 class OcrTimeout(RuntimeError):
     """A single OCR request exceeded ``REQUEST_TIMEOUT_SECONDS``."""
+
+
+class PathNotAllowed(RuntimeError):
+    """The requested OCR path is outside the sandbox.
+
+    Surfaced when the path's extension isn't in ``_ALLOWED_IMAGE_EXTS``
+    OR when the resolved path is not under any allowed root. The MCP
+    tool layer catches this and returns a clear advisory naming the
+    ``TDPILOT_OCR_ALLOWED_ROOTS`` env var as the extension hatch.
+    """
+
+
+def _default_allowed_roots() -> list[Path]:
+    """Roots ``td_ocr_image`` may read by default.
+
+    Covers the typical screenshot workflow: system tmp dirs + user's
+    screenshot directories + the TDPilot cache root. Non-existent
+    paths are filtered out so the resolved-is_relative_to check in
+    :func:`_resolve_and_check_path` doesn't choke.
+    """
+    home = Path.home()
+    candidates: list[Path] = [
+        Path(tempfile.gettempdir()),
+        home / "Downloads",
+        home / "Desktop",
+        home / "Pictures",
+        home / ".tdpilot-dpsk4",
+    ]
+    return [p for p in candidates if p.exists()]
+
+
+def _is_under(child: Path, parent: Path) -> bool:
+    """``True`` if ``child`` is at or below ``parent`` (already resolved)."""
+    try:
+        child.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _resolve_and_check_path(image_path: str) -> Path:
+    """Validate ``image_path`` against the sandbox; return the resolved path.
+
+    Raises :class:`FileNotFoundError` if the file doesn't exist after
+    symlink resolution. Raises :class:`PathNotAllowed` for any of:
+    extension not in :data:`_ALLOWED_IMAGE_EXTS`, or resolved path
+    outside the union of :func:`_default_allowed_roots` and
+    ``TDPILOT_OCR_ALLOWED_ROOTS``.
+
+    Symlinks are resolved BEFORE the root check so a symlink in an
+    allowed dir pointing at ``/etc/passwd`` is rejected.
+    """
+    p = Path(image_path).expanduser()
+    try:
+        resolved = p.resolve(strict=True)
+    except FileNotFoundError:
+        raise FileNotFoundError(image_path) from None
+    if not resolved.is_file():
+        raise FileNotFoundError(image_path)
+    if resolved.suffix.lower() not in _ALLOWED_IMAGE_EXTS:
+        raise PathNotAllowed(
+            f"OCR refused: extension {resolved.suffix!r} is not a known image "
+            f"format. Allowed: {sorted(_ALLOWED_IMAGE_EXTS)}."
+        )
+    env_override = os.environ.get("TDPILOT_OCR_ALLOWED_ROOTS", "").strip()
+    if env_override:
+        roots = [Path(s).expanduser().resolve() for s in env_override.split(os.pathsep) if s]
+    else:
+        roots = [r.resolve() for r in _default_allowed_roots()]
+    if not any(_is_under(resolved, root) for root in roots):
+        raise PathNotAllowed(
+            "OCR refused: path is outside the allowed roots. "
+            "Set TDPILOT_OCR_ALLOWED_ROOTS to a colon-separated list of "
+            "directories to extend the sandbox."
+        )
+    return resolved
 
 
 @dataclass
@@ -113,17 +200,19 @@ class OcrManager:
     def ocr_image(self, image_path: str, lang: str = "en") -> OcrResult:
         """Run OCR on ``image_path``. Spawns the worker if needed.
 
-        Raises :class:`OcrUnavailable` if extras aren't installed,
+        Raises :class:`FileNotFoundError` if the path doesn't exist,
+        :class:`PathNotAllowed` if it's outside the sandbox (extension
+        or root allowlist — see :func:`_resolve_and_check_path`),
+        :class:`OcrUnavailable` if extras aren't installed,
         :class:`OcrTimeout` on hard timeout, or ``RuntimeError`` on
         worker crash beyond ``MAX_RESTARTS``.
         """
-        if not Path(image_path).exists():
-            raise FileNotFoundError(image_path)
+        safe_path = _resolve_and_check_path(image_path)
 
         with self._lock:
             self._ensure_worker()
             start = time.monotonic()
-            payload = {"image_path": str(image_path), "lang": lang}
+            payload = {"image_path": str(safe_path), "lang": lang}
             response = self._send_request(payload)
             elapsed_ms = int((time.monotonic() - start) * 1000)
 

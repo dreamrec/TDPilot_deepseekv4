@@ -1266,7 +1266,7 @@
                   'Content-Type': 'application/json',
                   ...AUTH_HEADERS,
                 },
-                body: JSON.stringify({ mode: 'token' }),
+                body: JSON.stringify({ mode: 'token', confirm: true }),
               },
             );
             if (!resp.ok) throw new Error('HTTP ' + resp.status);

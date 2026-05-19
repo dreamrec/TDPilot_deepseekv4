@@ -22,7 +22,8 @@ INSTALLER_REFRESH_EVERY_N_FRAMES = 60 * 60  # 1×/min — installer state change
 INSTALLER_PROGRESS_EVERY_N_FRAMES = 6  # 10Hz — show live progress during a job
 
 
-_AUTH_BYPASS_OPT_OUT_VAR = "TDPILOT_DISABLE_AUTH_BYPASS"
+_AUTH_BYPASS_OPT_OUT_VAR = "TDPILOT_DISABLE_AUTH_BYPASS"  # legacy (pre-v2.6)
+_AUTH_BYPASS_OPT_IN_VAR = "TDPILOT_ENABLE_AUTH_BYPASS"  # explicit opt-in to bypass
 
 
 def _is_truthy_env(name):
@@ -35,21 +36,58 @@ def _is_truthy_env(name):
 
 
 def _disable_auth():
-    """Default-bypass for single-user local mode.
+    """Default-secure (C-1 audit fix, 2026-05-19).
 
-    Pre-2.1.2 this unconditionally popped ``TD_MCP_SHARED_SECRET`` and forced
-    ``TD_MCP_REQUIRE_AUTH=0`` on every COMP load — so any persistent secret
-    written to ``~/.tdpilot-dpsk4/.tdpilot-dpsk4.env`` got wiped before the
-    webserverDAT could see it. v2.1.2 makes this opt-out: set
-    ``TDPILOT_DISABLE_AUTH_BYPASS=1`` in the env file (or as a process env
-    var) to keep whatever ``TD_MCP_SHARED_SECRET`` / ``TD_MCP_REQUIRE_AUTH``
-    the env file installed. Default behavior unchanged — a fresh drag-in
-    still gets unauthenticated MCP access for zero-config local dev.
+    Pre-v2.6 this method ALWAYS popped ``TD_MCP_SHARED_SECRET`` and forced
+    ``TD_MCP_REQUIRE_AUTH=0`` on COMP load unless ``TDPILOT_DISABLE_AUTH_BYPASS=1``
+    was set. Result: any local process (or browser tab if running same-origin)
+    could POST ``/api/exec`` to ``td_exec_python`` and run arbitrary Python
+    inside TouchDesigner without authenticating. The chat-pipe (port 9987)
+    had been hardened to default-token via ``Authmode`` since v2.3.0, but
+    the MCP webserverDAT (ports 9981 / 9985) inherited the old
+    default-bypass posture.
+
+    New default (v2.6+): leave whatever auth state ``maybe_migrate_env_to_file``
+    (v2.5.4) installed alone. Two env vars control behavior:
+
+      * ``TDPILOT_ENABLE_AUTH_BYPASS=1`` — explicit opt-in to the legacy
+        zero-config zero-auth flow. Forces ``TD_MCP_REQUIRE_AUTH=0`` and
+        pops any installed secret. Use only on single-user dev boxes or
+        in CI where the MCP port is unreachable from outside.
+      * ``TDPILOT_DISABLE_AUTH_BYPASS=1`` (legacy) — was the opt-out to
+        prevent the pre-fix wipe. Now a no-op since the wipe no longer
+        happens by default. Still recognised so existing env files keep
+        loading without errors; emits a one-time deprecation note.
+
+    Migration path for users who relied on the pre-v2.6 zero-config flow:
+    set ``TDPILOT_ENABLE_AUTH_BYPASS=1`` in ``~/.tdpilot-dpsk4/.tdpilot-dpsk4.env``
+    (the file ``maybe_migrate_env_to_file`` writes on first run), OR
+    use the chat-pipe Authmode wizard to install a per-installation
+    secret.
     """
     if _is_truthy_env(_AUTH_BYPASS_OPT_OUT_VAR):
+        # Legacy opt-out is now a no-op (we no longer wipe by default).
+        # Print a one-time note so users can clean their env files.
+        print(
+            "[TDPilot autostart] note: TDPILOT_DISABLE_AUTH_BYPASS is a "
+            "no-op since v2.6 (auth is on by default). You can remove "
+            "this line from your env file."
+        )
         return
-    os.environ.pop("TD_MCP_SHARED_SECRET", None)
-    os.environ["TD_MCP_REQUIRE_AUTH"] = "0"
+    if _is_truthy_env(_AUTH_BYPASS_OPT_IN_VAR):
+        # User explicitly wants the legacy zero-config flow.
+        print(
+            "[TDPilot autostart] auth bypass enabled via "
+            "TDPILOT_ENABLE_AUTH_BYPASS — MCP webserverDAT will not "
+            "require a token. Single-user local dev only."
+        )
+        os.environ.pop("TD_MCP_SHARED_SECRET", None)
+        os.environ["TD_MCP_REQUIRE_AUTH"] = "0"
+        return
+    # Default: leave the secret + REQUIRE_AUTH whatever the env file
+    # configured. If the user never installed a secret, the webserverDAT
+    # will return 401 on every request — that's the secure default. The
+    # firstrun wizard guides users to install one.
 
 
 def _tick():
