@@ -35,6 +35,27 @@ Two ways to run it. They coexist in the same TD project if you want both.
 
 **Start here.** If you just want to chat with TouchDesigner → **standalone `.tox`** (drop-in, two minutes). If you already use Claude Code → **Claude Code CLI**. If you want MCP in some other client (Cursor, Continue, custom integrations) → the same npm package, `npx tdpilot-dpsk4`, exposes the MCP server standalone. Jump straight to [`docs/MANUAL.md`](docs/MANUAL.md) for the deep reference, or read on for the install walkthroughs.
 
+<details open>
+<summary><b>🔐 Post-2.5.3 audit fixes (May 19, 2026, on `main`, pending `v2.5.4` tag)</b></summary>
+
+A fresh-eyes audit of the v2.5.3 ship state ([PR #53](https://github.com/dreamrec/TDPilot_deepseekv4/pull/53), merged as `6a9aabe`) closed **1 Critical, 4 High, 1 Medium** security findings plus doc drift and a bidirectional parity test that catches the regression class behind the v2.5.1 chat-pipe gap.
+
+**🔴 BREAKING — the MCP webserverDAT now defaults to SECURE auth.** The pre-fix `td_component/autostart.py:_disable_auth` unconditionally wiped `TD_MCP_SHARED_SECRET` + forced `TD_MCP_REQUIRE_AUTH=0` on every COMP load → any local process could POST `/api/exec` to `td_exec_python` without authenticating. New default: leave the env file's secret alone. If you relied on the legacy zero-config zero-auth flow, set `TDPILOT_ENABLE_AUTH_BYPASS=1` in `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` to opt back in. The legacy `TDPILOT_DISABLE_AUTH_BYPASS=1` opt-out is honored as a no-op for env-file backwards compat. See [CHANGELOG](CHANGELOG.md) for the full migration matrix.
+
+**Other fixes:**
+
+- **H-1** `snapshot_restore_scoped` path-traversal sandbox (`SNAPSHOTS_DIR` `is_relative_to` gate; symlinks resolved BEFORE the check).
+- **H-2** `TDPILOT_DISABLE_TOOL_APPROVAL` truthiness normalized to `{1, true, yes, on}` — `=0` no longer paradoxically enables the bypass.
+- **H-3** `td_ocr_image` two-layer sandbox: extension allowlist (`png/jpg/jpeg/bmp/webp/tif/tiff/gif`) + root allowlist (system tempdir, `~/Downloads`, `~/Desktop`, `~/Pictures`, `~/.tdpilot-dpsk4`). Extend via `TDPILOT_OCR_ALLOWED_ROOTS=<colon-separated paths>`.
+- **H-4** Explicit `Authmode=token` now wins over a stale `TDPILOT_API_INSECURE=1` env-var. Unrecognised `Authmode` values fall to SECURE instead of the env-var fallback.
+- **M-2** `POST /set-authmode` requires `confirm: true` in the body for the open→token lockout-direction flip — closes a same-origin CSRF that could lock the legitimate user out + steal the new session token.
+
+**Plus:** bidirectional schema↔handler parity test (`tests/test_chat_pipe_surface_parity.py`, 7 tests) that catches the v2.5.1-class regression where a handler exists but is invisible to the LLM. AGENTS.md / `docs/plans/v2.5_IMPLEMENTATION_PLAN.md` doc drift cleared. Test totals **2113 → 2141** passing.
+
+Both `.tox` files rebuilt in TouchDesigner 2025.32820 against the audit-fix edits and committed. Deferred items (C-1 part B MCP-side origin allowlist, M-1 traceback redaction, plus the larger architectural refactors A-1/A-2/A-3 and recommended mock-eval scenario coverage) tracked in [`docs/plans/AUDIT_2026_05_19_FOLLOWUPS.md`](docs/plans/AUDIT_2026_05_19_FOLLOWUPS.md).
+
+</details>
+
 <details>
 <summary><b>Release highlights — v2.5.0 (May 19, 2026)</b> (click to expand)</summary>
 

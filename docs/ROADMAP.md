@@ -1,6 +1,6 @@
 # TDPilot DPSK4 — Roadmap
 
-> **Updated 2026-05-19.** v2.5.0 + v2.5.1 SHIPPED on 2026-05-19 (8 phases end-to-end in a single dev day; tool count 105 → 109; tests 2000 → 2108). v2.4.0 SHIPPED on 2026-05-13. The v2.5–v2.7 arc supersedes the original v2.2→v3.0 plan below.
+> **Updated 2026-05-19.** v2.5.0 → v2.5.3 SHIPPED on 2026-05-19 (8 phases of v2.5 end-to-end in a single dev day + 3 live-audit patches: v2.5.1 chat-pipe alias, v2.5.2 cycle-detect orphan-tool_use, v2.5.3 rollback-hint preservation; tool count 105 → 109; tests 2000 → 2113). **Post-v2.5.3 fresh-eyes audit** also landed on main same day (PR #53, commit `6a9aabe`) — closes 1 Critical + 4 High + 1 Medium security findings, adds bidirectional schema↔handler parity test, lifts tests to 2141. See [`plans/README.md` post-2.5.3 retrospective](./plans/README.md#post-253-audit-retrospective-2026-05-19) and [`plans/AUDIT_2026_05_19_FOLLOWUPS.md`](./plans/AUDIT_2026_05_19_FOLLOWUPS.md) for the full landed-vs-deferred breakdown. v2.4.0 SHIPPED 2026-05-13. The v2.5–v2.7 arc supersedes the original v2.2→v3.0 plan below.
 
 ---
 

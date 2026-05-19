@@ -5,32 +5,24 @@ audit itself ran against `main` at v2.5.3 (commits `7fea6fa` → `365bf4e`) and
 surfaced 1 Critical, 4 High, 2 Medium security findings plus 3 architectural
 debt items.
 
-**Already shipped on `claude/audit-fixes-2026-05-19`** (this branch):
+**✅ Merged to `main`** via PR [#53](https://github.com/dreamrec/TDPilot_deepseekv4/pull/53), squash-commit `6a9aabe`, on 2026-05-19. All 7 CI gates green at merge time. Both `.tox` files rebuilt in TouchDesigner 2025.32820 against the audit-fix edits and bundled into the PR:
 
-| Finding | Severity | Status | Commit |
+| Finding | Severity | Status | Original branch commit |
 |---|---|---|---|
-| D-1..D-4 doc drift | — | SHIPPED | `30b7c20` |
-| H-3 OCR path sandbox | High | SHIPPED | `30b7c20` |
-| Bidirectional schema↔handler parity test | — | SHIPPED | `30b7c20` |
-| C-1 MCP auth default-secure (autostart.py) | Critical | SHIPPED (needs .tox rebuild) | `727282b` |
-| H-1 snapshot path traversal | High | SHIPPED (needs API .tox rebuild) | `727282b` |
-| H-2 approval-gate truthiness | High | SHIPPED (needs API .tox rebuild) | `727282b` |
-| H-4 Authmode env-var bypass | High | SHIPPED (needs API .tox rebuild) | `727282b` |
-| M-2 /set-authmode lockout | Medium | SHIPPED (needs API .tox rebuild) | `727282b` |
-
-**Pre-merge action required**: rebuild BOTH `.tox` files inside TouchDesigner
-per [`feedback_td_tox_rebuild_recipe.md`](../../#) (single-line Textport
-recipe). The auto-mirror in `build_tdpilot_tox.py` / `build_tdpilot_api_tox.py`
-copies the freshly built `.tox` + matching `.tox-source-hash.json` from the
-worktree back into the main repo. After rebuild:
-```
-git add td_component/tdpilot-dpsk4.tox td_component/.tox-source-hash.json
-git add td_component/tdpilot_API.tox td_component/.tox-api-source-hash.json
-git commit -m "build: rebuild both .tox after audit fixes"
-```
+| D-1..D-4 doc drift | — | ✅ on main | `30b7c20` |
+| H-3 OCR path sandbox | High | ✅ on main | `30b7c20` |
+| Bidirectional schema↔handler parity test | — | ✅ on main | `30b7c20` |
+| C-1 MCP auth default-secure (autostart.py) | Critical | ✅ on main + .tox rebuilt | `727282b` + `b004baf` |
+| H-1 snapshot path traversal | High | ✅ on main + .tox rebuilt | `727282b` + `b004baf` |
+| H-2 approval-gate truthiness | High | ✅ on main + .tox rebuilt | `727282b` + `b004baf` |
+| H-4 Authmode env-var bypass | High | ✅ on main + .tox rebuilt | `727282b` + `b004baf` |
+| M-2 /set-authmode lockout | Medium | ✅ on main + .tox rebuilt | `727282b` + `b004baf` |
 
 The two CI freshness gates (`check_tox_freshness.py` /
-`check_tox_api_freshness.py`) will go green once the rebuild lands.
+`check_tox_api_freshness.py`) are green on `main`. The seven version
+manifests still read `2.5.3`; bumping them to `2.5.4` is a separate
+ritual (touches files baked into both `.tox` source-hash sets, so
+would require another rebuild before tag + release).
 
 ---
 

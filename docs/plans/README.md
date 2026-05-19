@@ -46,6 +46,29 @@ Plus: post-ship live audit found 1 real bug (HEAD route 404) + chat-pipe surface
 
 Both are smaller than a full release; fold into v2.6 release engineering or ship as v2.5.2 patch.
 
+## Post-2.5.3 audit retrospective (2026-05-19)
+
+A fresh-eyes audit of the v2.5.3 ship state (run same day as v2.5.0/2.5.1/2.5.2/2.5.3 to validate the release before downstream consumers picked it up) surfaced **1 Critical + 4 High + 2 Medium security findings**, doc drift, and a regression-prevention testing gap. The follow-up shipped as PR [#53](https://github.com/dreamrec/TDPilot_deepseekv4/pull/53) (squash-merged as `6a9aabe`, 4 commits, 2113 → 2141 tests).
+
+| Finding | Severity | Status |
+|---|---|---|
+| **C-1** MCP webserverDAT default-secure auth (inverts `_disable_auth` in `autostart.py`; breaking change for legacy zero-config users) | Critical | ✅ SHIPPED on main |
+| **H-1** `snapshot_restore_scoped` path-traversal sandbox | High | ✅ SHIPPED |
+| **H-2** `TDPILOT_DISABLE_TOOL_APPROVAL` truthiness fix | High | ✅ SHIPPED |
+| **H-3** `td_ocr_image` extension + root allowlist | High | ✅ SHIPPED |
+| **H-4** `Authmode=token` wins over stale `TDPILOT_API_INSECURE=1` | High | ✅ SHIPPED |
+| **M-1** Traceback redaction in `callbacks/router.py` | Medium | ⏸ DEFERRED — see [`AUDIT_2026_05_19_FOLLOWUPS.md` § A.2](./AUDIT_2026_05_19_FOLLOWUPS.md#a2--m-1-traceback-redaction) (requires byte-equivalence baseline regen) |
+| **M-2** `POST /set-authmode` lockout-direction `confirm: true` | Medium | ✅ SHIPPED |
+| **D-1..D-4** Doc drift (v2.5 plan statuses, AGENTS counts, npm-publish OIDC docs) | — | ✅ SHIPPED |
+| **Schema↔handler parity test** (closes v2.5.1 regression class) | — | ✅ SHIPPED — `tests/test_chat_pipe_surface_parity.py` |
+| **C-1 part B** MCP-side origin allowlist | Critical (defense-in-depth) | ⏸ DEFERRED — see [§ A.1](./AUDIT_2026_05_19_FOLLOWUPS.md#a1--c-1-part-b-mcp-side-origin-allowlist) (requires byte-equivalence baseline regen) |
+| **A-1** Extract `td_shared/` package (~4000 LOC silently forked between `src/td_mcp/` and `td_component/`) | Architecture | ⏸ PLANNED — see [§ B.1](./AUDIT_2026_05_19_FOLLOWUPS.md#b1--extract-td_shared-package-1-week--parity-ci) (~1 week, 5 phases) |
+| **A-2** Split `tool_registry.py` (2168-line god-import) | Architecture | ⏸ PLANNED — depends on A-1 |
+| **A-3** Decompose `_loop` (401-line method, all 3 v2.5.x bug sites lived here) | Architecture | ⏸ PLANNED |
+| **Mock-evals scenario coverage** (cycle-detect / rollback / alias scenarios) | Testing | ⏸ PLANNED — [§ C](./AUDIT_2026_05_19_FOLLOWUPS.md#section-c--mock-evals-scenario-coverage-recommended-half-day) (~½ day, no .tox impact, highest regression-prevention ROI) |
+
+**Headline breaking change**: C-1 inverts the MCP auth default from "always insecure, opt-out to secure" to "always secure, opt-in to insecure". Users who relied on the zero-config zero-auth flow need to set `TDPILOT_ENABLE_AUTH_BYPASS=1` in `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` (or run the `Authmode` wizard to install a secret). See the [CHANGELOG](../../CHANGELOG.md) "Unreleased" entry for the full migration matrix.
+
 ## Historical plans
 
 | Plan | Status |

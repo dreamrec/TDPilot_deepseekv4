@@ -1,5 +1,95 @@
 # Changelog
 
+## Unreleased — post-2.5.3 audit fixes (2026-05-19)
+
+> Pending a `v2.5.4` tag. Bundled as PR [#53](https://github.com/dreamrec/TDPilot_deepseekv4/pull/53), squash-merged as `6a9aabe`. All 7 CI gates green (lint + 3 Python versions + 2 install-parses + both `.tox` freshness checks). The seven version manifests still read `2.5.3`; bumping them to `2.5.4` is a separate ritual that requires another `.tox` rebuild.
+
+### 🔴 Breaking — C-1: MCP webserverDAT auth is now SECURE BY DEFAULT
+
+Closes the most significant finding of the 2026-05-19 fresh audit. Pre-fix, `td_component/autostart.py:_disable_auth` unconditionally popped `TD_MCP_SHARED_SECRET` and forced `TD_MCP_REQUIRE_AUTH=0` on every COMP load unless `TDPILOT_DISABLE_AUTH_BYPASS=1` was set. Result: any local process (curl, prompt-injected agent, non-browser script) could POST `/api/exec` to `td_exec_python` and run arbitrary Python inside TouchDesigner without authenticating. The chat-pipe surface (port 9987) was hardened to default-token via `Authmode` in v2.3.0; the MCP webserverDAT (ports 9981 / 9985) inherited the old default-bypass posture until now.
+
+**New behavior:**
+
+| Env var | Effect |
+|---|---|
+| _(neither set)_ | **Default: SECURE.** Secret + `TD_MCP_REQUIRE_AUTH` from the env file survive untouched. |
+| `TDPILOT_ENABLE_AUTH_BYPASS=1` | **New opt-in.** Reproduces the pre-v2.6 zero-config zero-auth flow. Single-user dev boxes / CI where the MCP port is unreachable from outside. |
+| `TDPILOT_DISABLE_AUTH_BYPASS=1` _(legacy)_ | No-op since v2.6 (default is already secure). Honored for backwards compat with existing env files; prints a one-time deprecation note. |
+| _both set_ | Opt-out wins (safer default). |
+
+**Migration**: users who relied on the pre-v2.6 zero-config flow (no env file, no secret) will hit `401` on every MCP call until they either set `TDPILOT_ENABLE_AUTH_BYPASS=1` in `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` OR run the chat-pipe `Authmode` wizard to install a per-installation MCP secret. v2.5.4 `maybe_migrate_env_to_file` writes the env file on first run, so most v2.5.0+ installs are covered automatically.
+
+23 tests in `tests/test_v212_autostart_opt_in_auth.py` (rewritten from the v2.1.2-era opt-out suite, +13 new tests covering the opt-in semantics + the both-set-opt-out-wins rule + the legacy var's deprecation no-op).
+
+### 🟠 High — H-1: `snapshot_restore_scoped` path-traversal sandbox
+
+`td_component/tdpilot_api_patches.py:_find_scoped_manifest` previously accepted any absolute path that existed as a file with no `SNAPSHOTS_DIR` check. A prompt-injected agent (or any caller bypassing the v2.5.3 approval gate via `Authmode=open` / `TDPILOT_DISABLE_TOOL_APPROVAL=1`) could pass `path='/Users/<user>/.ssh/some.json'` and have the file parsed as JSON; while the manifest-version check limited mutation, the parsed content still surfaced in error messages → file-existence probing + arbitrary-JSON read. Fix: `resolve(strict=True)` BEFORE the file check (so symlinks-in-`SNAPSHOTS_DIR` pointing at `~/.ssh/known_hosts` are rejected), then `relative_to(SNAPSHOTS_DIR.resolve())` gate.
+
+### 🟠 High — H-2: `TDPILOT_DISABLE_TOOL_APPROVAL` truthiness
+
+`tdpilot_api_runtime.py:1107` used naive `os.environ.get(...)` truthiness which treated `"0"` / `"false"` / `"no"` as truthy (any non-empty string). A user setting `TDPILOT_DISABLE_TOOL_APPROVAL=0` to "disable disable" actually enabled the bypass. Fix: new module-level `_env_is_truthy` helper mirroring `autostart._is_truthy_env` — only `"1"` / `"true"` / `"yes"` / `"on"` are truthy. Wired through the approval gate.
+
+### 🟠 High — H-3: `td_ocr_image` path sandbox
+
+`src/td_mcp/vision/ocr.py` previously accepted any path the agent supplied. A prompt-injected agent could OCR `~/.ssh/known_hosts`, `~/.aws/credentials`, or screenshot caches containing readable text. New two-layer sandbox:
+
+1. **Extension allowlist** — `_ALLOWED_IMAGE_EXTS = {png, jpg, jpeg, bmp, webp, tif, tiff, gif}`. Case-insensitive. Symlinks resolved BEFORE the extension check.
+2. **Root allowlist** — resolved path must live under one of the default roots (system tempdir, `~/Downloads`, `~/Desktop`, `~/Pictures`, `~/.tdpilot-dpsk4`) OR a directory in `TDPILOT_OCR_ALLOWED_ROOTS` (os.pathsep-separated). Symlinks resolved BEFORE the root check so a link-in-allowed-dir to `/etc/passwd` is rejected.
+
+New `PathNotAllowed` exception. `tools_ocr.py` wrapper translates to a structured `ocr_path_not_allowed` error with the env-var advisory in the JSON response. 13 new pin tests in `tests/test_v25_ocr_sandbox.py`.
+
+### 🟠 High — H-4: `TDPILOT_API_INSECURE` env-var bypass of explicit `Authmode=token`
+
+`tdpilot_api_web_callbacks.py:_insecure_mode` pre-fix used a single try/except around the whole `Authmode` read that caught ANY exception and fell through to the env-var fallback. Result: a developer who explicitly set `Authmode=token` on the COMP but had a stale `TDPILOT_API_INSECURE=1` lingering in the process env would see auth SILENTLY bypassed if the param read errored (rename, attribute shift after a TD rebuild, transient init).
+
+**New ordering:**
+- `Authmode=open` → insecure (env-var irrelevant)
+- `Authmode=token` → SECURE (env-var IGNORED)
+- `Authmode=<unrecognised value>` → SECURE (env-var IGNORED — a typo can't silently re-enable insecure)
+- `Authmode` read raises → SECURE
+- No `Authmode` attr (legacy COMPs / test harness) → env-var IS the only signal; legacy v2.1.3 contract preserved
+- No COMP at all (CI smoke) → env-var fallback survives
+
+4 new H-4 regression tests in `tests/test_standalone_csrf.py`. The previously-failing `test_authmode_unknown_value_falls_through_to_env_var` was renamed to `test_authmode_unknown_value_falls_to_secure_not_env_var` to pin the new contract.
+
+### 🟡 Medium — M-2: `/set-authmode` lockout-direction CSRF
+
+`/set-authmode` sits BELOW `_check_auth`, so a legacy-`Authmode=open` COMP can hit it tokenless to migrate to token mode. Pre-fix risk: a same-origin attacker tab during the legacy open-mode window could silently POST `{"mode": "token"}`; the server would rotate the session token and lock the legitimate user out. Fix: require explicit `confirm: true` in the body for the lockout-direction flip (`mode: token`). The chat-pipe wizard at `tdpilot_api_chat.html:1269` now sends `{ mode: 'token', confirm: true }`. CSRFs that bump into the endpoint without the field return `400 confirm_required`.
+
+### 🧪 Testing — bidirectional schema↔handler parity
+
+`tests/test_chat_pipe_surface_parity.py` (new, 7 tests) pins both directions of the schema↔handler relationship — closes the exact v2.5.1-class regression where `TOOL_TO_HANDLER` had `td_get_recent_traces` but `TOOL_SCHEMAS` didn't have `td_get_traces`, leaving the tool invisible to the LLM. Also polices `INTERNAL_ONLY_TOOL_NAMES`: prevents a future maintainer from quieting the parity test by adding a `td_`-prefixed public-looking name to the internal-only allowlist.
+
+### 📝 Doc drift (D-1..D-4)
+
+- **D-1** — `docs/plans/v2.5_IMPLEMENTATION_PLAN.md`: all 8 phase status fields flipped from `not_started` to `SHIPPED v2.5.0 (2026-05-19)`. Prevents a fresh-agent session re-executing v2.5 work.
+- **D-2** — `AGENTS.md`: repo-layout block, test count, tool count refreshed to v2.5.3 reality.
+- **D-3** — `AGENTS.md` TL;DR: new bullet enumerating the six v2.5 user-visible runtime surfaces (`Approvalmode`, `td_ocr_image`, `td_get_activity_log`, `td_check_for_updates`, `td_get_traces`, `maybe_migrate_env_to_file`).
+- **D-4** — `.github/workflows/npm-publish.yml` header comments: stale NPM_TOKEN setup steps replaced with the OIDC Trusted Publisher explanation matching the actual `npm publish --provenance --access public` implementation.
+
+### 🛠 `.tox` rebuild
+
+Both `.tox` files rebuilt inside TouchDesigner 2025.32820 against the audit-fix edits. Source-hash gates green:
+
+- `tdpilot-dpsk4.tox` — 49606 → 50374 bytes
+- `tdpilot_API.tox` — 283326 → 285238 bytes
+
+Live verification of the rebuilt API `.tox` (installed at `/project1/tdpilot_API` during the build) confirmed H-1, H-2, H-4, M-2 fixes are baked in (source-string match for each audit-comment marker). C-1 lives in the MCP `.tox` (autostart.py) which wasn't live-installed during this rebuild; source-hash gate confirms byte-identity.
+
+### Deferred
+
+See [`docs/plans/AUDIT_2026_05_19_FOLLOWUPS.md`](docs/plans/AUDIT_2026_05_19_FOLLOWUPS.md) for:
+
+- **Section A** (callbacks/ byte-frozen): C-1 part B (MCP-side origin allowlist), M-1 (traceback redaction). Both require regenerating the `tests/fixtures/mcp_webserver_callbacks_v1.8.2_baseline.py` byte-equivalence fixture.
+- **Section B** (architecture refactors): A-1 `td_shared/` extraction (~1 wk, 5 phases) — the single highest-ROI refactor identified by the audit; A-2 `tool_registry.py` split (~3 days, depends on A-1); A-3 `_loop` decompose (~2 days).
+- **Section C** (mock-evals scenario coverage): ~½ day, no `.tox` impact, the regression-prevention move that would have caught the v2.5.1/2/3 cascade pre-merge.
+
+### Test totals
+
+Full suite: 2113 → **2141 passing** (+28, +0 regressions, 1 unchanged skip for the paddleocr-needed E2E).
+
+---
+
 ## 2.5.3 - 2026-05-19
 
 **Cycle-detect rollback-hint preservation (Codex P2 follow-up on PR #51).** ChatGPT-Codex caught a follow-on bug in v2.5.2: my fix appended the synthetic `tool_result` user message to `agent.messages` BEFORE the outer `try/finally` ran `rollback_guard.__exit__`. The `finally` would still roll back any reverted mutation and populate `hint_text`, but `_apply_rollback_hint` at `tdpilot_api_agent.py:1219` (which lives AFTER the finally) never got to attach that hint to the persisted message — so the next `/send` saw a tool_result claiming success when the mutation had been reverted, with no recovery hint. Model would happily reference a path that no longer exists.
