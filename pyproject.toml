@@ -47,6 +47,13 @@ ocr = [
     "paddleocr>=2.7",
     "paddlepaddle>=2.6",
 ]
+# v2.5.5 — Web ingestion via td_ingest_url (first slice of v2.6.3).
+# markitdown is Microsoft's HTML→Markdown converter — lightweight,
+# stdlib + a couple of small deps. Without it, td_ingest_url returns
+# a structured "install [web] extras" advisory; other tools unaffected.
+web = [
+    "markitdown>=0.0.1",
+]
 
 [project.scripts]
 tdpilot-dpsk4 = "td_mcp.server:main"

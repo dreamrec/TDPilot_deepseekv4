@@ -19,4 +19,5 @@ from __future__ import annotations
 # 2026-05-18: bumped 105 → 106 with td_get_activity_log (v2.5.1).
 # 2026-05-19: bumped 106 → 108 with td_ocr_image (v2.5.2) + td_check_for_updates (v2.5.7).
 # 2026-05-19: bumped 108 → 109 with td_get_traces (v2.5.8 — chat-pipe trace viewer).
-EXPECTED_MIN_TOOL_COUNT: int = 109
+# 2026-05-19: bumped 109 → 110 with td_ingest_url (v2.5.5 / v2.6.3 first slice — web ingestion).
+EXPECTED_MIN_TOOL_COUNT: int = 110

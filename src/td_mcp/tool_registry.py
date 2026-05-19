@@ -2045,6 +2045,9 @@ from td_mcp.registry.tools_info import (  # noqa: E402
     td_get_server_metrics,
     td_list_families,
 )
+from td_mcp.registry.tools_ingest import (  # noqa: F401, E402  — registers 1 v2.5.5 tool (v2.6.3 first slice)
+    td_ingest_url,
+)
 from td_mcp.registry.tools_knowledge import (  # noqa: E402
     td_describe_surface,
     td_get_build_compatibility,
