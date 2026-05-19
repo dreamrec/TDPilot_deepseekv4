@@ -154,14 +154,20 @@ class TestInsecureModeFromAuthmode:
         comp.par.Authmode.val = "Token"
         assert module._insecure_mode() is False
 
-    def test_authmode_unknown_value_falls_through_to_env_var(self, web_module, monkeypatch):
-        """If somehow the COMP param has a junk value (corrupted .toe,
-        post-rename leftover, etc.), don't trust it — fall back to env
-        var instead of defaulting silently to either mode."""
+    def test_authmode_unknown_value_falls_to_secure_not_env_var(self, web_module, monkeypatch):
+        """H-4 audit fix (2026-05-19): an unrecognised Authmode value
+        defaults to SECURE — NOT to the env-var fallback. Pre-fix
+        behavior (env-var wins) was a defense-in-depth bypass: a typo
+        in the COMP param ("oepn") could silently re-enable insecure
+        mode if a stale ``TDPILOT_API_INSECURE=1`` lingered in the
+        process env.
+        """
         module, set_comp = web_module
         set_comp(authmode="garbage")
         monkeypatch.setenv("TDPILOT_API_INSECURE", "1")
-        assert module._insecure_mode() is True  # env-var fallback wins
+        assert module._insecure_mode() is False, (
+            "unknown Authmode value must NOT fall through to env-var fallback (H-4 audit fix)"
+        )
 
         monkeypatch.delenv("TDPILOT_API_INSECURE", raising=False)
         assert module._insecure_mode() is False  # default to secure

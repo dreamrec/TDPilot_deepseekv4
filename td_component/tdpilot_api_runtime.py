@@ -31,6 +31,23 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import Any
 
+# H-2 audit fix (2026-05-19): canonical truthy env-var values, matching
+# autostart._is_truthy_env. Inlined rather than imported to keep the
+# td_component/ files independent under TD's restricted Python (where
+# cross-module imports between baked-in textDATs are fragile).
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _env_is_truthy(name: str) -> bool:
+    """Return ``True`` only for canonical truthy values of env var ``name``.
+
+    Empty / unset / ``0`` / ``false`` / ``no`` / arbitrary strings all
+    count as False. Mirrors ``autostart._is_truthy_env`` so a user
+    setting ``=0`` to "disable" a flag lands on the secure default
+    instead of accidentally enabling it.
+    """
+    return os.environ.get(name, "").strip().lower() in _TRUTHY_ENV_VALUES
+
 
 def _make_thread_safe(value: Any) -> Any:
     """Convert a handler result into a JSON-safe nested structure.
@@ -1102,9 +1119,14 @@ class AgentRuntime:
         Honours ``TDPILOT_DISABLE_TOOL_APPROVAL`` env var as a hard
         off-switch — env var wins over the COMP param. The env var is
         intended for unattended / CI execution; users flip the COMP
-        param normally.
+        param normally. Only the canonical truthy values count
+        (``1``/``true``/``yes``/``on`` — same set as
+        ``autostart._is_truthy_env``); ``=0`` / ``=false`` / ``=no``
+        intentionally DO NOT enable the bypass, so a user trying to
+        "disable disable" with ``=0`` lands on the secure default
+        (H-2 audit fix, 2026-05-19).
         """
-        if os.environ.get("TDPILOT_DISABLE_TOOL_APPROVAL"):
+        if _env_is_truthy("TDPILOT_DISABLE_TOOL_APPROVAL"):
             print("[tdpilot_API/runtime] tool approval disabled via TDPILOT_DISABLE_TOOL_APPROVAL")
             return None
         try:

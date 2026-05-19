@@ -282,6 +282,69 @@ def test_insecure_mode_bypasses_token_only_not_origin(web_module, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# H-4 audit fix (2026-05-19) — explicit Authmode wins over env-var.
+# Pre-fix, a stale TDPILOT_API_INSECURE=1 in the process env could
+# silently override an explicitly-set Authmode=token. The new contract:
+#   * Authmode=open  → insecure (env-var irrelevant)
+#   * Authmode=token → SECURE (env-var IGNORED even if =1)
+#   * No Authmode attr → env-var is the only signal (legacy + tests)
+#   * Authmode read error → SECURE (env-var IGNORED)
+# ---------------------------------------------------------------------------
+
+
+def test_h4_authmode_token_beats_insecure_env(web_module, monkeypatch):
+    """Authmode=token must override TDPILOT_API_INSECURE=1.
+
+    The exact pre-fix vulnerability: a developer with a stale env-var
+    flips the COMP to token mode but the env keeps wins, so requests
+    silently bypass token check.
+    """
+    module, comp = web_module
+    # Simulate Authmode=token on the COMP.
+    comp.par.Authmode = SimpleNamespace(val="token")
+    monkeypatch.setenv("TDPILOT_API_INSECURE", "1")
+    err = module._check_auth("POST", "/send", {})
+    assert err is not None, "Authmode=token must require a token even with env=1"
+    assert err[0] == 401
+
+
+def test_h4_authmode_open_still_works(web_module, monkeypatch):
+    """Authmode=open should still bypass token (env-var irrelevant)."""
+    module, comp = web_module
+    comp.par.Authmode = SimpleNamespace(val="open")
+    monkeypatch.delenv("TDPILOT_API_INSECURE", raising=False)
+    err = module._check_auth("POST", "/send", {})
+    assert err is None, "Authmode=open must bypass token check"
+
+
+def test_h4_authmode_bad_value_falls_to_secure(web_module, monkeypatch):
+    """An unrecognised Authmode value defaults to SECURE, NOT to env-var.
+
+    Pre-fix this hit the env-var fallback — a typo could re-enable
+    insecure. Pin the safe behavior.
+    """
+    module, comp = web_module
+    comp.par.Authmode = SimpleNamespace(val="oepn")  # typo
+    monkeypatch.setenv("TDPILOT_API_INSECURE", "1")
+    err = module._check_auth("POST", "/send", {})
+    assert err is not None
+    assert err[0] == 401
+
+
+def test_h4_no_authmode_attr_still_honors_env(web_module, monkeypatch):
+    """Legacy / test-harness path: no Authmode attribute → env-var works.
+
+    Preserves the v2.1.3 contract for COMPs predating Authmode and for
+    test fixtures that don't bother stubbing the param.
+    """
+    module, _comp = web_module
+    # The _FakeComp fixture defaults to no Authmode attribute.
+    monkeypatch.setenv("TDPILOT_API_INSECURE", "1")
+    err = module._check_auth("POST", "/send", {})
+    assert err is None
+
+
+# ---------------------------------------------------------------------------
 # WebSocket handshake gate
 # ---------------------------------------------------------------------------
 

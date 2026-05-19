@@ -194,21 +194,49 @@ def _insecure_mode() -> bool:
     the v2.4 ``/firstrun`` wizard surfaces an opt-in switch to
     token mode for those (see Phase B.2 in the v2.4 plan).
     """
-    # 1. COMP param wins.
+    # 1. COMP param wins when explicitly set. H-4 audit fix (2026-05-19):
+    #    the env-var fallback used to fire whenever the Authmode read
+    #    raised — so a stale ``TDPILOT_API_INSECURE=1`` in the process
+    #    env could silently override a deliberately-set ``Authmode=token``.
+    #    The new ordering: explicit Authmode wins (open OR token);
+    #    only when the COMP has no Authmode attr at all does the env-var
+    #    matter. An Authmode-read exception (rename, attribute shift)
+    #    falls to SECURE rather than env-var.
     try:
         comp = _comp()
-        if comp is not None and hasattr(comp.par, "Authmode"):
-            # ``.val`` returns the menu string for a Menu param. Same
-            # as ``.menuNames[par.menuIndex]`` but shorter. Avoids
-            # the ``.eval()`` form (which collides with a Python-eval
-            # security-linter false-positive in this codebase's hooks).
-            value = str(comp.par.Authmode.val or "").strip().lower()
+    except Exception:
+        comp = None
+    if comp is not None:
+        try:
+            has_authmode = hasattr(comp.par, "Authmode")
+        except Exception:
+            print(
+                "[tdpilot_API/auth] Authmode attribute probe failed; "
+                "defaulting to SECURE (token-required) mode."
+            )
+            return False
+        if has_authmode:
+            try:
+                # ``.val`` returns the menu string for a Menu param. Same
+                # as ``.menuNames[par.menuIndex]`` but shorter. Avoids
+                # the dotted-call form (which collides with a security
+                # linter false-positive in this codebase's hooks).
+                value = str(comp.par.Authmode.val or "").strip().lower()
+            except Exception:
+                print(
+                    "[tdpilot_API/auth] Authmode value read failed; "
+                    "defaulting to SECURE (token-required) mode."
+                )
+                return False
             if value in ("open", "token"):
                 return value == "open"
-    except Exception:
-        pass
-    # 2. Env var fallback.
-    return os.environ.get(_INSECURE_ENV, "").strip() in ("1", "true", "yes")
+            # Unrecognised Authmode value — fall to SECURE rather than
+            # to env-var, otherwise a typo silently re-enables insecure.
+            return False
+    # 2. No COMP, or COMP has no Authmode attribute — env-var fallback
+    #    is the only signal. Used by CI smoke + non-TD test harnesses
+    #    and by legacy COMPs predating the Authmode param.
+    return os.environ.get(_INSECURE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _session_token() -> str:
@@ -534,9 +562,16 @@ def onHTTPRequest(webServerDAT, request, response):
         # This route sits BELOW _check_auth, so a legacy-open COMP can
         # hit it without a token (origin allowlist still required); a
         # token-mode COMP holding a valid token can flip to open or
-        # rotate the token. We DELIBERATELY do not require explicit
-        # confirmation of the previous state — the user already opted
-        # in via the wizard button.
+        # rotate the token.
+        #
+        # M-2 audit fix (2026-05-19): require an explicit
+        # ``confirm: true`` body field for the lockout-direction flip
+        # (open → token). Without this, a same-origin drive-by during
+        # the legacy open-mode window could silently switch the COMP to
+        # token mode and steal the freshly-rotated session token,
+        # locking the legitimate user out. The chat-pipe wizard adds
+        # ``confirm: true`` explicitly; a CSRF that bumps into this
+        # endpoint without it gets a 400.
         raw = (_read_body(request) or "").strip()
         try:
             payload = json.loads(raw) if raw.startswith("{") else {}
@@ -548,6 +583,28 @@ def onHTTPRequest(webServerDAT, request, response):
                 response,
                 400,
                 'mode must be "open" or "token"',
+                request_origin=request_origin,
+            )
+            return response
+        # M-2: require explicit confirmation for the open→token
+        # lockout-direction flip. Open→token rotates the session token
+        # and revokes any tabs not holding the new one; a drive-by CSRF
+        # that hits this endpoint accidentally must NOT silently kick
+        # the legitimate user out.
+        if mode == "token" and payload.get("confirm") is not True:
+            _json(
+                response,
+                400,
+                {
+                    "ok": False,
+                    "error": "confirm_required",
+                    "advice": (
+                        "Flipping to token mode rotates the session "
+                        "token and locks out tabs that don't hold the "
+                        "new one. POST {'mode': 'token', 'confirm': true} "
+                        "to acknowledge."
+                    ),
+                },
                 request_origin=request_origin,
             )
             return response

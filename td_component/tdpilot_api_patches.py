@@ -468,10 +468,41 @@ def handle_snapshot_save_scoped(body: dict) -> dict:
 
 def _find_scoped_manifest(name_or_path: str) -> Path | None:
     """Resolve a scoped snapshot by name OR path. Returns the newest
-    matching ``.scoped.json`` file, or None if nothing matches."""
+    matching ``.scoped.json`` file, or None if nothing matches.
+
+    H-1 audit fix (2026-05-19): absolute-path inputs are sandboxed to
+    ``SNAPSHOTS_DIR``. A prompt-injected agent (or any caller bypassing
+    the v2.5.3 approval gate via ``Authmode=open`` /
+    ``TDPILOT_DISABLE_TOOL_APPROVAL=1``) used to be able to pass
+    ``path='/Users/<user>/.ssh/some.json'`` and coerce-read+parse the
+    file. The manifest-version check on line 528 limited mutation, but
+    the parsed JSON still surfaced in error messages — file-existence
+    probing + arbitrary-JSON read. Symlinks are followed BEFORE the
+    root check, so a symlink-in-SNAPSHOTS_DIR pointing at
+    ``~/.ssh/known_hosts`` is rejected.
+    """
     candidate = Path(name_or_path)
-    if candidate.is_absolute() and candidate.is_file():
-        return candidate
+    if candidate.is_absolute():
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (FileNotFoundError, RuntimeError):
+            # RuntimeError catches symlink loops; missing files fall
+            # through to the slug-based lookup below.
+            resolved = None
+        if resolved is not None and resolved.is_file():
+            try:
+                snapshots_root = SNAPSHOTS_DIR.resolve()
+            except FileNotFoundError:
+                snapshots_root = SNAPSHOTS_DIR
+            try:
+                resolved.relative_to(snapshots_root)
+            except ValueError:
+                # Path is outside SNAPSHOTS_DIR — refuse instead of
+                # silently reading. Returning None lets the caller emit
+                # a "No scoped manifest found" error which is still
+                # informative without leaking the parsed JSON.
+                return None
+            return resolved
     # Try as a name: find any .scoped.json starting with the slug
     if not SNAPSHOTS_DIR.is_dir():
         return None
