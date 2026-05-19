@@ -17,7 +17,7 @@ If you're walking in cold, internalize these before touching anything:
 - **After `git push origin vX.Y.Z`, run `gh release create vX.Y.Z`** — otherwise `release-assets.yml` never fires and `.mcpb` / `.plugin` artifacts don't land on the Release page.
 - **Pre-commit local sweep** (always, in order):
   ```bash
-  uv run pytest tests/ --ignore=tests/agent_evals          # 1695+ tests
+  uv run pytest tests/ --ignore=tests/agent_evals          # 2113+ tests (v2.5.3)
   uv run --extra dev ruff format --check src tests scripts td_component
   uv run --extra dev ruff check src tests scripts td_component
   uv run python scripts/check_versions.py
@@ -26,6 +26,13 @@ If you're walking in cold, internalize these before touching anything:
   ```
 - **DeepSeek's Anthropic-compat endpoint requires `thinking` blocks to be echoed back** in subsequent turns. Stripping them returns HTTP 400. Only strip `reasoning_content` SUB-KEYS. See `_strip_reasoning` in [`td_component/tdpilot_api_agent.py`](./td_component/tdpilot_api_agent.py).
 - **Inside the `tdpilot_API` chat-pipe code, `parent()` is the COMP, NOT the project root.** Always use absolute paths like `op('/project1')` to escape the COMP scope.
+- **v2.5 user-visible runtime surfaces** (all shipped, all on by default unless flagged):
+  - **`Approvalmode` Menu COMP param** — gates destructive tools (`td_exec_python`, `td_delete_node`, `td_restore_snapshot`, `snapshot_restore_scoped`, `td_disconnect` always; `td_rename_node` / `td_set_content` when path is outside the agent's COMP) behind a 30 s click-through banner. Override: `TDPILOT_DISABLE_TOOL_APPROVAL=1` (CI/unattended only).
+  - **`td_ocr_image`** — PaddleOCR subprocess sidecar (`[ocr]` extras = `paddleocr + paddlepaddle`). 400 MB model never loads unless tool fires. Lifecycle in [`src/td_mcp/vision/ocr.py`](./src/td_mcp/vision/ocr.py).
+  - **`td_get_activity_log`** — ring buffer of the last 200 tool calls per session; `_read_journal` injects recent activity into tool-result hints.
+  - **`td_check_for_updates`** — read-only GitHub Releases API + local `.tox` source-hash drift check. No auto-apply.
+  - **`td_get_traces`** — disk-persisted per-turn trace records at `~/.tdpilot-dpsk4/api/traces/<YYYY-MM-DD>.jsonl`. User_text and tool args are SHA256-hashed before persistence; no PII leakage.
+  - **`maybe_migrate_env_to_file`** — auth migration helper that closes the drag-and-go shell-env hole by promoting `TD_MCP_SHARED_SECRET` to `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env` on first run.
 
 ---
 
@@ -66,7 +73,7 @@ When you write a new script, workflow, or doc that mentions any of these, **read
 
 ```
 src/td_mcp/             MCP server (Python) — the `npx tdpilot-dpsk4` entrypoint
-  registry/               per-domain tool modules (23 files, ~103 tools)
+  registry/               per-domain tool modules (26 files, 109 tools as of v2.5.3)
   release_gates.py        EXPECTED_MIN_TOOL_COUNT (single source of truth)
   memory/                 technique + knowledge + snapshot + preference stores
   knowledge/              bundled corpus index + docsbrain
@@ -93,7 +100,7 @@ skills/                 Runtime operational discipline (NOT contribution rules)
   tdpilot-dpsk4-production/ production-safe edit patterns (snapshots, undo blocks)
   popx-touchdesigner/     POPx-specific workflow
 
-tests/                  1695+ tests; agent_eval marker excluded by default
+tests/                  2113+ tests (as of v2.5.3); agent_eval marker excluded by default
 scripts/                CI gates (check_*.py) + maintenance + live-TD harnesses
 .github/workflows/      ci.yml, npm-publish.yml, release-assets.yml
 ```
@@ -108,7 +115,7 @@ The split between `src/td_mcp/` and `td_component/` matters: code in `src/td_mcp
 # Python 3.10, 3.11, or 3.12 (declared >= 3.10 in pyproject.toml).
 # CI runs all three. Use uv for everything.
 uv sync --extra dev
-uv run pytest tests/ --ignore=tests/agent_evals     # 1695+ pass, ~20s
+uv run pytest tests/ --ignore=tests/agent_evals     # 2113+ pass, ~20s
 uv run --extra dev ruff format --check src tests scripts td_component
 uv run --extra dev ruff check src tests scripts td_component
 ```

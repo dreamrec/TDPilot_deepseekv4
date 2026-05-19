@@ -10,15 +10,20 @@ name: Publish to npm
 # auto-pin-to-latest-tag fix landed in 0dc633e. With this workflow,
 # every release auto-publishes and stays in sync.
 #
-# Setup required (one-time):
-#   1. Create an npm access token at npmjs.com -> Access Tokens ->
-#      "Granular" or "Automation" type with publish scope for the
-#      `tdpilot` package.
-#   2. Add it to this repo's GitHub Actions secrets as `NPM_TOKEN`
-#      (Settings -> Secrets and variables -> Actions -> New secret).
-#   3. After this workflow lands, push a tag (e.g. v1.5.2) and the
-#      workflow fires. Or backfill v1.5.1 via Actions UI ->
-#      "Publish to npm" -> "Run workflow" -> tag: v1.5.1.
+# Auth model: **npm Trusted Publisher OIDC** (no long-lived NPM_TOKEN).
+# This workflow runs `npm publish --provenance --access public`; npm
+# 11.5+ exchanges this job's `id-token: write` OIDC token for a
+# short-lived publish token via the Trusted Publisher binding
+# configured on npmjs.com for the `tdpilot-dpsk4` package.
+#
+# DO NOT add NPM_TOKEN / NODE_AUTH_TOKEN — when either is present npm
+# prefers it over OIDC and the publish then needs the "bypass 2FA"
+# flag which the package's publishing-access policy refuses. PR #30
+# caught a token-vs-OIDC drift; keep it OIDC-only.
+#
+# To rotate the Trusted Publisher binding: npmjs.com -> package
+# settings -> Trusted Publishers -> add/update the workflow identity
+# (dreamrec/TDPilot_deepseekv4 / .github/workflows/npm-publish.yml).
 #
 # All run: blocks below capture untrusted/dispatch inputs into env
 # vars first and reference them as shell variables, per
