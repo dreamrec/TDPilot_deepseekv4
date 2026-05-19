@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.5.2 - 2026-05-19
+
+**Cycle-detect orphan `tool_use` fix (live-audit Bug A).** The 2026-05-19 10-task creative live audit surfaced a production-blocking bug in the chat-pipe agent: when `CycleDetected` raised inside the dispatch for-loop, no synthetic `tool_result` block was appended for the pending `tool_use` id. The persisted conversation at `~/.tdpilot-api/history/<session>.jsonl` then had an orphan `tool_use` that Anthropic-format `/v1/messages` rejected with HTTP 400 on every subsequent `/send`. The chat-pipe became stuck until TouchDesigner restart — Reinit Extensions, table clear, and JSONL move-aside were all insufficient because the agent worker thread kept an in-memory `messages` cache.
+
+**The fix (one ~25-line block in `td_component/tdpilot_api_agent.py` near line 1048):** before `raise CycleDetected`, synthesize one `tool_result` block per pending `tool_use` (the offending one plus any remaining un-dispatched batch entries), append the resulting user-role message to `agent.messages`, then raise. The persisted conversation stays API-valid and the next `/send` succeeds without intervention.
+
+**Tests:** new `tests/test_v252_cycle_detect_orphan_tool_use.py` with 4 tests pinning the invariant — no orphan `tool_use_id`, `is_error=True` on the synthesized result, batched `tool_use` blocks all get their matching results, terminal message is role=user. Full suite: 2108 → **2112 passing** (+4).
+
+Separate behavioral observation from the same audit (NOT a fix in this patch — logged for v2.6 retrieval/context work): DeepSeek-v4-pro **can ignore** the v2.5.1 `_read_journal` hint that fires at count=2 and proceed to the 3rd identical call. The hint mechanism works correctly; compliance is model-discretionary. Worth considering a harder-stop in future runtime versions.
+
+**`.tox` rebuild required:** **API `.tox` only**. `tdpilot_api_agent.py` is in `_API_TOX_SOURCE_FILES`. MCP `.tox` unaffected.
+
+See `/tmp/td-creative-test/FINAL_REPORT.md` + `/tmp/td-creative-test/BUG_REPORT_cycle_detect_orphan_tool_use.md` (the audit deliverables) for full repro context.
+
 ## 2.5.1 - 2026-05-19
 
 **Chat-pipe alias for `td_get_traces` (live-audit follow-up).** Closes the live-chat-audit gap from the v2.5.0 ship: the chat-pipe agent's 94-tool standalone surface did not expose `td_get_traces` because its dispatcher already registered the matching handler under the long name `handle_get_recent_traces`. Adding `td_get_traces` as a `TOOL_TO_HANDLER` + `TOOL_SCHEMAS` alias resolves the gap without duplicating the handler — net code delta is 4 lines plus a .tox rebuild.

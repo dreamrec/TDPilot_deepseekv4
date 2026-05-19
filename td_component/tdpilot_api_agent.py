@@ -1048,6 +1048,40 @@ class Agent:
                     if cycle_ledger is not None:
                         count = cycle_ledger.record(tool_name, tool_args)
                         if count >= cycle_ledger.threshold:
+                            # v2.5.2 — synthesize tool_result blocks for the
+                            # offending tool_use AND any remaining un-dispatched
+                            # tool_uses in this batch BEFORE raising, so the
+                            # persisted conversation stays API-valid. Without
+                            # this, orphan tool_use ids cause /v1/messages to
+                            # return HTTP 400 on the NEXT /send and the chat
+                            # becomes stuck until TD restart. See live audit
+                            # 2026-05-19 / BUG_REPORT_cycle_detect_orphan_tool_use.
+                            err_content = json.dumps(
+                                {
+                                    "error": (
+                                        f"cycle_detected: '{tool_name}' called "
+                                        f"{count}x with identical args this "
+                                        "turn — turn ended by runtime"
+                                    ),
+                                    "_tool_error": True,
+                                }
+                            )
+                            tu_idx = tool_uses.index(tu)
+                            for _unproc in tool_uses[tu_idx:]:
+                                results_block.append(
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": _unproc.get("id", ""),
+                                        "content": err_content,
+                                        "is_error": True,
+                                    }
+                                )
+                            # Append to messages BEFORE raising so the
+                            # synthetic results survive the unwind through
+                            # the surrounding try/finally (which runs
+                            # rollback_guard.__exit__) and the message
+                            # store stays consistent for the next /send.
+                            self.messages.append({"role": "user", "content": results_block})
                             raise CycleDetected(
                                 tool_name=tool_name,
                                 count=count,
