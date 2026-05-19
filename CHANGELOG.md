@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.5.3 - 2026-05-19
+
+**Cycle-detect rollback-hint preservation (Codex P2 follow-up on PR #51).** ChatGPT-Codex caught a follow-on bug in v2.5.2: my fix appended the synthetic `tool_result` user message to `agent.messages` BEFORE the outer `try/finally` ran `rollback_guard.__exit__`. The `finally` would still roll back any reverted mutation and populate `hint_text`, but `_apply_rollback_hint` at `tdpilot_api_agent.py:1219` (which lives AFTER the finally) never got to attach that hint to the persisted message — so the next `/send` saw a tool_result claiming success when the mutation had been reverted, with no recovery hint. Model would happily reference a path that no longer exists.
+
+**The fix:** run `rollback_guard.__exit__` + `_apply_rollback_hint` synchronously inside the cycle-detect block BEFORE the `messages.append`, then null `rollback_guard` so the outer `finally` skips a second exit. The persisted message now carries the rollback hint when one is generated, and the model on the next turn sees both the cycle-detect error and the rollback-affecting it.
+
+**Tests:** new `test_v253_cycle_detect_preserves_rollback_hint_on_terminal_result` added to the existing `test_v252_cycle_detect_orphan_tool_use.py` (5 tests total). FakeGuard stub pins the invariant: after CycleDetected, the terminal user-role message's last `tool_result` content carries the guard's hint text. Full suite: 2112 → **2113 passing** (+1).
+
+**`.tox` rebuild required:** both `.tox` (callbacks/_header.py + tdpilot_api_agent.py changed; both files are in both source lists due to API_VERSION lockstep).
+
+Codex review URL: https://github.com/dreamrec/TDPilot_deepseekv4/pull/51#discussion_r3265552120
+
 ## 2.5.2 - 2026-05-19
 
 **Cycle-detect orphan `tool_use` fix (live-audit Bug A).** The 2026-05-19 10-task creative live audit surfaced a production-blocking bug in the chat-pipe agent: when `CycleDetected` raised inside the dispatch for-loop, no synthetic `tool_result` block was appended for the pending `tool_use` id. The persisted conversation at `~/.tdpilot-api/history/<session>.jsonl` then had an orphan `tool_use` that Anthropic-format `/v1/messages` rejected with HTTP 400 on every subsequent `/send`. The chat-pipe became stuck until TouchDesigner restart — Reinit Extensions, table clear, and JSONL move-aside were all insufficient because the agent worker thread kept an in-memory `messages` cache.

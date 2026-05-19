@@ -293,3 +293,108 @@ def test_cycle_detect_messages_end_in_user_role_not_assistant():
     # And it must contain at least one tool_result block.
     types = [blk.get("type") for blk in last["content"]]
     assert "tool_result" in types
+
+
+def test_v253_cycle_detect_preserves_rollback_hint_on_terminal_result():
+    """v2.5.3 — Codex P2 follow-up on PR #51.
+
+    When a rollback_guard fires during the same batch where cycle-detect
+    trips, the synthetic tool_result message MUST carry the guard's
+    ``hint_text``. Without this fix, the v2.5.2 code appended messages
+    BEFORE the outer try/finally ran ``rollback_guard.__exit__``, so
+    ``_apply_rollback_hint`` (which lives AFTER the finally at
+    ``tdpilot_api_agent.py:1219``) never got to attach the hint. The
+    persisted message claimed the mutation succeeded when it had been
+    rolled back — corrupting context for the next /send.
+
+    Fix: run ``rollback_guard.__exit__`` + ``_apply_rollback_hint``
+    inside the cycle-detect block BEFORE appending messages, then
+    null ``rollback_guard`` so the outer ``finally`` skips a 2nd exit.
+    """
+    from tdpilot_api_agent import Agent, AgentError
+    from tdpilot_api_cycle_detector import CycleDetected, CycleLedger
+
+    class FakeGuard:
+        """Minimal AutoRollbackGuard stand-in. Populates hint_text on __exit__
+        to mimic the real guard's behavior when it detects a regression
+        and runs a rollback."""
+
+        EXPECTED_HINT = (
+            "Auto-rollback: 1 critical TD error introduced — reverted via "
+            "tdpilot_auto_rollback. Path: /test/x"
+        )
+
+        def __init__(self):
+            self.entered = False
+            self.exited = False
+            self.exit_count = 0
+            self.hint_text = ""
+
+        def __enter__(self):
+            self.entered = True
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self.exit_count += 1
+            self.exited = True
+            self.hint_text = self.EXPECTED_HINT
+            return False  # do not suppress
+
+    guard = FakeGuard()
+    ledger = CycleLedger(threshold=2)
+
+    def dispatcher(name, args):
+        return {"ok": True}
+
+    responses = iter(
+        [
+            _repeat_tool_call("td_get_errors", {"path": "/x"}, tu_id="tu_1"),
+            _repeat_tool_call("td_get_errors", {"path": "/x"}, tu_id="tu_2"),
+        ]
+    )
+
+    agent = Agent(
+        api_key="sk-fake",
+        dispatcher=dispatcher,
+        cycle_ledger_factory=lambda: ledger,
+        rollback_guard_factory=lambda d, names: guard,
+    )
+    agent.add_user_message("Check errors.")
+
+    with patch("urllib.request.urlopen") as urlopen:
+        urlopen.side_effect = lambda *a, **k: _mk_response(next(responses))
+        try:
+            agent.run_turn()
+        except (CycleDetected, AgentError):
+            pass
+
+    # Guard was exited at least once. (The shared guard instance gets
+    # entered/exited once per while-loop iteration in _loop — first turn
+    # exits normally, second turn's cycle-detect path also runs __exit__
+    # via the v2.5.3 fix and then nulls rollback_guard so the outer
+    # finally skips a 3rd exit.)
+    assert guard.exited is True
+    assert guard.exit_count >= 1, "guard.__exit__ must run at least once"
+
+    # The terminal user-role message must contain a tool_result whose content
+    # carries the rollback hint text (appended by _apply_rollback_hint).
+    last = agent.messages[-1]
+    assert last["role"] == "user"
+    tool_results = [blk for blk in last["content"] if blk.get("type") == "tool_result"]
+    assert tool_results, "expected at least one tool_result in the terminal message"
+
+    # Per _apply_rollback_hint logic, the hint lands on the LAST tool_result.
+    # Content may be str (hint appended with "\n\n") or list (hint as text block).
+    last_tr = tool_results[-1]
+    content = last_tr.get("content")
+    if isinstance(content, str):
+        assert FakeGuard.EXPECTED_HINT in content, (
+            f"rollback hint missing from last tool_result; got content: {content[:300]}"
+        )
+    elif isinstance(content, list):
+        joined = json.dumps(content)
+        assert FakeGuard.EXPECTED_HINT in joined, (
+            f"rollback hint missing from last tool_result blocks; got: {joined[:300]}"
+        )
+    else:
+        raise AssertionError(f"unexpected tool_result content shape: {type(content).__name__}")
