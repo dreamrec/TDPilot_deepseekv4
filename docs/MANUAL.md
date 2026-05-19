@@ -619,3 +619,50 @@ For CLI typed patch sessions (`td_plan_patch` → `td_preflight_patch` → `td_p
 - The standalone agent's exec mode is forced to `full` for the local user — same person owns the TD process and the API key, so there's no second-party security boundary to defend. User-pluggable tools execute as part of the running TD process; the trust boundary is "the user's home directory", same model as VS Code extensions or `.bashrc`.
 - The CLI server defaults to `restricted` exec mode and blocks `os` / `subprocess` / file I/O. `standard` mode adds 14 safe data-transform imports (`json`, `math`, `re`, `datetime`, …). `full` mode lifts all guards — only when you trust both the client and the TD project.
 - The TD-side webserver listens on `127.0.0.1` by default. Bind to a non-localhost address only if you understand the implications and have configured TLS + auth.
+
+### MCP webserverDAT authentication — default-secure since the 2026-05-19 audit fixes (C-1)
+
+The MCP webserverDAT (ports `9981` / `9985`) defaults to **token-required auth**. The chat-pipe surface (port `9987`) has been default-token since v2.3.0 via the COMP's `Authmode` param; the MCP surface inherited the legacy default-bypass posture until the C-1 fix (post-v2.5.3, on `main`).
+
+| Env var | Effect | When to use |
+|---|---|---|
+| _(neither set)_ | **SECURE (default).** Uses whatever `TD_MCP_SHARED_SECRET` / `TD_MCP_REQUIRE_AUTH` the env file (typically `~/.tdpilot-dpsk4/.tdpilot-dpsk4.env`) installed. | New installs from v2.5.0+. `maybe_migrate_env_to_file` (v2.5.4) writes the env file on first run. |
+| `TDPILOT_ENABLE_AUTH_BYPASS=1` | **Opt-in bypass.** Pops the secret + forces `TD_MCP_REQUIRE_AUTH=0` (reproduces the pre-v2.6 zero-config flow). | Single-user dev boxes / CI where the MCP port is unreachable from outside the host. |
+| `TDPILOT_DISABLE_AUTH_BYPASS=1` _(legacy)_ | No-op since v2.6 — kept for backwards-compat with env files written for v2.1.2 .. v2.5.3. Prints a one-time deprecation note. | No new usage. |
+| _both set_ | Opt-out wins (safer default — secure). | — |
+
+Truthy values for either env var: `1`, `true`, `yes`, `on` (case-insensitive). Anything else — including `0`, `false`, `no`, empty string — counts as unset. This matters: setting `TDPILOT_ENABLE_AUTH_BYPASS=0` does NOT enable the bypass.
+
+If you're hitting unexpected `401`s on the MCP after upgrading, you're in the migration window: either install a secret via the chat-pipe `Authmode` wizard (writes the env file for you) OR set `TDPILOT_ENABLE_AUTH_BYPASS=1` if you genuinely want zero-config zero-auth dev mode.
+
+### Chat-pipe `Authmode` — explicit param wins over env-var fallback (H-4)
+
+The chat-pipe's `_insecure_mode()` resolution order, post-audit:
+
+1. **COMP param `Authmode=open`** → insecure (env-var irrelevant).
+2. **COMP param `Authmode=token`** → SECURE (env-var IGNORED). Pre-fix, a stale `TDPILOT_API_INSECURE=1` could silently override an explicit `Authmode=token` if the param read raised — fixed.
+3. **COMP param has unrecognised value** (`Authmode=oepn`, etc.) → SECURE. A typo can no longer paradoxically re-enable insecure.
+4. **`Authmode` read raises** → SECURE.
+5. **No `Authmode` attribute on the COMP** (legacy COMPs predating v2.2.1, test harnesses) → `TDPILOT_API_INSECURE=1` is the only signal. Preserved for backwards compat.
+6. **No COMP at all** (CI smoke, headless harnesses) → `TDPILOT_API_INSECURE=1` is the only signal.
+
+### Tool approval gate — `TDPILOT_DISABLE_TOOL_APPROVAL` truthiness (H-2)
+
+The chat-pipe v2.5.0 `Approvalmode` gate honors `TDPILOT_DISABLE_TOOL_APPROVAL` as a hard off-switch for unattended / CI execution. Post-audit, the truthy values match the canonical set: `1`, `true`, `yes`, `on`. `TDPILOT_DISABLE_TOOL_APPROVAL=0` no longer paradoxically enables the bypass.
+
+### `td_ocr_image` path sandbox (H-3)
+
+`td_ocr_image` accepts a filesystem path argument. To prevent a prompt-injected agent from OCR'ing `~/.ssh/known_hosts` or screenshot caches that may contain readable credentials, the path is sandboxed:
+
+1. **Extension allowlist** — must be one of `.png`, `.jpg`, `.jpeg`, `.bmp`, `.webp`, `.tif`, `.tiff`, `.gif` (case-insensitive).
+2. **Root allowlist** — resolved path (symlinks followed) must live under one of the default roots: the system tempdir (`tempfile.gettempdir()`), `~/Downloads`, `~/Desktop`, `~/Pictures`, `~/.tdpilot-dpsk4`. Extend via `TDPILOT_OCR_ALLOWED_ROOTS=<os.pathsep-separated paths>`.
+
+Refused paths return `{"error": "ocr_path_not_allowed", ...}` with a clear advisory.
+
+### `snapshot_restore_scoped` SNAPSHOTS_DIR sandbox (H-1)
+
+`snapshot_restore_scoped` resolves absolute-path inputs and verifies they live under `SNAPSHOTS_DIR` (`~/.tdpilot-api/snapshots/` standalone, `~/.tdpilot-dpsk4/snapshots/` CLI) before reading the manifest JSON. Symlinks resolved BEFORE the root check, so a symlink-in-`SNAPSHOTS_DIR` pointing at `~/.ssh/known_hosts` is rejected. Paths outside the sandbox return "No scoped manifest found" without leaking the parsed JSON.
+
+### `POST /set-authmode` lockout protection (M-2)
+
+The chat-pipe `/set-authmode` route (the Authmode-open → Authmode-token migration wizard) requires `confirm: true` in the request body for the lockout-direction flip (`mode: token`). Closes a same-origin CSRF that could silently flip the COMP to token mode, rotate the session token, return it to the attacker, and lock the legitimate user out. The official wizard at `tdpilot_api_chat.html` sends `{ mode: 'token', confirm: true }`; CSRFs that bump into the endpoint without the field get `400 confirm_required`.

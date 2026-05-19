@@ -10,7 +10,7 @@ This file is the **development-time** counterpart to [`README.md`](./README.md) 
 
 If you're walking in cold, internalize these before touching anything:
 
-- **Picking up roadmap work?** Read [`docs/NEW_SESSION_PROMPT.md`](./docs/NEW_SESSION_PROMPT.md) for the bootstrap prompt, then [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the v2.2.0→v3.0 plan. Both are source-of-truth for what we're building next.
+- **Picking up roadmap work?** Read [`docs/NEW_SESSION_PROMPT.md`](./docs/NEW_SESSION_PROMPT.md) for the bootstrap prompt, then [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the active v2.6 → v2.7 plan (the v2.5 arc shipped end-to-end on 2026-05-19; the post-2.5.3 audit fixes are merged on `main` via PR #53). Source-of-truth for what's next is [`docs/plans/README.md`](./docs/plans/README.md).
 - **Package name is `tdpilot-dpsk4`** — never `tdpilot` (parent fork). Pinned by [`tests/test_release_critical_names.py`](./tests/test_release_critical_names.py).
 - **Two `.tox` binaries**, two source-file lists, two CI freshness gates. Edits to source files baked into either `.tox` require a rebuild in a running TouchDesigner — CI rejects stale `.tox` until you rebuild.
 - **Seven version manifests** must move in lockstep. `scripts/check_versions.py` is the enforcer.
