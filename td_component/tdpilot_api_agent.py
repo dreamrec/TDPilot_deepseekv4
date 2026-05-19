@@ -1076,11 +1076,27 @@ class Agent:
                                         "is_error": True,
                                     }
                                 )
-                            # Append to messages BEFORE raising so the
-                            # synthetic results survive the unwind through
-                            # the surrounding try/finally (which runs
-                            # rollback_guard.__exit__) and the message
-                            # store stays consistent for the next /send.
+                            # v2.5.3 — run the rollback guard's exit AND
+                            # apply its hint BEFORE appending the synthetic
+                            # results to messages. Without this, when an
+                            # earlier mutation in the SAME batch tripped the
+                            # guard (and the finally rolled it back), the
+                            # persisted message claimed success and the
+                            # rollback hint never reached the LLM (Codex P2
+                            # on PR #51). We run __exit__ here AND null
+                            # rollback_guard so the outer try/finally skips
+                            # a second exit.
+                            if rollback_guard is not None:
+                                try:
+                                    rollback_guard.__exit__(None, None, None)
+                                except Exception as exc:  # noqa: BLE001
+                                    print(f"[tdpilot_API/agent] rollback_guard.__exit__ raised: {exc}")
+                                self._apply_rollback_hint(rollback_guard, results_block)
+                                rollback_guard = None
+                            # Append messages so the synthetic results
+                            # (now with any rollback hint attached) survive
+                            # the unwind and the next /send sees a coherent
+                            # conversation.
                             self.messages.append({"role": "user", "content": results_block})
                             raise CycleDetected(
                                 tool_name=tool_name,
